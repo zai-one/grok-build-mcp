@@ -22,6 +22,7 @@ try:
         assert_argv_safe,
         build_grok_argv,
         build_permission_profile,
+        confine_path_to_root,
         enforce_bounds,
         normalize_lane,
         structured_error,
@@ -36,6 +37,7 @@ except ImportError:  # flat import when package dir is on sys.path
         assert_argv_safe,
         build_grok_argv,
         build_permission_profile,
+        confine_path_to_root,
         enforce_bounds,
         normalize_lane,
         structured_error,
@@ -500,16 +502,35 @@ def run_delegation(
     output_char_cap: int = DEFAULT_OUTPUT_CHAR_CAP,
     subprocess_runner: SubprocessRunner | None = None,
     which: WhichFn | None = None,
+    sandbox: str | None = None,
+    sandbox_enabled: bool = True,
+    reasoning_effort: str | None = None,
+    rules: str | None = None,
+    json_schema: str | dict[str, Any] | None = None,
+    no_subagents: bool = False,
+    disable_web_search: bool = False,
+    resume: str | bool | None = None,
+    continue_session: bool = False,
+    fork_session: bool = False,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Spawn headless grok against worktree cwd with guarded argv.
 
-    Fail-closed if binary missing, argv unsafe, or timeout. Does not push/merge.
+    Fail-closed if binary missing, argv unsafe, path escapes worktree, or
+    timeout. Does not push/merge. Does not use CLI ``--worktree`` (own prep).
     """
     run = subprocess_runner or default_subprocess_runner
     which_fn = which or _default_which
-    wt = str(Path(worktree_path).resolve())
 
     try:
+        # Server-side path normalization: resolve and require path is itself
+        # a concrete directory path we will pin as cwd (no .. smuggling).
+        wt_path = Path(worktree_path).resolve()
+        # Confine the resolved path to its own parent tree? The worktree is the
+        # root of confinement for child paths; the cwd itself must be absolute
+        # and must not contain a trailing ".." segment that escapes after resolve
+        # (resolve already collapses). Re-validate by confining relative to parent.
+        wt = str(wt_path)
         # Validate bin even when caller passes through (R5 defense in depth).
         grok_bin = validate_grok_bin(grok_bin, from_client=False)
         turns = enforce_bounds(max_turns, hard_cap=hard_cap)
@@ -523,8 +544,23 @@ def run_delegation(
             plan_only=plan_only,
             grok_bin=grok_bin,
             hard_cap=hard_cap,
+            sandbox=sandbox,
+            sandbox_enabled=sandbox_enabled,
+            reasoning_effort=reasoning_effort,
+            rules=rules,
+            json_schema=json_schema,
+            no_subagents=no_subagents,
+            disable_web_search=disable_web_search,
+            resume=resume,
+            continue_session=continue_session,
+            fork_session=fork_session,
+            session_id=session_id,
         )
         assert_argv_safe(argv)
+        # Ensure --cwd value still resolves inside the intended worktree root.
+        cwd_idx = argv.index("--cwd")
+        confined = confine_path_to_root(argv[cwd_idx + 1], wt_path, field="cwd")
+        argv[cwd_idx + 1] = str(confined)
     except GuardError as exc:
         return structured_error(exc.code, exc.message)
 
@@ -610,10 +646,22 @@ def delegate(
     git_runner: GitRunner | None = None,
     subprocess_runner: SubprocessRunner | None = None,
     which: WhichFn | None = None,
+    sandbox: str | None = None,
+    sandbox_enabled: bool = True,
+    reasoning_effort: str | None = None,
+    rules: str | None = None,
+    json_schema: str | dict[str, Any] | None = None,
+    no_subagents: bool = False,
+    disable_web_search: bool = False,
+    resume: str | bool | None = None,
+    continue_session: bool = False,
+    fork_session: bool = False,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Full path: prepare worktree → run headless → collect diffstat.
 
-    No auto-merge, no push. Returns structured result for MCP layer.
+    No auto-merge, no push. Own prepare_worktree (not CLI ``-w/--worktree``).
+    Returns structured result for MCP layer.
     """
     root = Path(repo_root).resolve()
     parent = Path(lanes_parent).resolve() if lanes_parent else None
@@ -644,6 +692,17 @@ def delegate(
         timeout_seconds=timeout_seconds,
         subprocess_runner=subprocess_runner,
         which=which,
+        sandbox=sandbox,
+        sandbox_enabled=sandbox_enabled,
+        reasoning_effort=reasoning_effort,
+        rules=rules,
+        json_schema=json_schema,
+        no_subagents=no_subagents,
+        disable_web_search=disable_web_search,
+        resume=resume,
+        continue_session=continue_session,
+        fork_session=fork_session,
+        session_id=session_id,
     )
 
     # Always collect diffstat when worktree exists (even on executor error).
@@ -678,6 +737,123 @@ def delegate(
     }
 
 
+def run_readonly_cli(
+    args: Sequence[str],
+    *,
+    grok_bin: str = DEFAULT_GROK_BIN,
+    cwd: Path | str | None = None,
+    timeout_seconds: float = 30.0,
+    subprocess_runner: SubprocessRunner | None = None,
+    which: WhichFn | None = None,
+) -> dict[str, Any]:
+    """Run a bounded read-only grok subcommand (version/doctor/models/inspect).
+
+    Never passes mutating subcommands. Caller must supply safe args only.
+    """
+    run = subprocess_runner or default_subprocess_runner
+    which_fn = which or _default_which
+    try:
+        bin_name = validate_grok_bin(grok_bin, from_client=False)
+    except GuardError as exc:
+        return structured_error(exc.code, exc.message)
+
+    _assert_readonly_cli_args(args)
+
+    resolved = which_fn(bin_name)
+    if resolved is None and not Path(bin_name).is_file():
+        return structured_error("GROK_MISSING", f"grok binary not found: {bin_name}")
+    exe = resolved or bin_name
+    argv = [exe, *[str(a) for a in args]]
+    _reject_always_approve(argv)
+
+    result = run(argv, Path(cwd).resolve() if cwd else None, timeout_seconds)
+    if result.get("missing"):
+        return structured_error("GROK_MISSING", f"grok binary not found: {bin_name}")
+    return {
+        "ok": result.get("returncode") == 0 and not result.get("timedOut"),
+        "returncode": result.get("returncode"),
+        "stdout": result.get("stdout") or "",
+        "stderr": result.get("stderr") or "",
+        "timedOut": bool(result.get("timedOut")),
+        "argv0": exe,
+    }
+
+
+_READONLY_CLI_VERBS = frozenset(
+    {
+        "version",
+        "v",
+        "doctor",
+        "models",
+        "inspect",
+        "help",
+        "--version",
+        "-v",
+        "--help",
+        "-h",
+    }
+)
+
+_FORBIDDEN_CLI_VERBS = frozenset(
+    {
+        "login",
+        "logout",
+        "update",
+        "setup",
+        "plugin",
+        "mcp",
+        "sessions",
+        "worktree",
+        "memory",
+        "leader",
+        "wrap",
+        "export",
+        "trace",
+        "agent",
+        "dashboard",
+        "completions",
+    }
+)
+
+
+def _assert_readonly_cli_args(args: Sequence[str]) -> None:
+    """Fail closed if a mutating / config-management CLI verb is requested."""
+    tokens = [str(a) for a in args]
+    if not tokens:
+        raise GuardError("CLI_ARGS_EMPTY", "read-only CLI args are empty")
+    # First non-flag token is the subcommand (or a global flag-only probe).
+    verb = None
+    for t in tokens:
+        if t.startswith("-"):
+            # Allow global flags like --json only after a verb; bare -p is not status.
+            if t in {"--version", "-v", "--help", "-h"}:
+                verb = t
+                break
+            continue
+        verb = t.lower()
+        break
+    if verb is None:
+        raise GuardError("CLI_VERB_MISSING", "read-only CLI requires a subcommand")
+    if verb in _FORBIDDEN_CLI_VERBS or verb.startswith("plugin") or verb.startswith("mcp"):
+        raise GuardError(
+            "CLI_VERB_FORBIDDEN",
+            f"CLI verb {verb!r} is not allowed on the read-only status path",
+        )
+    if verb not in _READONLY_CLI_VERBS:
+        raise GuardError(
+            "CLI_VERB_FORBIDDEN",
+            f"CLI verb {verb!r} is not on the read-only allowlist",
+        )
+    # Extra hard reject for doctor fix / sessions delete smuggled as extra tokens.
+    lowered = [t.lower() for t in tokens]
+    for banned in ("fix", "delete", "install", "uninstall", "add", "remove", "login", "logout"):
+        if banned in lowered:
+            raise GuardError(
+                "CLI_VERB_FORBIDDEN",
+                f"mutating CLI token {banned!r} is not allowed on the read-only path",
+            )
+
+
 # Explicit export list documents that push/merge helpers do not exist.
 __all__ = [
     "DelegationResult",
@@ -690,5 +866,6 @@ __all__ = [
     "prepare_worktree",
     "resolve_lanes_parent",
     "run_delegation",
+    "run_readonly_cli",
     "worktree_path_for_lane",
 ]
