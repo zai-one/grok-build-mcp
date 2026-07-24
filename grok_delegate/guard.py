@@ -10,6 +10,7 @@ bare interactive positional prompt. Permission mode is never bypassPermissions.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
 # Server-side hard cap for --max-turns (B5).
@@ -47,6 +48,47 @@ ALLOWED_PERMISSION_MODES = frozenset(
 
 # Default binary name; path resolution is runner concern.
 DEFAULT_GROK_BIN = "grok"
+
+# Built-in --sandbox profiles from live docs (18-sandbox.md / GROK_SANDBOX).
+# Do not invent names beyond this set for defaults.
+KNOWN_SANDBOX_PROFILES = frozenset(
+    {"off", "workspace", "devbox", "read-only", "strict"}
+)
+# Default for execute path when sandbox is enabled (discovered: workspace).
+DEFAULT_EXECUTE_SANDBOX = "workspace"
+# Default for plan-only path (discovered: read-only).
+DEFAULT_PLAN_SANDBOX = "read-only"
+
+# Built-in tool allowlists for --tools (comma-separated CLI).
+_EXECUTE_TOOLS: tuple[str, ...] = (
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Glob",
+    "Grep",
+)
+_PLAN_TOOLS: tuple[str, ...] = (
+    "Read",
+    "Glob",
+    "Grep",
+)
+
+# Allowed reasoning-effort tokens (bounded; empty → omit flag).
+ALLOWED_REASONING_EFFORTS = frozenset(
+    {"low", "medium", "high", "xhigh", "none", "minimal", "max"}
+)
+
+# UUID for --session-id (CLI requires valid UUID).
+_SESSION_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+# Max length bounds for free-text CLI params.
+MAX_RULES_CHARS = 8_000
+MAX_JSON_SCHEMA_CHARS = 16_000
+MAX_MODEL_CHARS = 128
 
 # Deny rules applied to every execute profile (B2).
 _DENY_PUSH = "Bash(git push*)"
@@ -223,18 +265,20 @@ def enforce_bounds(max_turns: int | None, *, hard_cap: int = HARD_CAP_MAX_TURNS)
     return n
 
 
-def build_permission_profile(plan_only: bool = False) -> dict[str, list[str]]:
-    """Build guarded allow/deny/disallowed_tools profile (B2).
+def build_permission_profile(plan_only: bool = False) -> dict[str, Any]:
+    """Build guarded allow/deny/disallowed_tools/tools profile (B2 + R4).
 
     Execute: read/write/edit inside cwd + git-only shell; deny push/merge,
     absolute-path write/edit (UNC + Windows drive globs), live/device/prod/root,
-    secrets, ~/.grok. Interpreters are not allowlisted (R2).
+    secrets, ~/.grok. Interpreters are not allowlisted (R2). Also exposes a
+    ``tools`` allowlist for CLI ``--tools`` (narrower than deny-only).
 
     Plan-only: read-only (deny all write/edit/shell mutation).
 
-    Note (R3): pattern deny is best-effort for the permission engine. Relative
-    ``../`` traversal and true OS-level cwd confinement are **not** guaranteed
-    by allow/deny strings alone; see EVIDENCE.md.
+    Note (R3/R4): pattern deny is best-effort for the permission engine.
+    Relative ``../`` via agent tools is closed only when OS ``--sandbox`` is
+    actually enforced (not claimed on Windows by docs); server path
+    normalization covers server-controlled paths only — see EVIDENCE-ROUND4.md.
     """
     if plan_only:
         deny = list(_BASE_DENY) + [_PLAN_DENY_WRITE, _PLAN_DENY_EDIT, _PLAN_DENY_BASH]
@@ -242,14 +286,18 @@ def build_permission_profile(plan_only: bool = False) -> dict[str, list[str]]:
             "allow": list(_PLAN_ALLOW),
             "deny": deny,
             "disallowed_tools": list(_PLAN_DISALLOWED),
+            "tools": list(_PLAN_TOOLS),
             "permission_mode": PERMISSION_MODE_PLAN,
+            "sandbox": DEFAULT_PLAN_SANDBOX,
         }
 
     return {
         "allow": list(_EXECUTE_ALLOW),
         "deny": list(_BASE_DENY) + [_DENY_CWD_ESCAPE_READ_ABS, _DENY_WIN_READ],
         "disallowed_tools": list(_BASE_DISALLOWED_TOOLS),
+        "tools": list(_EXECUTE_TOOLS),
         "permission_mode": PERMISSION_MODE_EXECUTE,
+        "sandbox": DEFAULT_EXECUTE_SANDBOX,
     }
 
 
@@ -272,24 +320,167 @@ def permission_mode_for_profile(
     return mode
 
 
+def validate_sandbox_profile(value: str | None) -> str | None:
+    """Validate sandbox profile name; ``None``/empty → omit (caller default).
+
+    ``off`` means explicitly disabled (no ``--sandbox`` flag). Unknown names
+    fail closed — never invent profile strings.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw not in KNOWN_SANDBOX_PROFILES:
+        raise GuardError(
+            "SANDBOX_INVALID",
+            f"sandbox profile must be one of {sorted(KNOWN_SANDBOX_PROFILES)}, got {raw!r}",
+        )
+    return raw
+
+
+def resolve_sandbox_profile(
+    profile: Mapping[str, Any],
+    *,
+    plan_only: bool = False,
+    override: str | None = None,
+    enabled: bool = True,
+) -> str | None:
+    """Pick sandbox profile for argv.
+
+    Returns ``None`` when sandbox should not be passed (disabled / off).
+    """
+    if not enabled:
+        return None
+    if override is not None:
+        chosen = validate_sandbox_profile(override)
+    else:
+        raw = profile.get("sandbox") if isinstance(profile, Mapping) else None
+        if raw is None:
+            chosen = DEFAULT_PLAN_SANDBOX if plan_only else DEFAULT_EXECUTE_SANDBOX
+        else:
+            chosen = validate_sandbox_profile(str(raw))
+    if chosen is None or chosen == "off":
+        return None
+    return chosen
+
+
+def validate_model(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if len(raw) > MAX_MODEL_CHARS:
+        raise GuardError("MODEL_INVALID", f"model id exceeds {MAX_MODEL_CHARS} chars")
+    if any(c in raw for c in ("\n", "\r", "\x00")):
+        raise GuardError("MODEL_INVALID", "model id contains control characters")
+    return raw
+
+
+def validate_reasoning_effort(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    if raw not in ALLOWED_REASONING_EFFORTS:
+        raise GuardError(
+            "REASONING_EFFORT_INVALID",
+            f"reasoning_effort must be one of {sorted(ALLOWED_REASONING_EFFORTS)}, got {raw!r}",
+        )
+    return raw
+
+
+def validate_rules(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value)
+    if not raw.strip():
+        return None
+    if len(raw) > MAX_RULES_CHARS:
+        raise GuardError(
+            "RULES_TOO_LONG",
+            f"rules exceeds {MAX_RULES_CHARS} characters",
+        )
+    return raw
+
+
+def validate_json_schema(value: str | Mapping[str, Any] | None) -> str | None:
+    """Accept JSON object or string; return compact JSON string for CLI."""
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        import json
+
+        raw = json.dumps(dict(value), ensure_ascii=False, separators=(",", ":"))
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return None
+        import json
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise GuardError("JSON_SCHEMA_INVALID", f"json_schema is not valid JSON: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise GuardError("JSON_SCHEMA_INVALID", "json_schema must be a JSON object")
+        raw = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+    if len(raw) > MAX_JSON_SCHEMA_CHARS:
+        raise GuardError(
+            "JSON_SCHEMA_TOO_LONG",
+            f"json_schema exceeds {MAX_JSON_SCHEMA_CHARS} characters",
+        )
+    return raw
+
+
+def validate_session_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if not _SESSION_ID_RE.match(raw):
+        raise GuardError(
+            "SESSION_ID_INVALID",
+            "session_id must be a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)",
+        )
+    return raw
+
+
 def build_grok_argv(
     goal: str,
     worktree: str,
-    profile: Mapping[str, Sequence[str]],
+    profile: Mapping[str, Any],
     max_turns: int,
     *,
     model: str | None = None,
     plan_only: bool = False,
     grok_bin: str = DEFAULT_GROK_BIN,
     hard_cap: int = HARD_CAP_MAX_TURNS,
+    sandbox: str | None = None,
+    sandbox_enabled: bool = True,
+    reasoning_effort: str | None = None,
+    rules: str | None = None,
+    json_schema: str | Mapping[str, Any] | None = None,
+    no_subagents: bool = False,
+    disable_web_search: bool = False,
+    resume: str | bool | None = None,
+    continue_session: bool = False,
+    fork_session: bool = False,
+    session_id: str | None = None,
+    use_tools_allowlist: bool = True,
 ) -> list[str]:
-    """Assemble argv for local grok **headless** executor (R1).
+    """Assemble argv for local grok **headless** executor (R1 + R4).
 
     Uses documented ``--single`` (alias ``-p``) so the process is non-TUI.
     Never includes ``--always-approve``. Always pins ``--cwd`` to worktree,
     sets ``--permission-mode`` (never bypassPermissions), uses JSON output,
-    enforces max_turns hard cap, and applies profile --allow/--deny/
-    --disallowed-tools. ``--no-plan`` only when not plan_only.
+    enforces max_turns hard cap, applies profile --allow/--deny/
+    --disallowed-tools and optional --tools allowlist, and --sandbox when a
+    known profile is selected. ``--no-plan`` only when not plan_only.
+    Does **not** emit CLI ``-w/--worktree`` (own prepare_worktree remains).
     """
     if not goal or not str(goal).strip():
         raise GuardError("GOAL_EMPTY", "goal is required")
@@ -300,7 +491,19 @@ def build_grok_argv(
     allow = list(profile.get("allow") or ())
     deny = list(profile.get("deny") or ())
     disallowed = list(profile.get("disallowed_tools") or ())
+    tools = list(profile.get("tools") or ())
     mode = permission_mode_for_profile(profile, plan_only=plan_only)
+    model_v = validate_model(model)
+    effort = validate_reasoning_effort(reasoning_effort)
+    rules_v = validate_rules(rules)
+    schema_v = validate_json_schema(json_schema)
+    session_v = validate_session_id(session_id)
+    sandbox_v = resolve_sandbox_profile(
+        profile,
+        plan_only=plan_only,
+        override=sandbox,
+        enabled=sandbox_enabled,
+    )
 
     _assert_execute_allow_safe(allow)
 
@@ -316,8 +519,49 @@ def build_grok_argv(
         mode,
     ]
 
-    if model:
-        argv.extend(["--model", str(model)])
+    if sandbox_v:
+        argv.extend(["--sandbox", sandbox_v])
+
+    if model_v:
+        argv.extend(["--model", model_v])
+    if effort:
+        argv.extend(["--reasoning-effort", effort])
+    if rules_v:
+        argv.extend(["--rules", rules_v])
+    if schema_v:
+        argv.extend(["--json-schema", schema_v])
+    if no_subagents:
+        argv.append("--no-subagents")
+    if disable_web_search:
+        argv.append("--disable-web-search")
+
+    # Session resume/continue/fork — mutually constrained.
+    if continue_session and resume:
+        raise GuardError(
+            "SESSION_FLAGS_CONFLICT",
+            "continue_session and resume cannot both be set",
+        )
+    if continue_session:
+        argv.append("--continue")
+    elif resume is True:
+        argv.append("--resume")
+    elif resume is not None and str(resume).strip() != "":
+        rid = str(resume).strip()
+        if not _SESSION_ID_RE.match(rid):
+            raise GuardError(
+                "SESSION_ID_INVALID",
+                "resume session id must be a UUID when provided",
+            )
+        argv.extend(["--resume", rid])
+    if fork_session:
+        if not (continue_session or resume is not None):
+            raise GuardError(
+                "FORK_REQUIRES_RESUME",
+                "fork_session requires resume or continue_session",
+            )
+        argv.append("--fork-session")
+    if session_v:
+        argv.extend(["--session-id", session_v])
 
     for rule in allow:
         argv.extend(["--allow", str(rule)])
@@ -326,6 +570,8 @@ def build_grok_argv(
     if disallowed:
         # Comma-separated tool names per grok CLI convention.
         argv.extend(["--disallowed-tools", ",".join(str(t) for t in disallowed)])
+    if use_tools_allowlist and tools:
+        argv.extend(["--tools", ",".join(str(t) for t in tools)])
 
     if not plan_only:
         argv.append("--no-plan")
@@ -529,3 +775,92 @@ def validate_grok_bin(value: str | None, *, from_client: bool = False) -> str:
         "GROK_BIN_INVALID",
         f"grok binary must be grok/grok.exe name or path, got {raw!r}",
     )
+
+
+def parse_allowed_roots_env(raw: str | None) -> list[str]:
+    """Split allowlist env string (``;`` or newline separated) into path strings."""
+    if raw is None:
+        return []
+    text = str(raw).strip()
+    if not text:
+        return []
+    # Support JSON array for operators who prefer it.
+    if text.startswith("["):
+        import json
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise GuardError(
+                "ALLOWED_ROOTS_INVALID",
+                f"GROK_DELEGATE_ALLOWED_ROOTS JSON is invalid: {exc}",
+            ) from exc
+        if not isinstance(data, list):
+            raise GuardError(
+                "ALLOWED_ROOTS_INVALID",
+                "GROK_DELEGATE_ALLOWED_ROOTS JSON must be an array of paths",
+            )
+        return [str(x).strip() for x in data if str(x).strip()]
+    parts: list[str] = []
+    for chunk in text.replace("\n", ";").split(";"):
+        item = chunk.strip().strip('"').strip("'")
+        if item:
+            parts.append(item)
+    return parts
+
+
+def paths_equal(a: Path | str, b: Path | str) -> bool:
+    """Case-aware path equality after resolve (Windows-safe)."""
+    try:
+        pa = Path(a).resolve()
+        pb = Path(b).resolve()
+    except OSError:
+        return False
+    # On Windows paths are case-insensitive.
+    import os
+
+    if os.name == "nt":
+        return str(pa).lower() == str(pb).lower()
+    return pa == pb
+
+
+def path_in_allowlist(candidate: Path | str, allowlist: Sequence[Path | str]) -> bool:
+    """True if candidate resolve() equals one allowlist entry."""
+    for entry in allowlist:
+        if paths_equal(candidate, entry):
+            return True
+    return False
+
+
+def confine_path_to_root(
+    path: str | Path,
+    root: str | Path,
+    *,
+    field: str = "path",
+) -> Path:
+    """Resolve ``path`` and require it stays inside ``root`` (server-side).
+
+    Rejects ``..`` escapes and symlink walks that leave root after resolve().
+    """
+    try:
+        root_r = Path(root).resolve()
+    except OSError as exc:
+        raise GuardError("PATH_ROOT_INVALID", f"invalid root for {field}: {exc}") from exc
+
+    p = Path(path)
+    try:
+        if not p.is_absolute():
+            candidate = (root_r / p).resolve()
+        else:
+            candidate = p.resolve()
+    except OSError as exc:
+        raise GuardError("PATH_INVALID", f"invalid {field}: {exc}") from exc
+
+    try:
+        candidate.relative_to(root_r)
+    except ValueError as exc:
+        raise GuardError(
+            "PATH_ESCAPE",
+            f"{field} resolves outside worktree/root (escape rejected)",
+        ) from exc
+    return candidate
