@@ -1105,6 +1105,62 @@ class MultiRootAllowlistTests(unittest.TestCase):
         )
         self.assertEqual(len(jparts), 2)
 
+    def test_status_lanes_parent_matches_resolve_under_env_pin(self) -> None:
+        """status.lanes_parent_by_root must use same path as resolve_trusted_lanes_parent."""
+        pinned = (Path(self.tmp.name) / "pinned-lanes").resolve()
+        pinned.mkdir()
+        sp = MockSubprocess(ok=True)
+        # Minimal status probes (version/models) so handler returns ok=True.
+        class _StatusSp(MockSubprocess):
+            def __call__(self, args, cwd, timeout):  # type: ignore[no-untyped-def]
+                argv = [str(a) for a in args]
+                self.calls.append(argv)
+                verb = next((a for a in argv[1:] if not a.startswith("-")), "")
+                if verb == "version":
+                    body = json.dumps({"currentVersion": "0.2.111", "channel": "stable"})
+                elif verb == "models":
+                    body = "You are logged in with grok.com.\n"
+                else:
+                    body = "{}"
+                return {
+                    "args": argv,
+                    "returncode": 0,
+                    "stdout": body,
+                    "stderr": "",
+                    "timedOut": False,
+                }
+
+        with mock.patch.dict(
+            os.environ,
+            {"GROK_DELEGATE_LANES_PARENT": str(pinned)},
+            clear=False,
+        ):
+            expected = server.resolve_trusted_lanes_parent({}, repo_root=self.root_a)
+            assert expected is not None
+            result = server.handle_tool_call(
+                "grok_delegate_status",
+                {},
+                allowed_roots=[self.root_a],
+                subprocess_runner=_StatusSp(),
+                which=lambda n: n,
+                git_runner=MockGit(),
+            )
+        self.assertTrue(result.get("ok"), result)
+        lanes_map = result["roots"]["lanes_parent_by_root"]
+        root_key = str(self.root_a.resolve())
+        # Status must report the env pin, not the sibling default.
+        self.assertIn(root_key, lanes_map)
+        self.assertTrue(
+            guard.paths_equal(lanes_map[root_key], expected),
+            f"status lanes={lanes_map[root_key]!r} != resolve={expected!r}",
+        )
+        self.assertTrue(guard.paths_equal(lanes_map[root_key], pinned))
+        self.assertNotEqual(
+            Path(lanes_map[root_key]).name,
+            "pcp-lanes",
+            "status must not invent sibling pcp-lanes when env pin is set",
+        )
+
 
 class StatusToolsTests(unittest.TestCase):
     """Task A — four read-only status tools via shipped handlers."""
@@ -1388,6 +1444,48 @@ class SandboxAndFlagsTests(unittest.TestCase):
         with self.assertRaises(guard.GuardError) as ctx:
             guard.validate_session_id("not-a-uuid")
         self.assertEqual(ctx.exception.code, "SESSION_ID_INVALID")
+
+    def test_resume_false_omits_resume_flag(self) -> None:
+        """JSON false / bool False must not become the string 'False' as session id."""
+        profile = guard.build_permission_profile(False)
+        argv = guard.build_grok_argv(
+            "g",
+            r"C:\lanes\wt",
+            profile,
+            3,
+            resume=False,
+        )
+        self.assertNotIn("--resume", argv)
+        self.assertNotIn("False", argv)
+
+    def test_delegate_kwargs_resume_false_from_tool_args(self) -> None:
+        """Server path: client resume=false → no SESSION_ID_INVALID, no --resume."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            lanes = Path(td) / "pcp-lanes"
+            repo.mkdir()
+            lanes.mkdir()
+            sp = MockSubprocess(ok=True)
+            result = server.handle_tool_call(
+                "grok_delegate",
+                {
+                    "goal": "noop",
+                    "lane": "resume-false",
+                    "lanes_parent": str(lanes),
+                    "max_turns": 2,
+                    "resume": False,
+                },
+                repo_root=repo,
+                git_runner=MockGit(),
+                subprocess_runner=sp,
+                which=lambda n: n,
+                audit_stream=io.StringIO(),
+            )
+            self.assertTrue(result.get("ok"), result)
+            self.assertEqual(len(sp.calls), 1)
+            argv = sp.calls[0]
+            self.assertNotIn("--resume", argv)
+            self.assertNotIn("False", argv)
 
 
 class SelfTestEntryTests(unittest.TestCase):
