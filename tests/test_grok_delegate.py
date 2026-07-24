@@ -1516,5 +1516,51 @@ class SelfTestEntryTests(unittest.TestCase):
         self.assertIn("--json", doctor["description"].lower())
 
 
+class SubprocessDecodingTests(unittest.TestCase):
+    """Regression: production runners must decode as UTF-8, not the OS locale.
+
+    On Windows ``text=True`` alone decodes with cp1252, which raises
+    UnicodeDecodeError inside subprocess' reader thread on the first non-cp1252
+    byte — losing the delegation result. Goals and summaries here are Russian,
+    so this is a live path, not a theoretical one.
+    """
+
+    NON_ASCII = "привет-мир-✓"
+
+    def test_default_subprocess_runner_handles_non_ascii_stdout(self) -> None:
+        # Write raw UTF-8 bytes, bypassing the child's locale text layer — this
+        # mirrors grok (a Rust binary that always emits UTF-8) rather than
+        # testing Python's own stdout encoding.
+        code = (
+            "import sys;"
+            f"sys.stdout.buffer.write({self.NON_ASCII!r}.encode('utf-8'))"
+        )
+        result = runner.default_subprocess_runner(
+            [sys.executable, "-c", code], None, 60.0
+        )
+        self.assertEqual(result.get("returncode"), 0, msg=result.get("stderr"))
+        self.assertIn(self.NON_ASCII, result.get("stdout") or "")
+
+    def test_default_git_runner_handles_non_ascii_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            for args in (
+                ["init", "-q"],
+                ["config", "user.email", "t@example.invalid"],
+                ["config", "user.name", "T"],
+            ):
+                runner.default_git_runner(args, repo, 60.0)
+            (repo / "f.txt").write_text("x\n", encoding="utf-8")
+            runner.default_git_runner(["add", "."], repo, 60.0)
+            runner.default_git_runner(
+                ["commit", "-q", "-m", self.NON_ASCII], repo, 60.0
+            )
+            log = runner.default_git_runner(
+                ["log", "--format=%s", "-1"], repo, 60.0
+            )
+            self.assertEqual(log.get("returncode"), 0, msg=log.get("stderr"))
+            self.assertIn("привет", log.get("stdout") or "")
+
+
 if __name__ == "__main__":
     unittest.main()

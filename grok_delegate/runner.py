@@ -134,6 +134,11 @@ def default_git_runner(
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True,
+            # Decode as UTF-8, never the Windows locale codepage: git output can
+            # carry non-cp1252 bytes (branch/file names), which would raise
+            # UnicodeDecodeError in the reader thread and lose the result.
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -179,6 +184,11 @@ def default_subprocess_runner(
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True,
+            # Grok emits UTF-8 (goal text, summaries, box drawing). Decoding with
+            # the Windows locale codepage crashes the reader thread on the first
+            # non-cp1252 byte and drops the whole delegation result.
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
