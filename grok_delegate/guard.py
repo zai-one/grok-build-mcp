@@ -536,25 +536,35 @@ def build_grok_argv(
         argv.append("--disable-web-search")
 
     # Session resume/continue/fork — mutually constrained.
-    if continue_session and resume:
+    # bool False / None → omit --resume (JSON false must not become the string "False").
+    resume_active = False
+    if continue_session and resume not in (None, False):
         raise GuardError(
             "SESSION_FLAGS_CONFLICT",
             "continue_session and resume cannot both be set",
         )
     if continue_session:
         argv.append("--continue")
+        resume_active = True
     elif resume is True:
         argv.append("--resume")
-    elif resume is not None and str(resume).strip() != "":
-        rid = str(resume).strip()
+        resume_active = True
+    elif isinstance(resume, str) and resume.strip():
+        rid = resume.strip()
         if not _SESSION_ID_RE.match(rid):
             raise GuardError(
                 "SESSION_ID_INVALID",
                 "resume session id must be a UUID when provided",
             )
         argv.extend(["--resume", rid])
+        resume_active = True
+    elif resume not in (None, False) and not isinstance(resume, (str, bool)):
+        raise GuardError(
+            "SESSION_ID_INVALID",
+            "resume must be true, a UUID string, or omitted",
+        )
     if fork_session:
-        if not (continue_session or resume is not None):
+        if not resume_active:
             raise GuardError(
                 "FORK_REQUIRES_RESUME",
                 "fork_session requires resume or continue_session",

@@ -410,10 +410,12 @@ def _delegate_kwargs_from_args(args: Mapping[str, Any]) -> dict[str, Any]:
         session_id = validate_session_id(str(args.get("session_id")))
 
     resume: str | bool | None = None
-    if "resume" in args and args.get("resume") is not None:
+    if "resume" in args:
         r = args.get("resume")
-        if isinstance(r, bool):
-            resume = r
+        if r is None or r is False:
+            resume = None  # omit --resume (JSON false is not a session id)
+        elif r is True:
+            resume = True
         else:
             resume = str(r).strip() or None
 
@@ -458,7 +460,16 @@ def handle_status_tool(
         roots = load_allowed_roots()
 
     if name == TOOL_STATUS:
-        lanes_map = {str(r): str(default_lanes_parent_for_root(r)) for r in roots}
+        # Same lanes resolution as delegate path (honors GROK_DELEGATE_LANES_PARENT).
+        lanes_map: dict[str, str] = {}
+        for r in roots:
+            try:
+                parent = resolve_trusted_lanes_parent({}, repo_root=r)
+            except GuardError:
+                parent = default_lanes_parent_for_root(r)
+            lanes_map[str(r)] = str(
+                parent if parent is not None else default_lanes_parent_for_root(r)
+            )
         report = build_status_report(
             allowed_roots=roots,
             lanes_parent_map=lanes_map,
