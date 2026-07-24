@@ -230,6 +230,8 @@ def _run_smoke_delegate() -> int:
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if proc.returncode != 0:
