@@ -6,9 +6,20 @@
 
 | Компонент | Как подключён | Файл |
 |---|---|---|
-| `grok` (MCP-сервер) | project-scope, `npx -y grok-cli-mcp` | `.mcp.json` |
+| `grok` (консультации) | глобально + project-scope, `npx -y grok-cli-mcp` | `.mcp.json`, `claude_desktop_config.json` |
 | Infra Ops (плагин `infra-ops@zai` v0.3.2) | project-scope, скиллы + агенты | `.claude/settings.json` |
-| `grok_delegate` (свой MCP-сервер) | **код есть, в MCP не подключён** | `grok_delegate/` |
+| `grok-delegate` (делегирование) | **глобально**, `python grok_delegate/server.py` | `claude_desktop_config.json` |
+
+### Два сервера, а не один
+
+Они **дополняют** друг друга, а не заменяют:
+
+- **`grok`** (`grok-cli-mcp`) — спросить Grok: `grok_chat`, `grok_consult`, `grok_review`,
+  `grok_challenge`. Используется для второго мнения и adversarial-разбора.
+- **`grok-delegate`** (этот проект) — поручить Grok работу: `grok_delegate`,
+  `grok_delegate_plan` + статус-тулы. Чата не даёт.
+
+Пересечения по именам инструментов нулевые. Убрать `grok` = потерять консультации и ревью.
 
 ## `grok_delegate` — собственный делегирующий сервер
 
@@ -42,9 +53,24 @@ py -3 -m pytest tests -q                  # unit (mocked)
 Мультипроектность: `GROK_DELEGATE_ALLOWED_ROOTS` (`;`-список) или один `GROK_DELEGATE_REPO_ROOT`.
 Пустой allowlist → fail-closed.
 
-> В `.mcp.json` он намеренно **не прописан**. Подключение — отдельное решение владельца.
+**Подключён глобально** (2026-07-24) в `claude_desktop_config.json` как `grok-delegate`:
+
+```json
+"grok-delegate": {
+  "command": "…\\Python314\\python.exe",
+  "args": ["…\\MCP\\Grok CLI\\grok_delegate\\server.py"],
+  "env": {
+    "GROK_DELEGATE_BIN": "…\\.grok\\bin\\grok.exe",
+    "GROK_DELEGATE_ALLOWED_ROOTS": "…\\Phone Control Plane;…\\MCP\\Grok CLI"
+  }
+}
+```
+
+Новый проект добавляется строкой в `GROK_DELEGATE_ALLOWED_ROOTS` (разделитель `;`) — корни вне
+списка отвергаются (`REPO_ROOT_UNTRUSTED`), пустой список = fail-closed.
+
 > Sandbox-профиль по умолчанию включён в argv; OS-enforcement на Windows **не** заявлен как
-> гарантия (см. EVIDENCE-ROUND4).
+> гарантия (см. EVIDENCE-ROUND4). Изоляция держится на worktree + запрете push/merge в коде.
 
 ## Авторизация
 
