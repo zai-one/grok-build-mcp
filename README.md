@@ -16,13 +16,35 @@ Python-пакет `grok_delegate/` — dev-only MCP-сервер: принима
 git worktree на ветке `grok/*`, запускает локальный `grok` headless и возвращает ветку + diffstat.
 Без auto-merge, без push, без `--always-approve`.
 
-Приёмка (2026-07-24): R1–R5 закрыты, live-smoke подтвердил реальный headless-запуск, тесты 56 зелёных.
-Границы и **честный список не-гарантий** — в [EVIDENCE.md](EVIDENCE.md); задание — в
-[GOAL-ROUND3.md](GOAL-ROUND3.md).
+Round 3 (R1–R5): [EVIDENCE.md](EVIDENCE.md), [GOAL-ROUND3.md](GOAL-ROUND3.md).  
+Round 4 (статус-тулы, multi-root allowlist, `--sandbox`, self-test): [EVIDENCE-ROUND4.md](EVIDENCE-ROUND4.md),
+[GOAL-ROUND4.md](GOAL-ROUND4.md). Пакетный README: [grok_delegate/README.md](grok_delegate/README.md).
 
-> В `.mcp.json` он намеренно **не прописан**. Подключение = дать агенту живой инструмент, у которого
-> confinement по cwd best-effort (относительный `../` traversal — задокументированная не-гарантия).
-> Это отдельное осознанное решение владельца, а не побочный эффект приёмки.
+### Как проверить, что MCP жив (без перезапуска Claude)
+
+```bash
+cd "C:\Users\codex\Documents\Projects\MCP\Grok CLI"
+py -3 -m grok_delegate --self-test        # PASS/FAIL таблица, без делегирования
+py -3 -m grok_delegate --smoke-delegate   # живой plan-only headless smoke
+py -3 -m pytest tests -q                  # unit (mocked)
+```
+
+### Инструменты `grok_delegate`
+
+| Tool | Назначение |
+|---|---|
+| `grok_delegate` / `grok_delegate_plan` | делегирование / plan-only |
+| `grok_delegate_status` | health JSON (бинарь, auth presence, git, roots, sandbox) |
+| `grok_delegate_doctor` | `doctor --json` only |
+| `grok_delegate_models` | `models` |
+| `grok_delegate_inspect` | `inspect --json` для allowlisted root |
+
+Мультипроектность: `GROK_DELEGATE_ALLOWED_ROOTS` (`;`-список) или один `GROK_DELEGATE_REPO_ROOT`.
+Пустой allowlist → fail-closed.
+
+> В `.mcp.json` он намеренно **не прописан**. Подключение — отдельное решение владельца.
+> Sandbox-профиль по умолчанию включён в argv; OS-enforcement на Windows **не** заявлен как
+> гарантия (см. EVIDENCE-ROUND4).
 
 ## Авторизация
 

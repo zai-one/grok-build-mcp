@@ -1033,5 +1033,390 @@ class AdversarialBypassMapTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "GROK_BIN_CLIENT_FORBIDDEN")
 
 
+class MultiRootAllowlistTests(unittest.TestCase):
+    """Task B — allowlist multi-root fail-closed (accept / reject / .. / empty)."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.root_a = (base / "proj-a").resolve()
+        self.root_b = (base / "proj-b").resolve()
+        self.other = (base / "other").resolve()
+        self.root_a.mkdir()
+        self.root_b.mkdir()
+        self.other.mkdir()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_accept_on_allowlist(self) -> None:
+        allow = [self.root_a, self.root_b]
+        got = server.resolve_trusted_repo_root(
+            {"repo_root": str(self.root_b)},
+            allowed_roots=allow,
+        )
+        self.assertTrue(guard.paths_equal(got, self.root_b))
+
+    def test_reject_off_allowlist(self) -> None:
+        with self.assertRaises(guard.GuardError) as ctx:
+            server.resolve_trusted_repo_root(
+                {"repo_root": str(self.other)},
+                allowed_roots=[self.root_a],
+            )
+        self.assertEqual(ctx.exception.code, "REPO_ROOT_UNTRUSTED")
+
+    def test_reject_dotdot_escape(self) -> None:
+        # root_a/../other resolves to other — not on allowlist of root_a only.
+        sneaky = str(self.root_a / ".." / "other")
+        with self.assertRaises(guard.GuardError) as ctx:
+            server.resolve_trusted_repo_root(
+                {"repo_root": sneaky},
+                allowed_roots=[self.root_a],
+            )
+        self.assertEqual(ctx.exception.code, "REPO_ROOT_UNTRUSTED")
+
+    def test_empty_allowlist_fail_closed(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GROK_DELEGATE_ALLOWED_ROOTS", None)
+            os.environ.pop("GROK_DELEGATE_REPO_ROOT", None)
+            with self.assertRaises(guard.GuardError) as ctx:
+                server.resolve_trusted_repo_root({}, allowed_roots=[])
+            self.assertEqual(ctx.exception.code, "ALLOWED_ROOTS_EMPTY")
+            self.assertIn("GROK_DELEGATE_ALLOWED_ROOTS", ctx.exception.message)
+
+    def test_default_root_is_first_allowlist_entry(self) -> None:
+        got = server.resolve_trusted_repo_root(
+            {},
+            allowed_roots=[self.root_a, self.root_b],
+        )
+        self.assertTrue(guard.paths_equal(got, self.root_a))
+
+    def test_lanes_parent_defaults_to_sibling_pcp_lanes(self) -> None:
+        parent = server.resolve_trusted_lanes_parent({}, repo_root=self.root_a)
+        assert parent is not None
+        self.assertEqual(parent.name, "pcp-lanes")
+        self.assertFalse(runner.is_path_inside(parent, self.root_a))
+
+    def test_parse_allowed_roots_semicolon_and_json(self) -> None:
+        parts = guard.parse_allowed_roots_env(f"{self.root_a};{self.root_b}")
+        self.assertEqual(len(parts), 2)
+        jparts = guard.parse_allowed_roots_env(
+            json.dumps([str(self.root_a), str(self.root_b)])
+        )
+        self.assertEqual(len(jparts), 2)
+
+
+class StatusToolsTests(unittest.TestCase):
+    """Task A — four read-only status tools via shipped handlers."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "repo"
+        self.root.mkdir()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _mock_cli(self, stdout_by_verb: dict[str, str]) -> MockSubprocess:
+        """Subprocess mock that answers version/doctor/models/inspect by argv verb."""
+
+        class _StatusMock(MockSubprocess):
+            def __call__(self, args, cwd, timeout):  # type: ignore[no-untyped-def]
+                argv = [str(a) for a in args]
+                self.calls.append(argv)
+                # Find verb
+                verb = None
+                for a in argv[1:]:
+                    if not a.startswith("-"):
+                        verb = a.lower()
+                        break
+                    if a in {"--version", "-v"}:
+                        verb = a
+                        break
+                body = stdout_by_verb.get(verb or "", "")
+                if verb is None:
+                    return {
+                        "args": argv,
+                        "returncode": 1,
+                        "stdout": "",
+                        "stderr": "no verb",
+                        "timedOut": False,
+                    }
+                return {
+                    "args": argv,
+                    "returncode": 0,
+                    "stdout": body,
+                    "stderr": "",
+                    "timedOut": False,
+                }
+
+        return _StatusMock()  # type: ignore[return-value]
+
+    def test_tools_list_includes_status_tools(self) -> None:
+        resp = server.handle_jsonrpc(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        )
+        assert resp is not None
+        names = {t["name"] for t in resp["result"]["tools"]}
+        for n in (
+            "grok_delegate_status",
+            "grok_delegate_doctor",
+            "grok_delegate_models",
+            "grok_delegate_inspect",
+        ):
+            self.assertIn(n, names)
+
+    def test_status_structured_no_secrets(self) -> None:
+        sp = self._mock_cli(
+            {
+                "version": json.dumps(
+                    {"currentVersion": "0.2.111", "channel": "stable"}
+                ),
+                "models": "You are logged in with grok.com.\nDefault model: grok-4.5\n",
+            }
+        )
+        result = server.handle_tool_call(
+            "grok_delegate_status",
+            {},
+            allowed_roots=[self.root],
+            subprocess_runner=sp,
+            which=lambda n: n,
+            git_runner=MockGit(),
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertIn("roots", result)
+        self.assertEqual(result["roots"]["count"], 1)
+        self.assertIn(str(self.root.resolve()), result["roots"]["allowed"][0])
+        self.assertFalse(result["auth"]["auth_json_read"])
+        self.assertIn("sandbox", result)
+        self.assertIn("workspace", result["sandbox"]["known_profiles"])
+        blob = json.dumps(result)
+        self.assertNotIn("auth.json", blob.lower().replace("auth_json_read", ""))
+        # auth_json_read key is fine; raw path must not appear
+        self.assertNotIn(".grok/auth", blob)
+
+    def test_doctor_never_calls_fix(self) -> None:
+        sp = self._mock_cli(
+            {
+                "doctor": json.dumps(
+                    {"schemaVersion": "1", "counts": {"issues": 0}}
+                ),
+            }
+        )
+        result = server.handle_tool_call(
+            "grok_delegate_doctor",
+            {},
+            subprocess_runner=sp,
+            which=lambda n: n,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertIn("doctor", result)
+        self.assertEqual(len(sp.calls), 1)
+        self.assertIn("doctor", sp.calls[0])
+        self.assertIn("--json", sp.calls[0])
+        self.assertNotIn("fix", [a.lower() for a in sp.calls[0]])
+
+    def test_models_tool(self) -> None:
+        sp = self._mock_cli(
+            {"models": "You are logged in with grok.com.\n* grok-4.5\n"}
+        )
+        result = server.handle_tool_call(
+            "grok_delegate_models",
+            {},
+            subprocess_runner=sp,
+            which=lambda n: n,
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertIn("grok-4.5", result.get("models_text", ""))
+
+    def test_inspect_requires_allowlisted_root(self) -> None:
+        sp = self._mock_cli(
+            {"inspect": json.dumps({"grokVersion": "0.2.111", "cwd": str(self.root)})}
+        )
+        # Off-list → reject before spawn
+        bad = server.handle_tool_call(
+            "grok_delegate_inspect",
+            {"repo_root": str(Path(self.tmp.name) / "nope")},
+            allowed_roots=[self.root],
+            subprocess_runner=sp,
+            which=lambda n: n,
+        )
+        self.assertFalse(bad.get("ok"))
+        self.assertEqual(bad.get("error"), "REPO_ROOT_UNTRUSTED")
+        self.assertEqual(sp.calls, [])
+
+        ok = server.handle_tool_call(
+            "grok_delegate_inspect",
+            {"repo_root": str(self.root)},
+            allowed_roots=[self.root],
+            subprocess_runner=sp,
+            which=lambda n: n,
+        )
+        self.assertTrue(ok.get("ok"), ok)
+        self.assertIn("inspect", ok)
+        self.assertEqual(len(sp.calls), 1)
+
+    def test_readonly_cli_rejects_mutating_verbs(self) -> None:
+        with self.assertRaises(guard.GuardError) as ctx:
+            runner._assert_readonly_cli_args(["doctor", "fix"])
+        self.assertEqual(ctx.exception.code, "CLI_VERB_FORBIDDEN")
+        with self.assertRaises(guard.GuardError):
+            runner._assert_readonly_cli_args(["logout"])
+        with self.assertRaises(guard.GuardError):
+            runner._assert_readonly_cli_args(["plugin", "list"])
+
+
+class SandboxAndFlagsTests(unittest.TestCase):
+    """Task C/D — sandbox, --tools, extra CLI params, path confinement."""
+
+    def test_argv_includes_sandbox_and_tools_by_default(self) -> None:
+        profile = guard.build_permission_profile(False)
+        argv = guard.build_grok_argv("g", r"C:\lanes\wt", profile, 3)
+        self.assertIn("--sandbox", argv)
+        self.assertEqual(argv[argv.index("--sandbox") + 1], "workspace")
+        self.assertIn("--tools", argv)
+        tools = argv[argv.index("--tools") + 1]
+        self.assertIn("Read", tools)
+        self.assertIn("Write", tools)
+        self.assertNotIn(guard.ALWAYS_APPROVE_FLAG, argv)
+        self.assertNotIn("bypassPermissions", argv)
+
+    def test_plan_argv_uses_read_only_sandbox(self) -> None:
+        profile = guard.build_permission_profile(True)
+        argv = guard.build_grok_argv("plan", r"C:\lanes\wt", profile, 2, plan_only=True)
+        self.assertEqual(argv[argv.index("--sandbox") + 1], "read-only")
+
+    def test_sandbox_off_omits_flag(self) -> None:
+        profile = guard.build_permission_profile(False)
+        argv = guard.build_grok_argv(
+            "g", r"C:\lanes\wt", profile, 3, sandbox="off"
+        )
+        self.assertNotIn("--sandbox", argv)
+
+    def test_unknown_sandbox_rejected(self) -> None:
+        with self.assertRaises(guard.GuardError) as ctx:
+            guard.validate_sandbox_profile("invented-profile")
+        self.assertEqual(ctx.exception.code, "SANDBOX_INVALID")
+
+    def test_extra_flags_on_argv(self) -> None:
+        profile = guard.build_permission_profile(False)
+        schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+        argv = guard.build_grok_argv(
+            "g",
+            r"C:\lanes\wt",
+            profile,
+            5,
+            model="grok-4.5",
+            reasoning_effort="high",
+            rules="be careful",
+            json_schema=schema,
+            no_subagents=True,
+            disable_web_search=True,
+        )
+        self.assertIn("--model", argv)
+        self.assertIn("grok-4.5", argv)
+        self.assertIn("--reasoning-effort", argv)
+        self.assertIn("high", argv)
+        self.assertIn("--rules", argv)
+        self.assertIn("--json-schema", argv)
+        self.assertIn("--no-subagents", argv)
+        self.assertIn("--disable-web-search", argv)
+        # No CLI worktree flags — own prepare_worktree remains
+        self.assertNotIn("--worktree", argv)
+        self.assertNotIn("-w", argv)
+
+    def test_session_resume_and_fork(self) -> None:
+        profile = guard.build_permission_profile(False)
+        sid = "019f959a-a609-7cd1-a2fd-47b9f698ed0c"
+        argv = guard.build_grok_argv(
+            "g",
+            r"C:\lanes\wt",
+            profile,
+            3,
+            resume=sid,
+            fork_session=True,
+            session_id="019f959a-a609-7cd1-a2fd-47b9f698ed0d",
+        )
+        self.assertIn("--resume", argv)
+        self.assertIn(sid, argv)
+        self.assertIn("--fork-session", argv)
+        self.assertIn("--session-id", argv)
+
+    def test_fork_without_resume_rejected(self) -> None:
+        profile = guard.build_permission_profile(False)
+        with self.assertRaises(guard.GuardError) as ctx:
+            guard.build_grok_argv(
+                "g", r"C:\lanes\wt", profile, 3, fork_session=True
+            )
+        self.assertEqual(ctx.exception.code, "FORK_REQUIRES_RESUME")
+
+    def test_confine_path_rejects_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "wt"
+            root.mkdir()
+            (root / "ok.txt").write_text("x", encoding="utf-8")
+            ok = guard.confine_path_to_root("ok.txt", root)
+            self.assertTrue(str(ok).endswith("ok.txt"))
+            with self.assertRaises(guard.GuardError) as ctx:
+                guard.confine_path_to_root("../outside.txt", root)
+            self.assertEqual(ctx.exception.code, "PATH_ESCAPE")
+
+    def test_run_delegation_argv_has_sandbox(self) -> None:
+        sp = MockSubprocess(ok=True)
+        with tempfile.TemporaryDirectory() as td:
+            wt = Path(td) / "wt"
+            wt.mkdir()
+            result = runner.run_delegation(
+                goal="implement safely",
+                worktree_path=wt,
+                max_turns=4,
+                subprocess_runner=sp,
+                which=lambda n: n,
+            )
+            self.assertTrue(result.get("ok"), result)
+            argv = sp.calls[0]
+            self.assertIn("--sandbox", argv)
+            self.assertEqual(argv[argv.index("--sandbox") + 1], "workspace")
+            _assert_argv_headless_and_safe(self, argv)
+
+    def test_invalid_reasoning_effort_rejected(self) -> None:
+        with self.assertRaises(guard.GuardError) as ctx:
+            guard.validate_reasoning_effort("ludicrous")
+        self.assertEqual(ctx.exception.code, "REASONING_EFFORT_INVALID")
+
+    def test_invalid_session_id_rejected(self) -> None:
+        with self.assertRaises(guard.GuardError) as ctx:
+            guard.validate_session_id("not-a-uuid")
+        self.assertEqual(ctx.exception.code, "SESSION_ID_INVALID")
+
+
+class SelfTestEntryTests(unittest.TestCase):
+    """Task E — self-test entry exists and drives real list_tools path."""
+
+    def test_main_module_exposes_self_test_flag(self) -> None:
+        main_src = (_PKG / "__main__.py").read_text(encoding="utf-8")
+        self.assertIn("--self-test", main_src)
+        self.assertIn("--smoke-delegate", main_src)
+        self.assertIn("handle_jsonrpc", main_src)
+        self.assertIn("grok_delegate_status", main_src)
+
+    def test_no_destructive_tools_registered(self) -> None:
+        names = [t["name"] for t in server.list_tools()]
+        banned = (
+            "sessions_delete",
+            "doctor_fix",
+            "logout",
+            "update",
+            "plugin",
+            "mcp_config",
+        )
+        for b in banned:
+            self.assertNotIn(b, names)
+        # Doctor tool must remain read-only (never expose fix as a tool name/action).
+        doctor = next(t for t in server.list_tools() if t["name"] == "grok_delegate_doctor")
+        self.assertIn("never", doctor["description"].lower())
+        self.assertIn("--json", doctor["description"].lower())
+
+
 if __name__ == "__main__":
     unittest.main()
