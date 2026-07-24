@@ -13,4 +13,5 @@ __all__ = [
     "guard",
     "runner",
     "server",
+    "status",
 ]
