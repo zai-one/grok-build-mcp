@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "grok": {
+      "command": "npx",
+      "args": ["-y", "grok-cli-mcp"]
+    }
+  }
+}
