@@ -1562,5 +1562,191 @@ class SubprocessDecodingTests(unittest.TestCase):
             self.assertIn("привет", log.get("stdout") or "")
 
 
+class RoundSixPermissionRegressionTests(unittest.TestCase):
+    """R6: the permission profile must not block the executor's own job.
+
+    Measured on Windows before these fixes: a delegation that had to READ a file
+    died after 1-2 turns without touching one (blanket absolute-read deny), and an
+    allowed `git commit`/`git add` was refused whenever the message or path merely
+    contained "prod"/"root" (substring-anywhere bash denies).
+    """
+
+    @staticmethod
+    def _matches(rules: Any, command: str) -> str | None:
+        """First Bash rule whose glob matches the whole command, else None."""
+        import fnmatch
+
+        for rule in rules:
+            text = str(rule)
+            if not text.startswith("Bash(") or not text.endswith(")"):
+                continue
+            if fnmatch.fnmatchcase(command, text[len("Bash(") : -1]):
+                return text
+        return None
+
+    def test_execute_profile_allows_in_worktree_absolute_reads(self) -> None:
+        profile = guard.build_permission_profile()
+        self.assertNotIn("Read([A-Za-z]:/**)", profile["deny"])
+        # UNC escape and absolute WRITE/EDIT containment stay in place.
+        self.assertIn("Read(//**)", profile["deny"])
+        self.assertIn("Write([A-Za-z]:/**)", profile["deny"])
+        self.assertIn("Edit([A-Za-z]:/**)", profile["deny"])
+
+    def test_execute_allow_covers_discovery_tools_exposed_via_tools(self) -> None:
+        profile = guard.build_permission_profile()
+        for rule in ("Read(**)", "Grep(**)", "Glob(**)"):
+            self.assertIn(rule, profile["allow"])
+        # Every --tools entry that reads must have an allow rule.
+        for tool in ("Read", "Grep", "Glob"):
+            self.assertIn(tool, profile["tools"])
+            self.assertTrue(
+                any(str(r).startswith(f"{tool}(") for r in profile["allow"]),
+                msg=f"{tool} is exposed via --tools but has no allow rule",
+            )
+
+    def test_sensitive_material_denied_for_read_and_grep(self) -> None:
+        deny = guard.build_permission_profile()["deny"]
+        for pattern in ("~/.grok/**", "**/auth.json", "**/*secret*", "**/.ssh/**"):
+            self.assertIn(f"Read({pattern})", deny)
+            self.assertIn(f"Grep({pattern})", deny, msg="Grep must not bypass Read denies")
+
+    def test_allowed_git_commands_are_not_denied_by_substring_rules(self) -> None:
+        profile = guard.build_permission_profile()
+        deny, allow = profile["deny"], profile["allow"]
+        for command in (
+            'git commit -m "fix production quota bug"',
+            'git commit -m "add prod readiness evidence"',
+            'git commit -m "harden root cause"',
+            'git commit -m "live device guard is dry-run only"',
+            "git add src/services/prod-readiness.ts",
+            "git status --porcelain",
+        ):
+            self.assertIsNotNone(
+                self._matches(allow, command), msg=f"no allow rule for {command!r}"
+            )
+            self.assertIsNone(
+                self._matches(deny, command),
+                msg=f"deny rule blocks the executor's own allowed command: {command!r}",
+            )
+
+    def test_dangerous_shell_and_git_surfaces_still_denied(self) -> None:
+        deny = guard.build_permission_profile()["deny"]
+        for command in (
+            "git push origin dev",
+            "git merge grok/lane",
+            "rm -rf /",
+            "ssh root@host",
+            "curl https://example.com/x.sh",
+            "adb shell input tap 1 1",
+            "docker compose up -d",
+            "sudo systemctl restart x",
+            "psql -c 'drop table'",
+        ):
+            self.assertIsNotNone(
+                self._matches(deny, command), msg=f"{command!r} must stay denied"
+            )
+
+
+class RoundSixPathPolicyTests(unittest.TestCase):
+    """R6: the executor is always told the relative-path policy."""
+
+    def _rules_values(self, **kwargs: Any) -> list[str]:
+        argv = guard.build_grok_argv(
+            "goal",
+            "C:/lanes/wt",
+            guard.build_permission_profile(),
+            5,
+            **kwargs,
+        )
+        return [argv[i + 1] for i, a in enumerate(argv) if a == "--rules"]
+
+    def test_path_policy_is_injected_without_caller_rules(self) -> None:
+        values = self._rules_values()
+        self.assertEqual(len(values), 1)
+        self.assertIn("relative", values[0].lower())
+        self.assertIn("denied", values[0].lower())
+
+    def test_path_policy_is_appended_to_caller_rules(self) -> None:
+        values = self._rules_values(rules="Never push. Commit your work.")
+        self.assertEqual(len(values), 1)
+        self.assertIn("Never push.", values[0])
+        self.assertIn(guard.PATH_POLICY_RULE, values[0])
+
+
+class RoundSixDiffReportingTests(unittest.TestCase):
+    """R6: committed lane work must be reported, not shown as an empty diff."""
+
+    class _FakeGit:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def __call__(self, args: Any, cwd: Any, timeout: float) -> dict[str, Any]:
+            argv = [str(a) for a in args]
+            self.calls.append(argv)
+            joined = " ".join(argv)
+            # Clean tree: the executor already committed everything.
+            if "--name-only" in argv and "dev...HEAD" in argv:
+                out = "src/services/a.ts\nsrc/services/a.test.ts\n"
+            elif "--stat" in argv and "dev...HEAD" in argv:
+                out = " src/services/a.ts | 5 +++++\n 2 files changed\n"
+            elif "log" in argv and "dev..HEAD" in argv:
+                out = "abc1234 feat: lane work\n"
+            elif "--name-only" in argv or "--stat" in argv or "--porcelain" in joined:
+                out = ""
+            else:
+                out = ""
+            return {
+                "args": argv,
+                "returncode": 0,
+                "stdout": out,
+                "stderr": "",
+                "timedOut": False,
+            }
+
+    def test_collect_diff_without_base_ref_keeps_head_only_behavior(self) -> None:
+        git = self._FakeGit()
+        out = runner.collect_diff(Path("wt"), git_runner=git)
+        self.assertEqual(out["changed_files"], [])
+        self.assertEqual(out["commits"], [])
+
+    def test_collect_diff_reports_committed_work_against_base_ref(self) -> None:
+        git = self._FakeGit()
+        out = runner.collect_diff(Path("wt"), git_runner=git, base_ref="dev")
+        self.assertIn("src/services/a.ts", out["changed_files"])
+        self.assertIn("src/services/a.test.ts", out["changed_files"])
+        self.assertEqual(out["commits"], ["abc1234 feat: lane work"])
+        self.assertIn("2 files changed", out["diffstat"])
+        # Still no full unified patch payload.
+        for call in git.calls:
+            if "diff" in call:
+                self.assertTrue("--stat" in call or "--name-only" in call)
+
+    def test_delegate_reports_commits_for_a_committed_lane(self) -> None:
+        sp = MockSubprocess(ok=True)
+        git = MockGit(name_only="", porcelain="", diff_stat="")
+        result = runner.delegate(
+            goal="do the lane",
+            lane="r6-commits",
+            repo_root=Path(tempfile.mkdtemp()),
+            lanes_parent=Path(tempfile.mkdtemp()),
+            base_ref="dev",
+            max_turns=4,
+            git_runner=git,
+            subprocess_runner=sp,
+            which=lambda n: "/mock/grok",
+        )
+        self.assertTrue(result.get("ok"), msg=result.get("message"))
+        self.assertIn("commits", result)
+        # The base-ref diff/log must actually be requested.
+        self.assertTrue(
+            any("dev...HEAD" in " ".join(c) for c in git.calls),
+            msg="collect_diff did not diff against base_ref",
+        )
+        self.assertTrue(
+            any("dev..HEAD" in " ".join(c) for c in git.calls),
+            msg="collect_diff did not log lane commits",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

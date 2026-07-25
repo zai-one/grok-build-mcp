@@ -417,10 +417,18 @@ def collect_diff(
     *,
     git_runner: GitRunner | None = None,
     timeout: float = 60.0,
+    base_ref: str | None = None,
 ) -> dict[str, Any]:
-    """Collect changed files + diffstat. Never returns full patch payload."""
+    """Collect changed files + diffstat + lane commits. No full patch payload.
+
+    R6: when ``base_ref`` is given, work the executor already COMMITTED is included
+    (diff/log against the base). Diffing HEAD alone reported ``changed_files: []``
+    for a lane that did exactly what its rules asked — commit its work — which is
+    indistinguishable from "the executor did nothing".
+    """
     git = git_runner or default_git_runner
     wt = Path(worktree_path)
+    commits: list[str] = []
     name_status = git(
         ["-C", str(wt), "diff", "--name-only", "HEAD"],
         None,
@@ -463,10 +471,47 @@ def collect_diff(
         if len(diffstat) > 8000:
             diffstat = diffstat[:8000] + "\n…(truncated)"
 
+    # R6: fold in work the executor already committed on the lane branch.
+    if base_ref:
+        base = str(base_ref)
+        committed = git(
+            ["-C", str(wt), "diff", "--name-only", f"{base}...HEAD"],
+            None,
+            timeout,
+        )
+        if committed.get("returncode") == 0:
+            for line in (committed.get("stdout") or "").splitlines():
+                p = line.strip()
+                if p and p not in changed:
+                    changed.append(p)
+
+        log = git(
+            ["-C", str(wt), "log", "--oneline", f"{base}..HEAD"],
+            None,
+            timeout,
+        )
+        if log.get("returncode") == 0:
+            for line in (log.get("stdout") or "").splitlines():
+                entry = line.strip()
+                if entry:
+                    commits.append(entry)
+
+        if not diffstat:
+            committed_stat = git(
+                ["-C", str(wt), "diff", "--stat", f"{base}...HEAD"],
+                None,
+                timeout,
+            )
+            if committed_stat.get("returncode") == 0:
+                diffstat = (committed_stat.get("stdout") or "").strip()
+                if len(diffstat) > 8000:
+                    diffstat = diffstat[:8000] + "\n…(truncated)"
+
     return {
         "ok": True,
         "changed_files": changed,
         "diffstat": diffstat,
+        "commits": commits,
     }
 
 
@@ -716,7 +761,8 @@ def delegate(
     )
 
     # Always collect diffstat when worktree exists (even on executor error).
-    diff = collect_diff(wt, git_runner=git_runner)
+    # R6: base_ref-aware so committed lane work is reported, not just dirty files.
+    diff = collect_diff(wt, git_runner=git_runner, base_ref=base_ref)
 
     if not run_result.get("ok"):
         out = {
@@ -729,6 +775,7 @@ def delegate(
             "summary": run_result.get("summary") or run_result.get("message") or "",
             "changed_files": diff.get("changed_files") or [],
             "diffstat": diff.get("diffstat") or "",
+            "commits": diff.get("commits") or [],
             "error": run_result.get("error") or "DELEGATION_FAILED",
             "message": run_result.get("message") or "headless executor failed",
         }
@@ -744,6 +791,7 @@ def delegate(
         "summary": run_result.get("summary") or "",
         "changed_files": diff.get("changed_files") or [],
         "diffstat": diff.get("diffstat") or "",
+        "commits": diff.get("commits") or [],
     }
 
 

@@ -85,6 +85,20 @@ _SESSION_ID_RE = re.compile(
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
+# R6: path policy always handed to the executor.
+#
+# Absolute Windows-drive Write/Edit stay denied (containment), and the executor
+# naturally reaches for absolute paths because --cwd is absolute. Each such attempt
+# costs a denial round, and the model does not always recover from it — measured:
+# a lane announced its write, was denied, and ended the turn with an empty worktree.
+# Stating the policy up front removes the denial round entirely.
+PATH_POLICY_RULE = (
+    "Path policy: always use paths RELATIVE to the worktree root for Read, Write, "
+    "Edit, Grep and Glob (e.g. src/services/x.ts). Absolute paths (C:/..., //...) "
+    "are denied by the permission profile — if a tool call is denied, retry the same "
+    "call with a relative path instead of stopping."
+)
+
 # Max length bounds for free-text CLI params.
 MAX_RULES_CHARS = 8_000
 MAX_JSON_SCHEMA_CHARS = 16_000
@@ -105,12 +119,72 @@ _DENY_HOME_GROK = "Read(~/.grok/**)"
 _DENY_HOME_GROK_WRITE = "Write(~/.grok/**)"
 _DENY_SECRETS = "Read(**/*secret*)"
 _DENY_AUTH = "Read(**/auth.json)"
-_DENY_ENV_KEYS = "Bash(*XAI*)"
-_DENY_LIVE = "Bash(*live*device*)"
-_DENY_PROD = "Bash(*prod*)"
-_DENY_ROOT = "Bash(*root*)"
+# R6: narrowed from "Bash(*XAI*)" — the broad form also denied any allowed git
+# command whose message merely mentioned xai.
+_DENY_ENV_KEYS = "Bash(*XAI_API_KEY*)"
 _DENY_DESTRUCTIVE = "Bash(rm -rf*)"
 _DENY_FORCE_PUSH = "Bash(git push*--force*)"
+
+# R6: sensitive-CONTENT read denies, applied to Read and Grep alike.
+#
+# These replace the former blanket Windows-absolute read deny
+# ("Read([A-Za-z]:/**)"). That rule also denied legitimate reads INSIDE the lane
+# worktree — the worktree is itself an absolute Windows path — so a delegation
+# that had to read any file died after 1-2 turns without touching one, while a
+# write-only delegation survived (the model retries writes with a relative path,
+# but does not recover from a denied read). Containment for reads stays: --cwd is
+# pinned to the worktree, --sandbox is applied, and the patterns below keep secret
+# material unreadable regardless of path form.
+_SENSITIVE_READ_PATTERNS: tuple[str, ...] = (
+    "~/.grok/**",
+    "**/auth.json",
+    "**/*secret*",
+    "**/.env",
+    "**/.env.*",
+    "**/.ssh/**",
+    "**/id_rsa*",
+    "**/*.pem",
+    "**/*.key",
+)
+
+
+def _sensitive_read_denies() -> tuple[str, ...]:
+    """Deny rules blocking secret material for both Read and Grep tools."""
+    out: list[str] = []
+    for pattern in _SENSITIVE_READ_PATTERNS:
+        out.append(f"Read({pattern})")
+        out.append(f"Grep({pattern})")
+    return tuple(out)
+
+
+# R6: dangerous NON-GIT shell surfaces, matched on the command itself.
+#
+# Replaces the substring forms "Bash(*prod*)", "Bash(*root*)" and
+# "Bash(*live*device*)", which denied allowed git commands whose message or path
+# merely contained those words — e.g. `git commit -m "prod readiness"` and
+# `git add src/services/prod-readiness.ts` were both rejected, so a lane could
+# not commit its own work. The execute allow list is git-only, so these are
+# defense-in-depth against a broader allow list ever being introduced.
+_DENY_SHELL_COMMANDS: tuple[str, ...] = (
+    "Bash(ssh*)",
+    "Bash(scp*)",
+    "Bash(sftp*)",
+    "Bash(curl*)",
+    "Bash(wget*)",
+    "Bash(adb*)",
+    "Bash(docker*)",
+    "Bash(kubectl*)",
+    "Bash(psql*)",
+    "Bash(sudo*)",
+    "Bash(su -*)",
+    "Bash(runas*)",
+    "Bash(reg *)",
+    "Bash(schtasks*)",
+    "Bash(shutdown*)",
+    "Bash(format*)",
+    "Bash(del /*)",
+    "Bash(rmdir /s*)",
+)
 
 _BASE_DENY: tuple[str, ...] = (
     _DENY_PUSH,
@@ -125,10 +199,9 @@ _BASE_DENY: tuple[str, ...] = (
     _DENY_SECRETS,
     _DENY_AUTH,
     _DENY_ENV_KEYS,
-    _DENY_LIVE,
-    _DENY_PROD,
-    _DENY_ROOT,
     _DENY_DESTRUCTIVE,
+    *_DENY_SHELL_COMMANDS,
+    *_sensitive_read_denies(),
 )
 
 _BASE_DISALLOWED_TOOLS: tuple[str, ...] = (
@@ -155,6 +228,11 @@ _PLAN_DISALLOWED = (
 # every shell deny via arbitrary code execution. Shell allow is git-only.
 _EXECUTE_ALLOW: tuple[str, ...] = (
     "Read(**)",
+    # R6: discovery tools were exposed via --tools but had no allow rule, so the
+    # execute profile was inconsistent with the plan profile (which allows both).
+    # Sensitive material stays unreadable through Grep via _sensitive_read_denies().
+    "Grep(**)",
+    "Glob(**)",
     "Write(**)",
     "Edit(**)",
     "Bash(git status*)",
@@ -293,7 +371,9 @@ def build_permission_profile(plan_only: bool = False) -> dict[str, Any]:
 
     return {
         "allow": list(_EXECUTE_ALLOW),
-        "deny": list(_BASE_DENY) + [_DENY_CWD_ESCAPE_READ_ABS, _DENY_WIN_READ],
+        # R6: UNC read escape stays denied; the Windows-drive read deny is gone —
+        # it blocked in-worktree reads (see _SENSITIVE_READ_PATTERNS rationale).
+        "deny": list(_BASE_DENY) + [_DENY_CWD_ESCAPE_READ_ABS],
         "disallowed_tools": list(_BASE_DISALLOWED_TOOLS),
         "tools": list(_EXECUTE_TOOLS),
         "permission_mode": PERMISSION_MODE_EXECUTE,
@@ -526,8 +606,9 @@ def build_grok_argv(
         argv.extend(["--model", model_v])
     if effort:
         argv.extend(["--reasoning-effort", effort])
-    if rules_v:
-        argv.extend(["--rules", rules_v])
+    # R6: the path policy is unconditional — callers may omit rules entirely.
+    combined_rules = f"{rules_v}\n{PATH_POLICY_RULE}" if rules_v else PATH_POLICY_RULE
+    argv.extend(["--rules", combined_rules])
     if schema_v:
         argv.extend(["--json-schema", schema_v])
     if no_subagents:
