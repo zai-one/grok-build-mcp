@@ -34,6 +34,18 @@ that gap, in six slices.
 7. Python 3.11+, stdlib only (no new dependencies). Type hints, `from __future__ import
    annotations`, docstrings that say *why*. Match the existing style of
    `grok_delegate/*.py`.
+8. **Deliver NEW modules, not edits to large existing files.** Measured on this repo: a lane
+   asked to add functions to `guard.py` (~900 lines) and wire them into `runner.py`
+   (~930 lines) came back with nothing written, twice, while lanes that created a new module
+   (`gates.py`, 418 lines) plus a new test file (538 lines) succeeded. Editing a large file
+   requires reading it first, and that is where the lane gives up. So: put new logic in its
+   own module with a narrow public API; **Claude does the few-line wiring into the existing
+   large files** as part of final integration.
+9. **New tests go in a NEW file per slice** (`tests/test_gates.py`, `tests/test_anchors.py`,
+   `tests/test_verdict.py`, `tests/test_jobs_durable.py`, `tests/test_driver.py`). Do not
+   append to `tests/test_grok_delegate.py` — it is ~1900 lines, and appending to it means
+   reading it first, which measurably makes the lane give up with nothing written. Import
+   what you need (`from grok_delegate import gates`) and keep each new file focused.
 
 ## Verified anchors (all exist as of 2026-07-25)
 
@@ -237,10 +249,91 @@ These must hold after every slice; add explicit tests where missing:
 
 ---
 
+## R7-G — chaos & failure-injection sweep (test-only slice)
+
+Everything above is happy-path-plus-known-edges. This slice attacks the pipeline the way
+reality does. **Test-only**: no production edits; a failure here is a ranked finding in
+`EVIDENCE-ROUND7.md`, and the fix goes to a follow-up slice.
+
+New file `tests/test_chaos.py`. Inject faults through the existing injection points
+(`git_runner`, `subprocess_runner`, `thread_starter`, fake `delegate`/`run_gates`):
+
+**Executor misbehaviour** (measured classes, all must be survivable):
+- returns exit 0 with an empty worktree (the dominant real failure) → driver retries, then
+  `blocked`; never reported as success;
+- returns exit 0 having written files but **no commit** → work is still reported
+  (`changed_files` non-empty) and the lane is not lost;
+- writes a file **outside** the worktree path in its claim → reconciliation ignores it;
+- claims a commit that does not exist → `VERDICT_UNSUPPORTED`;
+- emits gigabytes of stdout → bounded, no memory blow-up;
+- emits invalid UTF-8 bytes → decoded with replacement, never a crash (this class already
+  cost one whole result);
+- hangs → wall-clock timeout fires, `status:"timeout"`, worktree preserved for inspection;
+- dies from a signal (negative return code) → `ok:false` with a diagnosable status;
+- spawns nothing because the binary vanished mid-run → `GROK_MISSING`, no partial state.
+
+**Git-layer faults:**
+- `worktree add` fails (disk full / permission) → `WORKTREE_CREATE_FAILED`, lane `blocked`;
+- worktree directory deleted underneath a running lane → detected, not a crash;
+- `base_ref` deleted/moved mid-run → diff falls back gracefully, no traceback;
+- git binary missing → `GIT_MISSING` before any spawn;
+- branch exists but is checked out elsewhere → `WORKTREE_EXISTS_CONFLICT`, no destructive fix;
+- detached HEAD in the lane → commit collection still works or degrades cleanly.
+
+**Filesystem / environment faults:**
+- jobs dir read-only → memory-only degradation with a warning;
+- queue file replaced with a directory → clean error;
+- lock file left by a dead pid → taken over; by a live pid → `QUEUE_LOCKED`;
+- clock jumps backwards (timestamps must never make a record "negative duration");
+- extremely long lane names / non-ASCII lane names → sanitized, round-trip safe;
+- two drivers, two queues, one lanes_parent → no cross-talk.
+
+**Adversarial input** (a goal file is untrusted text):
+- goal containing shell metacharacters, backticks, `$(...)`, newlines → never becomes argv
+  or a shell payload (assert argv shape);
+- goal attempting `--always-approve` / `--allow Bash(*)` injection through free text → still
+  rejected by `assert_argv_safe` / `_assert_execute_allow_safe`;
+- goal citing `~/.grok/auth.json` or a `*secret*` path → anchor extraction may see it, but
+  the profile deny keeps it unreadable, and it must never be echoed into audit/verdict;
+- goal 1 MB long → bounded before spawn;
+- queue lane with `lane: "master"` / `"dev"` / `"../escape"` → rejected by `normalize_lane`.
+
+## R7-H — observability & operator report
+
+A loop that runs unattended must be readable afterwards without re-deriving what happened.
+
+Deliver `grok_delegate/report.py` + `tests/test_report.py`:
+- `build_round_report(queue, jobs, gate_reports) -> dict` and a Markdown renderer: per lane
+  the status, attempts, turns, changed-file count, commits, gate verdict, blocked reason,
+  and the wall-clock; plus totals and the list of lanes awaiting merge.
+- Redaction first: no goal text (length + hash only, per `audit.py:goal_fingerprint`), no
+  gate output beyond a bounded tail, no absolute host paths (relativize to the repo root).
+- Scenarios: empty round; all-blocked round; mixed; a lane with 3 attempts; missing gate
+  report; non-ASCII lane names; enormous gate output; a job in state `unknown`; report is
+  deterministic (same input → byte-identical output) so it can be diffed between rounds.
+
+## R7-I — end-to-end acceptance (the round is done when this passes)
+
+New file `tests/test_e2e_autonomy.py`: drive the **whole** pipeline with fakes only —
+queue file → driver → delegate (fake executor with scripted behaviours) → verdict →
+reconciliation → gates (fake) → report — and assert:
+1. a good lane ends `ready_for_merge` with a verdict git can confirm and a gate pass;
+2. an empty-result lane is retried then `blocked`, and nothing is ever marked merged;
+3. a gate-failing lane ends `gates_failed`, and the driver continues to the next lane;
+4. a lane whose verdict lies ends `blocked:VERDICT_UNSUPPORTED`;
+5. the round report lists exactly the lanes above with their real outcomes;
+6. across the entire run: no `git push`, no `git merge`, no `--always-approve` in any argv
+   the fakes recorded (assert over every captured call), and no secret string planted in
+   goal/gate output appears anywhere in report/audit/job files.
+
 ## Dispatch order
 
 `R7-A` (gate runner) → `R7-B` (anchors) → `R7-C` (verdict) → `R7-D` (durable jobs) →
-`R7-E` (driver, depends on A/C/D) → `R7-F` swept last as an audit slice.
+`R7-E` (driver, depends on A/C/D) → `R7-G` (chaos sweep) → `R7-H` (report) →
+`R7-F` (invariant audit) → `R7-I` (end-to-end acceptance, closes the round).
+
+Wiring of each new module into `runner.py` / `server.py` / `jobs.py` is Claude's final-fix
+step, done at merge time — see contract rule 8.
 
 Claude dispatches one slice at a time through the repaired channel, runs
 `py -3 -m pytest tests -q` on the lane worktree, fixes what the executor missed, commits,
