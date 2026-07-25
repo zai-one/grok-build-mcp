@@ -240,7 +240,7 @@ class AnchorWiringInDelegateTests(unittest.TestCase):
         self.repo = Path(tempfile.mkdtemp())
         self.lanes = Path(tempfile.mkdtemp())
 
-    def _delegate(self, goal: str):
+    def _delegate(self, goal: str, *, fail_on_missing_anchors: bool = False):
         from grok_delegate import runner as runner_mod
 
         spawned: list[list[str]] = []
@@ -297,12 +297,14 @@ class AnchorWiringInDelegateTests(unittest.TestCase):
             git_runner=fake_git,
             subprocess_runner=fake_subprocess,
             which=lambda n: "/mock/grok",
+            fail_on_missing_anchors=fail_on_missing_anchors,
         )
         return result, spawned
 
-    def test_all_anchors_missing_fails_fast_without_spawning(self) -> None:
+    def test_all_anchors_missing_fails_fast_when_opted_in(self) -> None:
         result, spawned = self._delegate(
-            "Fix src/services/does-not-exist.ts and tests/also-missing.test.ts please."
+            "Fix src/services/does-not-exist.ts and tests/also-missing.test.ts please.",
+            fail_on_missing_anchors=True,
         )
         self.assertFalse(result.get("ok"))
         self.assertEqual(result.get("error"), "ANCHOR_MISSING")
@@ -322,3 +324,21 @@ class AnchorWiringInDelegateTests(unittest.TestCase):
         self.assertTrue(result.get("ok"), msg=result.get("message"))
         self.assertEqual(len(spawned), 1)
         self.assertEqual(result.get("missing_anchors"), [])
+
+    def test_creation_goal_is_not_blocked_by_default(self) -> None:
+        """R7-B correction: a goal that CREATES files cites paths that do not exist.
+
+        Why this test exists: the first version hard-failed whenever every anchor was
+        missing, which blocked a legitimate dispatch whose whole job was to deliver
+        grok_delegate/verdict.py plus tests/test_verdict.py. Reporting is the default;
+        blocking is opt-in.
+        """
+        result, spawned = self._delegate(
+            "Deliver a NEW module grok_delegate/verdict.py plus tests/test_verdict.py."
+        )
+        self.assertTrue(result.get("ok"), msg=result.get("message"))
+        self.assertEqual(len(spawned), 1, "a creation goal must still run")
+        self.assertEqual(
+            sorted(result.get("missing_anchors") or []),
+            ["grok_delegate/verdict.py", "tests/test_verdict.py"],
+        )
