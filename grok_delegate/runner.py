@@ -704,6 +704,10 @@ def delegate(
     # default rejected every dispatch with BASE_DIRTY until the caller stashed
     # unrelated changes. Callers that want the stricter behavior still pass True.
     require_clean_base: bool = False,
+    # R7-B: opt-in hard failure when every path the goal cites is missing. Off by
+    # default because creation goals legitimately cite files that do not exist yet;
+    # reference-only goals (fix/refactor an existing file) can switch it on.
+    fail_on_missing_anchors: bool = False,
     git_runner: GitRunner | None = None,
     subprocess_runner: SubprocessRunner | None = None,
     which: WhichFn | None = None,
@@ -742,15 +746,23 @@ def delegate(
     branch = prep["branch"]
     normalized = prep["lane"]
 
-    # R7-B: pre-validate the paths the goal cites. A goal whose anchors are ALL
-    # fictional cannot succeed — the executor searches, fails, and ends its turn
-    # with an empty worktree (measured: one fabricated anchor burned three
-    # dispatches). Fail fast without spawning. A partial miss still spawns, but
-    # the miss is reported so the driver and the integrator can see it.
+    # R7-B: pre-validate the paths the goal cites, and REPORT them by default.
+    #
+    # A fabricated citation does kill sessions (measured: one fake anchor burned
+    # three dispatches). But blocking on "all anchors missing" is wrong as a
+    # default, because a creation goal legitimately cites files that do not exist
+    # yet — "deliver grok_delegate/verdict.py plus tests/test_verdict.py" has zero
+    # existing anchors. That default blocked exactly such a dispatch the first time
+    # it ran, so the hard failure is now opt-in via fail_on_missing_anchors and the
+    # normal path just surfaces missing_anchors for the driver and the integrator.
     anchor_check = validate_goal_anchors(goal, wt)
     missing_anchors = list(anchor_check.get("missing") or ())
     checked_anchors = list(anchor_check.get("checked") or ())
-    if checked_anchors and len(missing_anchors) == len(checked_anchors):
+    if (
+        fail_on_missing_anchors
+        and checked_anchors
+        and len(missing_anchors) == len(checked_anchors)
+    ):
         return structured_error(
             "ANCHOR_MISSING",
             "every path cited by the goal is missing from the lane worktree",
