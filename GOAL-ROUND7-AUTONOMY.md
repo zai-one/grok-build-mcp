@@ -41,7 +41,20 @@ that gap, in six slices.
    requires reading it first, and that is where the lane gives up. So: put new logic in its
    own module with a narrow public API; **Claude does the few-line wiring into the existing
    large files** as part of final integration.
-9. **New tests go in a NEW file per slice** (`tests/test_gates.py`, `tests/test_anchors.py`,
+9. **Expansion dispatches must be APPEND-ONLY and forbid exploration.** Measured directly:
+   "expand this file to the full matrix" burned 7 turns and added nothing (the lane kept
+   re-reading the spec and modules, reporting `tests_added: 0`), while the same work phrased
+   as *"do NOT read the spec, do NOT read any module, do NOT explore — open ONLY this file,
+   copy the pattern of the test already in it, append exactly these N tests, commit, stop"*
+   landed 3 tests in 3 turns. Name each test and state its assertion in the prompt; the lane
+   then writes instead of researching.
+10. **A test-heavy slice takes TWO dispatches, by design.** Measured on every slice so far
+   (A, B, C, G1): the first dispatch lands the module or the test scaffolding plus one real
+   test and then ends its turn; a second dispatch that says "this file is small, expand it to
+   the full matrix, one test per case" completes it. Plan for both rather than treating the
+   first result as a failure — and never let the first dispatch's single test pass for the
+   matrix, the whole point of the slice is coverage.
+10. **New tests go in a NEW file per slice** (`tests/test_gates.py`, `tests/test_anchors.py`,
    `tests/test_verdict.py`, `tests/test_jobs_durable.py`, `tests/test_driver.py`). Do not
    append to `tests/test_grok_delegate.py` — it is ~1900 lines, and appending to it means
    reading it first, which measurably makes the lane give up with nothing written. Import
