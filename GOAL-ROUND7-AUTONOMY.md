@@ -255,7 +255,19 @@ Everything above is happy-path-plus-known-edges. This slice attacks the pipeline
 reality does. **Test-only**: no production edits; a failure here is a ranked finding in
 `EVIDENCE-ROUND7.md`, and the fix goes to a follow-up slice.
 
-New file `tests/test_chaos.py`. Inject faults through the existing injection points
+**Split into four dispatchable sub-slices — one file each.** Measured: handing all four
+groups to one lane burned 11 turns and produced nothing, because covering them means reading
+`driver.py` (1294 lines), `runner.py`, `gates.py` and `jobs_store.py` first. Same rule as
+contract 8: small, self-contained deliverable per lane.
+
+| Sub-slice | File | Group |
+|---|---|---|
+| **G1** | `tests/test_chaos_executor.py` | executor misbehaviour |
+| **G2** | `tests/test_chaos_git.py` | git-layer faults |
+| **G3** | `tests/test_chaos_fs.py` | filesystem / environment faults |
+| **G4** | `tests/test_chaos_goal.py` | adversarial goal input |
+
+Inject faults through the existing injection points
 (`git_runner`, `subprocess_runner`, `thread_starter`, fake `delegate`/`run_gates`):
 
 **Executor misbehaviour** (measured classes, all must be survivable):
