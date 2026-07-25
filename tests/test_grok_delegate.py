@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 import os
 import sys
 import tempfile
@@ -610,7 +611,8 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(len(sp.calls), 1)
         _assert_argv_headless_and_safe(self, sp.calls[0])
 
-    def test_delegate_fail_closed_dirty_does_not_spawn(self) -> None:
+    def test_delegate_fail_closed_dirty_does_not_spawn_when_requested(self) -> None:
+        """Strict mode is still available and still fails closed before spawning."""
         git = MockGit(dirty=True)
         sp = MockSubprocess(ok=True)
         result = runner.delegate(
@@ -618,6 +620,7 @@ class RunnerTests(unittest.TestCase):
             lane="blocked",
             repo_root=self.repo,
             lanes_parent=self.lanes,
+            require_clean_base=True,
             git_runner=git,
             subprocess_runner=sp,
             which=lambda n: "/mock/grok",
@@ -625,6 +628,24 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(result.get("ok"))
         self.assertEqual(result.get("error"), "BASE_DIRTY")
         self.assertEqual(sp.calls, [])
+
+    def test_delegate_default_tolerates_dirty_main_tree(self) -> None:
+        """R6: a lane branches from a COMMITTED base_ref, so main-tree dirt is
+        irrelevant. The old default rejected every dispatch with BASE_DIRTY until
+        the caller stashed unrelated work."""
+        git = MockGit(dirty=True)
+        sp = MockSubprocess(ok=True)
+        result = runner.delegate(
+            goal="runs anyway",
+            lane="dirty-tolerated",
+            repo_root=self.repo,
+            lanes_parent=self.lanes,
+            git_runner=git,
+            subprocess_runner=sp,
+            which=lambda n: "/mock/grok",
+        )
+        self.assertTrue(result.get("ok"), msg=result.get("message"))
+        self.assertEqual(len(sp.calls), 1)
 
     def test_default_git_runner_rejects_push_verb(self) -> None:
         with self.assertRaises(guard.GuardError) as ctx:
@@ -1645,6 +1666,108 @@ class RoundSixPermissionRegressionTests(unittest.TestCase):
             self.assertIsNotNone(
                 self._matches(deny, command), msg=f"{command!r} must stay denied"
             )
+
+
+class RoundSixBackgroundJobTests(unittest.TestCase):
+    """R6: start/poll — a real lane cannot fit inside a synchronous MCP call."""
+
+    def setUp(self) -> None:
+        from grok_delegate import jobs as jobs_mod
+
+        self.jobs = jobs_mod
+        self.jobs.reset_jobs_for_tests()
+        self.repo = Path(tempfile.mkdtemp())
+        self.lanes = Path(tempfile.mkdtemp())
+
+    def _sync_starter(self, fn: Any) -> None:
+        """Run the job body inline so the test never races a thread."""
+        fn()
+
+    def test_start_job_records_and_completes(self) -> None:
+        record = self.jobs.start_job(
+            lambda: {"ok": True, "branch": "grok/x"},
+            lane="x",
+            tool="grok_delegate_start",
+            thread_starter=self._sync_starter,
+        )
+        job_id = record["job_id"]
+        done = self.jobs.get_job(job_id)
+        assert done is not None
+        self.assertEqual(done["state"], self.jobs.STATE_DONE)
+        self.assertEqual(done["result"]["branch"], "grok/x")
+        self.assertIsNotNone(done["finished_at"])
+
+    def test_failed_delegation_is_reported_not_lost(self) -> None:
+        record = self.jobs.start_job(
+            lambda: {"ok": False, "error": "DELEGATION_FAILED"},
+            thread_starter=self._sync_starter,
+        )
+        job = self.jobs.get_job(record["job_id"])
+        assert job is not None
+        self.assertEqual(job["state"], self.jobs.STATE_ERROR)
+        self.assertEqual(job["error"], "DELEGATION_FAILED")
+
+    def test_raising_work_becomes_an_error_job(self) -> None:
+        def boom() -> dict[str, Any]:
+            raise RuntimeError("kaboom")
+
+        record = self.jobs.start_job(boom, thread_starter=self._sync_starter)
+        job = self.jobs.get_job(record["job_id"])
+        assert job is not None
+        self.assertEqual(job["state"], self.jobs.STATE_ERROR)
+        self.assertIn("kaboom", job["error"])
+
+    def test_registry_is_bounded(self) -> None:
+        for _ in range(self.jobs.MAX_JOBS + 10):
+            self.jobs.start_job(lambda: {"ok": True}, thread_starter=self._sync_starter)
+        self.assertLessEqual(len(self.jobs.list_jobs(limit=1000)), self.jobs.MAX_JOBS)
+
+    def test_start_tool_returns_job_id_without_running_executor_inline(self) -> None:
+        sp = MockSubprocess(ok=True)
+        result = server.handle_tool_call(
+            server.TOOL_START,
+            {"goal": "do the lane", "lane": "async-lane", "max_turns": 3},
+            repo_root=self.repo,
+            allowed_roots=[self.repo],
+            git_runner=MockGit(),
+            subprocess_runner=sp,
+            which=lambda n: "/mock/grok",
+            audit_stream=io.StringIO(),
+        )
+        self.assertTrue(result.get("ok"), msg=result)
+        self.assertIn("job_id", result)
+        self.assertEqual(result.get("poll_with"), server.TOOL_POLL)
+
+        # The background thread may still be finishing; poll until it settles.
+        job_id = result["job_id"]
+        for _ in range(200):
+            job = self.jobs.get_job(job_id)
+            if job and job["state"] != self.jobs.STATE_RUNNING:
+                break
+            time.sleep(0.01)
+        job = self.jobs.get_job(job_id)
+        assert job is not None
+        self.assertNotEqual(job["state"], self.jobs.STATE_RUNNING)
+
+    def test_poll_unknown_job_fails_closed(self) -> None:
+        out = server.handle_tool_call(
+            server.TOOL_POLL, {"job_id": "job-does-not-exist"}
+        )
+        self.assertFalse(out.get("ok"))
+        self.assertEqual(out.get("error"), "JOB_UNKNOWN")
+
+    def test_poll_without_job_id_lists_jobs(self) -> None:
+        self.jobs.start_job(
+            lambda: {"ok": True}, lane="listed", thread_starter=self._sync_starter
+        )
+        out = server.handle_tool_call(server.TOOL_POLL, {})
+        self.assertTrue(out.get("ok"))
+        self.assertTrue(any(j.get("lane") == "listed" for j in out["jobs"]))
+
+    def test_start_and_poll_are_advertised(self) -> None:
+        names = {t["name"] for t in server.list_tools()}
+        self.assertIn(server.TOOL_START, names)
+        self.assertIn(server.TOOL_POLL, names)
 
 
 class RoundSixPathPolicyTests(unittest.TestCase):
