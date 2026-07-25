@@ -890,6 +890,24 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
     return _jsonrpc_error(req_id, -32601, f"method not found: {method}")
 
 
+def configure_durable_jobs(env: Mapping[str, str] | None = None) -> Path | None:
+    """Enable durable job records from GROK_DELEGATE_JOBS_DIR and rehydrate them.
+
+    R7-D shipped persistence but nothing switched it on, so a live server still kept job
+    state in memory only: a restart lost the status of every lane it had dispatched while
+    the work itself survived on the lane branch. Called at startup; returns the directory
+    in use, or None when the env var is unset (memory-only, previous behaviour).
+    """
+    source = env if env is not None else os.environ
+    raw = (source.get("GROK_DELEGATE_JOBS_DIR") or "").strip()
+    if not raw:
+        return None
+    target = Path(raw)
+    jobs.configure_jobs_dir(target)
+    jobs.rehydrate_jobs(target)
+    return target
+
+
 def serve_stdio(
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
@@ -897,6 +915,7 @@ def serve_stdio(
     """Blocking stdio JSON-RPC loop (line-delimited or Content-Length framed)."""
     inn = stdin or sys.stdin
     out = stdout or sys.stdout
+    configure_durable_jobs()
 
     while True:
         chunk = inn.readline()

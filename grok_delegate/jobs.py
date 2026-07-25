@@ -29,6 +29,10 @@ except ImportError:  # flat import when package dir is on sys.path
 STATE_RUNNING = "running"
 STATE_DONE = "done"
 STATE_ERROR = "error"
+# R7-D: a rehydrated record whose owning process is gone comes back in this state
+# (jobs_store downgrades it with a STALE_RUNNING reason). It must exist here too, or
+# callers reading jobs.STATE_* cannot recognise a state this module hands them.
+STATE_UNKNOWN = "unknown"
 
 # Bounded registry: oldest finished jobs are evicted first, so a long-lived server
 # process cannot grow without limit.
@@ -210,9 +214,12 @@ __all__ = [
     "STATE_DONE",
     "STATE_ERROR",
     "STATE_RUNNING",
+    "STATE_UNKNOWN",
+    "configure_jobs_dir",
     "get_job",
     "list_jobs",
     "new_job_id",
+    "rehydrate_jobs",
     "reset_jobs_for_tests",
     "snapshot",
     "start_job",

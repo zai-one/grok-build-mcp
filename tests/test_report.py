@@ -152,3 +152,97 @@ class TestBuildRoundReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WiringAuditTests(unittest.TestCase):
+    """R7 audit: the round-7 modules must be WIRED, not merely present.
+
+    An audit after the round found three integration gaps that all tests missed because
+    every suite exercised its module in isolation: report.py was imported by nobody, the
+    live server never switched durable jobs on, and jobs.py did not export (or even define)
+    the state its own rehydrate path can return.
+    """
+
+    def test_driver_imports_and_writes_the_round_report(self) -> None:
+        from grok_delegate import driver
+
+        self.assertTrue(hasattr(driver, "build_round_report"))
+        self.assertTrue(hasattr(driver, "render_round_report_markdown"))
+        self.assertTrue(callable(getattr(driver, "_write_round_report", None)))
+
+    def test_round_report_file_is_written_atomically(self) -> None:
+        import tempfile
+        from pathlib import Path as _Path
+
+        from grok_delegate import driver
+
+        with tempfile.TemporaryDirectory() as td:
+            vdir = _Path(td) / "verdicts"
+            queue = {
+                "lanes": [
+                    {"id": "L1", "lane": "good", "status": "ready_for_merge", "attempts": 1}
+                ]
+            }
+            path = driver._write_round_report(queue=queue, verdicts_dir=vdir, repo_root=td)
+            self.assertIsNotNone(path)
+            target = _Path(str(path))
+            self.assertTrue(target.exists())
+            body = target.read_text(encoding="utf-8")
+            self.assertIn("| id | lane | status |", body)
+            self.assertIn("ready_for_merge", body)
+            # No temp file left behind (atomic replace, not a partial write).
+            self.assertEqual(list(vdir.glob("*.tmp")), [])
+
+    def test_report_failure_never_breaks_the_round(self) -> None:
+        from grok_delegate import driver
+
+        # A verdicts path that cannot be a directory must degrade to None, not raise.
+        import tempfile
+        from pathlib import Path as _Path
+
+        with tempfile.TemporaryDirectory() as td:
+            blocker = _Path(td) / "not-a-dir"
+            blocker.write_text("x", encoding="utf-8")
+            path = driver._write_round_report(
+                queue={"lanes": []}, verdicts_dir=blocker, repo_root=td
+            )
+            self.assertIsNone(path)
+
+    def test_server_enables_durable_jobs_from_env(self) -> None:
+        import tempfile
+        from pathlib import Path as _Path
+
+        from grok_delegate import jobs, server
+
+        self.assertTrue(callable(getattr(server, "configure_durable_jobs", None)))
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                target = _Path(td) / "jobs"
+                used = server.configure_durable_jobs({"GROK_DELEGATE_JOBS_DIR": str(target)})
+                self.assertEqual(_Path(str(used)), target)
+
+                # Persistence is really on: a finished job lands on disk.
+                jobs.reset_jobs_for_tests()
+                jobs.start_job(
+                    lambda: {"ok": True}, lane="wired", thread_starter=lambda fn: fn()
+                )
+                self.assertTrue(list(target.glob("*.json")))
+        finally:
+            jobs.configure_jobs_dir(None)
+            jobs.reset_jobs_for_tests()
+
+    def test_server_leaves_jobs_in_memory_when_env_is_unset(self) -> None:
+        from grok_delegate import server
+
+        self.assertIsNone(server.configure_durable_jobs({}))
+
+    def test_jobs_exports_its_public_surface(self) -> None:
+        from grok_delegate import jobs
+
+        for name in ("configure_jobs_dir", "rehydrate_jobs", "STATE_UNKNOWN"):
+            self.assertIn(name, jobs.__all__, f"jobs.{name} must be exported")
+            self.assertTrue(hasattr(jobs, name))
+        # The rehydrate path can hand back this state, so the constants must agree.
+        from grok_delegate import jobs_store
+
+        self.assertEqual(jobs.STATE_UNKNOWN, jobs_store.STATE_UNKNOWN)

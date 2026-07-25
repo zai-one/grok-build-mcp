@@ -27,10 +27,18 @@ try:
     from . import audit
     from .gates import run_gates as default_run_gates
     from .jobs_store import is_process_alive
+    from .report import (
+        build_round_report,
+        render_round_report_markdown,
+    )
 except ImportError:  # flat import when package dir is on sys.path
     import audit  # type: ignore
     from gates import run_gates as default_run_gates  # type: ignore
     from jobs_store import is_process_alive  # type: ignore
+    from report import (  # type: ignore
+        build_round_report,
+        render_round_report_markdown,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -1152,6 +1160,14 @@ def run_driver(
                 f"gates_failed={summary['gates_failed']} "
                 f"blocked={summary['blocked']}"
             )
+        # R7-H: an unattended round must be readable afterwards. The report module was
+        # written and tested but nothing produced one, so a finished round left only
+        # per-lane verdict files and audit lines to reconstruct by hand.
+        summary["report_path"] = _write_round_report(
+            queue=queue,
+            verdicts_dir=vdir,
+            repo_root=repo_root,
+        )
         return summary
 
     except InterruptRequested:
@@ -1242,6 +1258,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     return p
 
+
+
+def _write_round_report(
+    *,
+    queue: Mapping[str, Any],
+    verdicts_dir: Path,
+    repo_root: Path | str,
+) -> str | None:
+    """Write round-report.md next to the lane verdicts; never fail the round for it.
+
+    Redaction and determinism live in report.py: no goal text, no absolute host paths,
+    bounded gate tails, identical bytes for identical input.
+    """
+    try:
+        report = build_round_report(queue, {}, {}, repo_root=repo_root)
+        text = render_round_report_markdown(report)
+        verdicts_dir.mkdir(parents=True, exist_ok=True)
+        target = verdicts_dir / "round-report.md"
+        tmp = target.with_suffix(".md.tmp")
+        tmp.write_text(text + "\n", encoding="utf-8")
+        os.replace(str(tmp), str(target))
+        return str(target)
+    except Exception as exc:  # noqa: BLE001 — reporting must never break a round
+        logger.warning("round report not written: %s: %s", type(exc).__name__, exc)
+        return None
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for ``python -m grok_delegate.driver``."""
