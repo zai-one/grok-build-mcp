@@ -28,6 +28,7 @@ try:
         structured_error,
         validate_grok_bin,
     )
+    from .anchors import validate_goal_anchors  # type: ignore[no-redef]
 except ImportError:  # flat import when package dir is on sys.path
     from guard import (  # type: ignore
         ALWAYS_APPROVE_FLAG,
@@ -43,6 +44,7 @@ except ImportError:  # flat import when package dir is on sys.path
         structured_error,
         validate_grok_bin,
     )
+    from anchors import validate_goal_anchors  # type: ignore
 
 # Default wall-clock timeout for a single delegation (seconds).
 DEFAULT_TIMEOUT_SECONDS = 900
@@ -740,6 +742,24 @@ def delegate(
     branch = prep["branch"]
     normalized = prep["lane"]
 
+    # R7-B: pre-validate the paths the goal cites. A goal whose anchors are ALL
+    # fictional cannot succeed — the executor searches, fails, and ends its turn
+    # with an empty worktree (measured: one fabricated anchor burned three
+    # dispatches). Fail fast without spawning. A partial miss still spawns, but
+    # the miss is reported so the driver and the integrator can see it.
+    anchor_check = validate_goal_anchors(goal, wt)
+    missing_anchors = list(anchor_check.get("missing") or ())
+    checked_anchors = list(anchor_check.get("checked") or ())
+    if checked_anchors and len(missing_anchors) == len(checked_anchors):
+        return structured_error(
+            "ANCHOR_MISSING",
+            "every path cited by the goal is missing from the lane worktree",
+            lane=normalized,
+            branch=branch,
+            worktree_path=wt,
+            missing_anchors=missing_anchors[:32],
+        )
+
     run_result = run_delegation(
         goal=goal,
         worktree_path=wt,
@@ -780,6 +800,7 @@ def delegate(
             "changed_files": diff.get("changed_files") or [],
             "diffstat": diff.get("diffstat") or "",
             "commits": diff.get("commits") or [],
+            "missing_anchors": missing_anchors,
             "error": run_result.get("error") or "DELEGATION_FAILED",
             "message": run_result.get("message") or "headless executor failed",
         }
@@ -796,6 +817,7 @@ def delegate(
         "changed_files": diff.get("changed_files") or [],
         "diffstat": diff.get("diffstat") or "",
         "commits": diff.get("commits") or [],
+        "missing_anchors": missing_anchors,
     }
 
 
