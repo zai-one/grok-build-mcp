@@ -44,7 +44,8 @@ py -3 -m pytest tests -q                  # unit (mocked)
 
 | Tool | Назначение |
 |---|---|
-| `grok_delegate` / `grok_delegate_plan` | делегирование / plan-only |
+| **`grok_delegate_start` + `grok_delegate_poll`** | **делегирование в фоне (используй для реальных лейнов)**: `start` возвращает `job_id` сразу, `poll` отдаёт `state` + результат (`branch`, `changed_files`, `commits`, `diffstat`) |
+| `grok_delegate` / `grok_delegate_plan` | синхронное делегирование / plan-only |
 | `grok_delegate_status` | health JSON (бинарь, auth presence, git, roots, sandbox) |
 | `grok_delegate_doctor` | `doctor --json` only |
 | `grok_delegate_models` | `models` |
@@ -52,6 +53,13 @@ py -3 -m pytest tests -q                  # unit (mocked)
 
 Мультипроектность: `GROK_DELEGATE_ALLOWED_ROOTS` (`;`-список) или один `GROK_DELEGATE_REPO_ROOT`.
 Пустой allowlist → fail-closed.
+
+> **Почему `start`/`poll`, а не `grok_delegate`.** Реальный лейн идёт минутами, а MCP-клиент
+> обрывает синхронный вызов за секунды: процесс убивается на полпути, worktree остаётся пустым, и
+> это неотличимо от «исполнитель ничего не сделал». `start` кладёт ту же guarded-делегацию в фон и
+> сразу отдаёт `job_id`; права, изоляция worktree и запрет push/merge не меняются. Реестр задач
+> живёт в процессе сервера (перезапуск сервера теряет незабранные результаты — работа при этом
+> остаётся в ветке `grok/<lane>`).
 
 **Подключён глобально** (2026-07-24) в `claude_desktop_config.json` как `grok-delegate`:
 

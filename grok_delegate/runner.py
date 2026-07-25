@@ -697,7 +697,11 @@ def delegate(
     grok_bin: str = DEFAULT_GROK_BIN,
     hard_cap: int = HARD_CAP_MAX_TURNS,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-    require_clean_base: bool = True,
+    # R6: default flipped to False. A lane worktree is created from a COMMITTED
+    # base_ref, so uncommitted work in the main tree cannot affect it — yet the old
+    # default rejected every dispatch with BASE_DIRTY until the caller stashed
+    # unrelated changes. Callers that want the stricter behavior still pass True.
+    require_clean_base: bool = False,
     git_runner: GitRunner | None = None,
     subprocess_runner: SubprocessRunner | None = None,
     which: WhichFn | None = None,

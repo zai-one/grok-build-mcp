@@ -53,6 +53,7 @@ try:
         validate_session_id,
     )
     from .runner import delegate, is_path_inside  # type: ignore[no-redef]
+    from . import jobs  # type: ignore[no-redef]
     from .status import (  # type: ignore[no-redef]
         build_status_report,
         run_doctor_json,
@@ -82,6 +83,7 @@ except ImportError:  # flat import when package dir is on sys.path
         validate_session_id,
     )
     from runner import delegate, is_path_inside  # noqa: E402
+    import jobs  # noqa: E402
     from status import (  # noqa: E402
         build_status_report,
         run_doctor_json,
@@ -95,14 +97,17 @@ PROTOCOL_VERSION = "2024-11-05"
 
 TOOL_DELEGATE = "grok_delegate"
 TOOL_PLAN = "grok_delegate_plan"
+TOOL_START = "grok_delegate_start"
+TOOL_POLL = "grok_delegate_poll"
 TOOL_STATUS = "grok_delegate_status"
 TOOL_DOCTOR = "grok_delegate_doctor"
 TOOL_MODELS = "grok_delegate_models"
 TOOL_INSPECT = "grok_delegate_inspect"
 
 STATUS_TOOLS = frozenset({TOOL_STATUS, TOOL_DOCTOR, TOOL_MODELS, TOOL_INSPECT})
-DELEGATE_TOOLS = frozenset({TOOL_DELEGATE, TOOL_PLAN})
-ALL_TOOLS = DELEGATE_TOOLS | STATUS_TOOLS
+# R6: TOOL_START shares the delegate validation path; TOOL_POLL is read-only.
+DELEGATE_TOOLS = frozenset({TOOL_DELEGATE, TOOL_PLAN, TOOL_START})
+ALL_TOOLS = DELEGATE_TOOLS | STATUS_TOOLS | {TOOL_POLL}
 
 _TOOL_DESCRIPTIONS = {
     TOOL_DELEGATE: (
@@ -113,6 +118,17 @@ _TOOL_DESCRIPTIONS = {
     TOOL_PLAN: (
         "Read-only plan variant of grok_delegate (plan_only=true). Does not allow "
         "write/edit/shell mutation in the permission profile."
+    ),
+    TOOL_START: (
+        "Start grok_delegate in the BACKGROUND and return a job_id immediately. Use "
+        "this instead of grok_delegate for real lanes: a lane runs for minutes and a "
+        "synchronous call is killed by the client timeout, leaving an empty worktree. "
+        "Poll with grok_delegate_poll. Same guarded profile, no push, no merge."
+    ),
+    TOOL_POLL: (
+        "Poll a background delegation started with grok_delegate_start. With job_id: "
+        "that job's state and result (branch, changed_files, commits, diffstat). "
+        "Without job_id: newest job summaries. Read-only."
     ),
     TOOL_STATUS: (
         "Structured health status: grok binary/version, auth presence (without "
@@ -224,6 +240,22 @@ _INPUT_SCHEMA: dict[str, Any] = {
 _STATUS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {},
+    "additionalProperties": False,
+}
+
+# R6: poll schema for background delegations.
+_POLL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "job_id": {
+            "type": "string",
+            "description": "Job id from grok_delegate_start; omit to list recent jobs",
+        },
+        "limit": {
+            "type": "integer",
+            "description": "Max job summaries when listing (default 20)",
+        },
+    },
     "additionalProperties": False,
 }
 
@@ -545,6 +577,21 @@ def handle_tool_call(
             git_runner=git_runner,
         )
 
+    if name == TOOL_POLL:
+        # R6: read-only progress surface for background delegations.
+        job_id = str(args.get("job_id") or "").strip()
+        if job_id:
+            record = jobs.get_job(job_id)
+            if record is None:
+                return structured_error("JOB_UNKNOWN", f"unknown job_id: {job_id}")
+            return {"ok": True, **record}
+        limit = args.get("limit")
+        try:
+            limit_v = int(limit) if limit is not None else 20
+        except (TypeError, ValueError):
+            limit_v = 20
+        return {"ok": True, "jobs": jobs.list_jobs(limit=limit_v)}
+
     plan_only = bool(args.get("plan_only", False)) or name == TOOL_PLAN
 
     if name not in DELEGATE_TOOLS:
@@ -604,8 +651,8 @@ def handle_tool_call(
     base_ref = str(args.get("base_ref") or "origin/dev")
     max_turns = args.get("max_turns")
 
-    try:
-        result = delegate(
+    def _run_delegation() -> dict[str, Any]:
+        return delegate(
             goal=str(goal),
             lane=str(lane),
             repo_root=root,
@@ -619,6 +666,45 @@ def handle_tool_call(
             which=which,
             **extra,
         )
+
+    if name == TOOL_START:
+        # R6: detached lane — validation above already ran, so a bad request still
+        # fails fast; only the long executor spawn moves off the request path.
+        job = jobs.start_job(_run_delegation, lane=str(lane), tool=name)
+        started = {
+            "ok": True,
+            "job_id": job.get("job_id"),
+            "lane": str(lane),
+            "state": job.get("state"),
+            "poll_with": TOOL_POLL,
+            "message": (
+                "Delegation started in the background. Poll with "
+                f"{TOOL_POLL} using this job_id."
+            ),
+        }
+        audit_emit(
+            build_delegation_audit(
+                principal=principal,
+                tool=name,
+                lane=str(lane),
+                base_ref=base_ref,
+                cwd=None,
+                turns_used=None,
+                outcome="started",
+                goal=str(goal),
+                plan_only=plan_only,
+                error=None,
+                changed_file_count=0,
+                branch=None,
+                worktree_path=None,
+                status="running",
+            ),
+            stream=audit_stream,
+        )
+        return started
+
+    try:
+        result = _run_delegation()
     except GuardError as exc:
         result = structured_error(exc.code, exc.message)
     except Exception as exc:  # noqa: BLE001 — surface as structured tool error
@@ -705,6 +791,16 @@ def list_tools() -> list[dict[str, Any]]:
             "name": TOOL_PLAN,
             "description": _TOOL_DESCRIPTIONS[TOOL_PLAN],
             "inputSchema": plan_schema,
+        },
+        {
+            "name": TOOL_START,
+            "description": _TOOL_DESCRIPTIONS[TOOL_START],
+            "inputSchema": _INPUT_SCHEMA,
+        },
+        {
+            "name": TOOL_POLL,
+            "description": _TOOL_DESCRIPTIONS[TOOL_POLL],
+            "inputSchema": _POLL_SCHEMA,
         },
         {
             "name": TOOL_STATUS,
