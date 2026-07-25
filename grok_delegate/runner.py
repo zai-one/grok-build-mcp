@@ -29,6 +29,11 @@ try:
         validate_grok_bin,
     )
     from .anchors import validate_goal_anchors  # type: ignore[no-redef]
+    from .verdict import (  # type: ignore[no-redef]
+        default_lane_json_schema,
+        parse_lane_verdict,
+        reconcile_verdict,
+    )
 except ImportError:  # flat import when package dir is on sys.path
     from guard import (  # type: ignore
         ALWAYS_APPROVE_FLAG,
@@ -45,6 +50,11 @@ except ImportError:  # flat import when package dir is on sys.path
         validate_grok_bin,
     )
     from anchors import validate_goal_anchors  # type: ignore
+    from verdict import (  # type: ignore
+        default_lane_json_schema,
+        parse_lane_verdict,
+        reconcile_verdict,
+    )
 
 # Default wall-clock timeout for a single delegation (seconds).
 DEFAULT_TIMEOUT_SECONDS = 900
@@ -675,6 +685,9 @@ def run_delegation(
         "stderr_truncated": stderr[:1000] if status != "ok" else "",
         "plan_only": plan_only,
         "cwd": wt,
+        # R7-C: the parsed headless JSON, so delegate() can extract a lane verdict
+        # without re-parsing stdout. Bounded upstream by output_char_cap.
+        "parsed_payload": parsed,
         # Never echo full argv goal content in audit path; keep length only here.
         "goal_chars": len(goal or ""),
     }
@@ -708,6 +721,9 @@ def delegate(
     # default because creation goals legitimately cite files that do not exist yet;
     # reference-only goals (fix/refactor an existing file) can switch it on.
     fail_on_missing_anchors: bool = False,
+    # R7-C: request a machine-readable lane verdict by default; opt out for
+    # callers that supply their own json_schema or want raw prose only.
+    lane_verdict: bool = True,
     git_runner: GitRunner | None = None,
     subprocess_runner: SubprocessRunner | None = None,
     which: WhichFn | None = None,
@@ -772,6 +788,10 @@ def delegate(
             missing_anchors=missing_anchors[:32],
         )
 
+    effective_schema = json_schema
+    if effective_schema is None and lane_verdict:
+        effective_schema = default_lane_json_schema()
+
     run_result = run_delegation(
         goal=goal,
         worktree_path=wt,
@@ -787,7 +807,7 @@ def delegate(
         sandbox_enabled=sandbox_enabled,
         reasoning_effort=reasoning_effort,
         rules=rules,
-        json_schema=json_schema,
+        json_schema=effective_schema,
         no_subagents=no_subagents,
         disable_web_search=disable_web_search,
         resume=resume,
@@ -799,6 +819,20 @@ def delegate(
     # Always collect diffstat when worktree exists (even on executor error).
     # R6: base_ref-aware so committed lane work is reported, not just dirty files.
     diff = collect_diff(wt, git_runner=git_runner, base_ref=base_ref)
+
+    # R7-C: trust git over prose. A verdict claiming files or a commit that the
+    # diff cannot confirm is VERDICT_UNSUPPORTED, so a lane cannot self-certify.
+    verdict_input = run_result.get("parsed_payload")
+    # _parse_grok_json falls back to {"raw_preview": ...} / {"value": ...} when the
+    # executor emitted no JSON at all. Passing that through would report a malformed
+    # verdict (VERDICT_INVALID) for a lane that simply never produced one; absence is
+    # VERDICT_MISSING, and the distinction is what the driver acts on.
+    if isinstance(verdict_input, dict) and set(verdict_input) <= {"raw_preview", "value"}:
+        verdict_input = None
+    parsed_verdict = parse_lane_verdict(verdict_input)
+    reconciled = reconcile_verdict(parsed_verdict, diff)
+    verdict_payload = reconciled.get("verdict")
+    verdict_status = reconciled.get("status")
 
     if not run_result.get("ok"):
         out = {
@@ -813,6 +847,8 @@ def delegate(
             "diffstat": diff.get("diffstat") or "",
             "commits": diff.get("commits") or [],
             "missing_anchors": missing_anchors,
+            "verdict": verdict_payload,
+            "verdict_status": verdict_status,
             "error": run_result.get("error") or "DELEGATION_FAILED",
             "message": run_result.get("message") or "headless executor failed",
         }
@@ -830,6 +866,8 @@ def delegate(
         "diffstat": diff.get("diffstat") or "",
         "commits": diff.get("commits") or [],
         "missing_anchors": missing_anchors,
+        "verdict": verdict_payload,
+        "verdict_status": verdict_status,
     }
 
 
