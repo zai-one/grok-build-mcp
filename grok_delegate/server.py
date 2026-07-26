@@ -205,6 +205,17 @@ _INPUT_SCHEMA: dict[str, Any] = {
         "json_schema": {
             "description": "Optional JSON Schema object/string for structured output",
         },
+        "lane_verdict": {
+            "type": "boolean",
+            "default": True,
+            "description": (
+                "Attach the lane verdict schema (default true). The run ends when the "
+                "executor emits that object, so on a goal it must read the codebase to "
+                "start, it emits one describing intent and the lane closes empty. Set "
+                "false for exploration-heavy goals: the executor then works to natural "
+                "completion and reports prose in summary instead of a parsed verdict."
+            ),
+        },
         "no_subagents": {
             "type": "boolean",
             "description": "If true, pass --no-subagents",
@@ -495,6 +506,15 @@ def _delegate_kwargs_from_args(args: Mapping[str, Any]) -> dict[str, Any]:
         "reasoning_effort": effort,
         "rules": rules,
         "json_schema": schema,
+        # The lane verdict schema is what ends a run: with --json-schema in argv
+        # the executor's job is to produce that object, and on a goal that needs
+        # reading first it produces one describing intent ("inspecting package
+        # conventions") long before any work. Measured 2026-07-26: five lanes in
+        # a row came back empty for exactly that reason, while a goal doable
+        # without exploration finished in two turns. Callers with an
+        # exploration-heavy goal can turn the schema off and read the prose
+        # summary instead.
+        "lane_verdict": bool(args.get("lane_verdict", True)),
         "no_subagents": bool(args.get("no_subagents", False)),
         "disable_web_search": bool(args.get("disable_web_search", False)),
         "resume": resume,
