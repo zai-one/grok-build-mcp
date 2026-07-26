@@ -7,6 +7,7 @@ or spawn a real grok binary. Zero push/merge code paths (B4).
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -58,6 +59,27 @@ except ImportError:  # flat import when package dir is on sys.path
 
 # Default wall-clock timeout for a single delegation (seconds).
 DEFAULT_TIMEOUT_SECONDS = 900
+
+# Per-git-call budget while preparing a lane. Sixty seconds is plenty for the
+# command itself, but the background path can be starved by the host: measured
+# 2026-07-26, a `git --version` inside the MCP server took as long as the
+# client's poll interval, and `git worktree add` hit this ceiling three times
+# over. Configurable so a slow host is a slow lane, not a failed one.
+DEFAULT_GIT_TIMEOUT_SECONDS = 60.0
+
+
+def git_timeout_seconds() -> float:
+    """Per-git-call timeout, overridable via GROK_DELEGATE_GIT_TIMEOUT_SECONDS."""
+    raw = os.environ.get("GROK_DELEGATE_GIT_TIMEOUT_SECONDS")
+    if not raw:
+        return DEFAULT_GIT_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_GIT_TIMEOUT_SECONDS
+    if value <= 0:
+        return DEFAULT_GIT_TIMEOUT_SECONDS
+    return min(value, 3600.0)
 
 # Cap on captured stdout/stderr size (chars) before truncation in result.
 DEFAULT_OUTPUT_CHAR_CAP = 200_000
@@ -753,6 +775,7 @@ def delegate(
         base_ref=base_ref,
         lanes_parent=parent,
         git_runner=git_runner,
+        timeout=git_timeout_seconds(),
         require_clean_base=require_clean_base,
     )
     if not prep.get("ok"):

@@ -1871,5 +1871,85 @@ class RoundSixDiffReportingTests(unittest.TestCase):
         )
 
 
+class RoundSevenEmptyLaneAtMcpBoundaryTests(unittest.TestCase):
+    """An MCP caller must not read an empty execute lane as done work.
+
+    runner.delegate reports ok at the run layer on purpose and leaves emptiness
+    to driver.is_empty_result; the server is where a client that never sees the
+    driver gets told. Measured 2026-07-26: a lane spent two turns reading files
+    and came back ok:true / state:done.
+    """
+
+    def _lane(self, **over: Any) -> dict[str, Any]:
+        base = {
+            "ok": True,
+            "lane": "grok/x",
+            "status": "ok",
+            "changed_files": [],
+            "commits": [],
+            "summary": "looked around, wrote nothing",
+        }
+        base.update(over)
+        return base
+
+    def test_empty_execute_lane_is_not_ok(self) -> None:
+        marked = server.mark_empty_execute_lane(self._lane(), plan_only=False)
+        self.assertFalse(marked["ok"])
+        self.assertEqual(marked["status"], "no_changes")
+        self.assertEqual(marked["error"], "EXECUTE_NO_CHANGES")
+        self.assertTrue(marked["is_empty_result"])
+        # The executor's own account survives - that is where the reason lives.
+        self.assertEqual(marked["summary"], "looked around, wrote nothing")
+
+    def test_plan_lane_is_exempt(self) -> None:
+        marked = server.mark_empty_execute_lane(self._lane(), plan_only=True)
+        self.assertTrue(marked["ok"])
+        self.assertNotIn("error", marked)
+
+    def test_lane_with_changed_files_untouched(self) -> None:
+        lane = self._lane(changed_files=["a.py"])
+        self.assertEqual(server.mark_empty_execute_lane(lane, plan_only=False), lane)
+
+    def test_lane_with_commits_only_untouched(self) -> None:
+        lane = self._lane(commits=["abc123 msg"])
+        self.assertEqual(server.mark_empty_execute_lane(lane, plan_only=False), lane)
+
+    def test_already_failed_lane_keeps_its_own_error(self) -> None:
+        lane = self._lane(ok=False, error="DELEGATION_FAILED", status="error")
+        marked = server.mark_empty_execute_lane(lane, plan_only=False)
+        self.assertEqual(marked["error"], "DELEGATION_FAILED")
+
+    def test_input_is_not_mutated(self) -> None:
+        lane = self._lane()
+        server.mark_empty_execute_lane(lane, plan_only=False)
+        self.assertTrue(lane["ok"], msg="caller's dict must survive untouched")
+
+
+class RoundSevenGitTimeoutTests(unittest.TestCase):
+    """Lane prep had a hardcoded 60s per git call and no way to raise it."""
+
+    def test_default_when_unset(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GROK_DELEGATE_GIT_TIMEOUT_SECONDS", None)
+            self.assertEqual(runner.git_timeout_seconds(), runner.DEFAULT_GIT_TIMEOUT_SECONDS)
+
+    def test_env_override(self) -> None:
+        with mock.patch.dict(os.environ, {"GROK_DELEGATE_GIT_TIMEOUT_SECONDS": "180"}):
+            self.assertEqual(runner.git_timeout_seconds(), 180.0)
+
+    def test_garbage_and_nonpositive_fall_back(self) -> None:
+        for raw in ("", "abc", "0", "-5"):
+            with mock.patch.dict(os.environ, {"GROK_DELEGATE_GIT_TIMEOUT_SECONDS": raw}):
+                self.assertEqual(
+                    runner.git_timeout_seconds(),
+                    runner.DEFAULT_GIT_TIMEOUT_SECONDS,
+                    msg=raw,
+                )
+
+    def test_capped(self) -> None:
+        with mock.patch.dict(os.environ, {"GROK_DELEGATE_GIT_TIMEOUT_SECONDS": "99999"}):
+            self.assertEqual(runner.git_timeout_seconds(), 3600.0)
+
+
 if __name__ == "__main__":
     unittest.main()
