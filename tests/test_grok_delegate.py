@@ -1950,6 +1950,54 @@ class RoundSevenGitTimeoutTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"GROK_DELEGATE_GIT_TIMEOUT_SECONDS": "99999"}):
             self.assertEqual(runner.git_timeout_seconds(), 3600.0)
 
+class RoundEightLaneVerdictToggleTests(unittest.TestCase):
+    """The lane verdict schema is what ends a run; a caller must be able to drop it.
+
+    With --json-schema in argv the executor's deliverable IS that object, so on a
+    goal it has to read the codebase to start, it emits one describing intent and
+    the lane closes with nothing done. Measured 2026-07-26: five lanes in a row
+    empty for that reason; the same goal with lane_verdict off produced a real
+    two-file diff in four turns.
+    """
+
+    def test_default_is_on(self) -> None:
+        kwargs = server._delegate_kwargs_from_args({})
+        self.assertTrue(kwargs["lane_verdict"])
+
+    def test_can_be_turned_off(self) -> None:
+        kwargs = server._delegate_kwargs_from_args({"lane_verdict": False})
+        self.assertFalse(kwargs["lane_verdict"])
+
+    def test_exposed_in_the_tool_schema(self) -> None:
+        for tool in server.list_tools():
+            if tool["name"] in (server.TOOL_DELEGATE, server.TOOL_START):
+                props = tool["inputSchema"]["properties"]
+                self.assertIn("lane_verdict", props, tool["name"])
+                self.assertEqual(props["lane_verdict"]["type"], "boolean")
+
+    def test_schema_absent_from_argv_when_off(self) -> None:
+        """The whole point: no --json-schema reaches the executor."""
+        argv = guard.build_grok_argv(
+            "do the work",
+            "C:/wt",
+            guard.build_permission_profile(),
+            10,
+            grok_bin="grok",
+            json_schema=None,
+        )
+        self.assertNotIn("--json-schema", argv)
+
+    def test_schema_present_in_argv_when_supplied(self) -> None:
+        argv = guard.build_grok_argv(
+            "do the work",
+            "C:/wt",
+            guard.build_permission_profile(),
+            10,
+            grok_bin="grok",
+            json_schema='{"type":"object"}',
+        )
+        self.assertIn("--json-schema", argv)
+
 
 if __name__ == "__main__":
     unittest.main()
