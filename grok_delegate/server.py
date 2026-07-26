@@ -53,6 +53,7 @@ try:
         validate_session_id,
     )
     from .runner import delegate, is_path_inside  # type: ignore[no-redef]
+    from .driver import is_empty_result  # type: ignore[no-redef]
     from . import jobs  # type: ignore[no-redef]
     from .status import (  # type: ignore[no-redef]
         build_status_report,
@@ -83,6 +84,7 @@ except ImportError:  # flat import when package dir is on sys.path
         validate_session_id,
     )
     from runner import delegate, is_path_inside  # noqa: E402
+    from driver import is_empty_result  # noqa: E402
     import jobs  # noqa: E402
     from status import (  # noqa: E402
         build_status_report,
@@ -270,6 +272,41 @@ _INSPECT_SCHEMA: dict[str, Any] = {
     "required": ["repo_root"],
     "additionalProperties": False,
 }
+
+
+def mark_empty_execute_lane(
+    result: dict[str, Any],
+    *,
+    plan_only: bool,
+) -> dict[str, Any]:
+    """Make an empty execute lane unmistakable to an MCP caller.
+
+    ``runner.delegate`` deliberately reports ``ok`` at the run layer and leaves
+    emptiness to ``driver.is_empty_result`` — see the exit-0 chaos test. An MCP
+    client is not the driver: it sees only this dict, and ``ok: true`` beside
+    ``changed_files: []`` reads as success. Measured 2026-07-26: a lane that
+    spent its turns reading files came back ``ok: true`` / ``state: done`` and
+    was reported as done work.
+
+    Structural signal only; the executor's prose is never pattern-matched.
+    ``plan_only`` lanes are exempt — producing nothing is their job.
+    """
+    if plan_only or not isinstance(result, dict):
+        return result
+    if not result.get("ok") or not is_empty_result(result):
+        return result
+    marked = dict(result)
+    marked["ok"] = False
+    marked["status"] = "no_changes"
+    marked["is_empty_result"] = True
+    marked["error"] = "EXECUTE_NO_CHANGES"
+    marked["message"] = (
+        "execute lane finished without changing any file and without committing; "
+        "read the summary for the executor's own account (a refusal or an exhausted "
+        "turn budget reports itself there). Use the plan tool for work that is not "
+        "supposed to write."
+    )
+    return marked
 
 
 def load_allowed_roots(
@@ -651,20 +688,24 @@ def handle_tool_call(
     base_ref = str(args.get("base_ref") or "origin/dev")
     max_turns = args.get("max_turns")
 
+
     def _run_delegation() -> dict[str, Any]:
-        return delegate(
-            goal=str(goal),
-            lane=str(lane),
-            repo_root=root,
-            base_ref=base_ref,
-            max_turns=int(max_turns) if max_turns is not None else None,
+        return mark_empty_execute_lane(
+            delegate(
+                goal=str(goal),
+                lane=str(lane),
+                repo_root=root,
+                base_ref=base_ref,
+                max_turns=int(max_turns) if max_turns is not None else None,
+                plan_only=plan_only,
+                lanes_parent=lanes_parent,
+                grok_bin=str(grok_bin),
+                git_runner=git_runner,
+                subprocess_runner=subprocess_runner,
+                which=which,
+                **extra,
+            ),
             plan_only=plan_only,
-            lanes_parent=lanes_parent,
-            grok_bin=str(grok_bin),
-            git_runner=git_runner,
-            subprocess_runner=subprocess_runner,
-            which=which,
-            **extra,
         )
 
     if name == TOOL_START:
