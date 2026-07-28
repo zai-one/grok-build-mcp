@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -67,22 +68,122 @@ DEFAULT_TIMEOUT_SECONDS = 900
 # over. Configurable so a slow host is a slow lane, not a failed one.
 DEFAULT_GIT_TIMEOUT_SECONDS = 60.0
 
+# One budget for every git call was wrong in both directions. A probe
+# (`--version`, `rev-parse`, `status`) does milliseconds of work and only ever
+# needs slack for a starved background thread; a checkout lays out the whole
+# tree and legitimately runs for minutes on a large repo. Sharing the number
+# meant the checkout ceiling was set by what a probe needs, and the reported
+# failure was WORKTREE_CREATE_FAILED on a checkout that in fact succeeded
+# (measured 2026-07-27: full 34-entry worktree on disk, lock released, wrapper
+# already gone). Separate budgets, separate env knobs.
+DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS = 600.0
 
-def git_timeout_seconds() -> float:
-    """Per-git-call timeout, overridable via GROK_DELEGATE_GIT_TIMEOUT_SECONDS."""
-    raw = os.environ.get("GROK_DELEGATE_GIT_TIMEOUT_SECONDS")
+# Upper bound for either knob — a typo must not park a lane for a day.
+_GIT_TIMEOUT_CAP_SECONDS = 3600.0
+
+
+def _env_timeout(name: str, default: float) -> float:
+    """Read a positive float from env *name*; fall back to *default* on junk."""
+    raw = os.environ.get(name)
     if not raw:
-        return DEFAULT_GIT_TIMEOUT_SECONDS
+        return default
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        return DEFAULT_GIT_TIMEOUT_SECONDS
+        return default
     if value <= 0:
-        return DEFAULT_GIT_TIMEOUT_SECONDS
-    return min(value, 3600.0)
+        return default
+    return min(value, _GIT_TIMEOUT_CAP_SECONDS)
+
+
+def git_timeout_seconds() -> float:
+    """Per-git-probe timeout, overridable via GROK_DELEGATE_GIT_TIMEOUT_SECONDS."""
+    return _env_timeout("GROK_DELEGATE_GIT_TIMEOUT_SECONDS", DEFAULT_GIT_TIMEOUT_SECONDS)
+
+
+def git_checkout_timeout_seconds() -> float:
+    """Budget for tree-laying git calls (``worktree add``).
+
+    Overridable via GROK_DELEGATE_GIT_CHECKOUT_TIMEOUT_SECONDS. Never lower than
+    the probe budget: an operator who raised only the probe knob meant "this host
+    is slow", and silently giving the checkout less than a probe would invert it.
+    """
+    value = _env_timeout(
+        "GROK_DELEGATE_GIT_CHECKOUT_TIMEOUT_SECONDS",
+        DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS,
+    )
+    return max(value, git_timeout_seconds())
 
 # Cap on captured stdout/stderr size (chars) before truncation in result.
 DEFAULT_OUTPUT_CHAR_CAP = 200_000
+
+# ---------------------------------------------------------------------------
+# Progress reporting
+# ---------------------------------------------------------------------------
+#
+# A dispatch spends its first minutes with no observable trace: no grok process,
+# no lane directory, no branch. ``poll`` reported only a pid and started_at, so
+# that state was indistinguishable from a hung server, and the honest reading
+# ("it is still preparing") was unavailable to the operator — the wrong reading
+# ("the channel is dead") cost more than a day of debugging on this host.
+#
+# The sink is thread-local on purpose: jobs.py runs each delegation on its own
+# daemon thread and installs a sink bound to that job's record, so concurrent
+# lanes cannot report into each other. A missing sink is the normal case (direct
+# calls, unit tests) and costs one getattr.
+
+PHASE_PREFLIGHT = "preflight"
+PHASE_WORKTREE = "worktree"
+PHASE_RECOVER = "worktree_recover"
+PHASE_ANCHORS = "anchors"
+PHASE_EXECUTOR = "executor"
+PHASE_COLLECT = "collect"
+
+_PROGRESS = threading.local()
+
+
+def set_progress_sink(sink: "Callable[[dict[str, Any]], None] | None") -> None:
+    """Install (or clear) this thread's progress callback."""
+    _PROGRESS.sink = sink
+
+
+def _step_label(cmd: Sequence[str]) -> str:
+    """Compact "what is it doing" label: the verb and its flags, not the paths.
+
+    ``git -C <long absolute path> rev-parse --abbrev-ref HEAD`` reads as noise;
+    ``git rev-parse --abbrev-ref`` answers the question a poller is asking.
+    """
+    tokens: list[str] = []
+    skip_next = False
+    for token in cmd:
+        if skip_next:
+            skip_next = False
+            continue
+        text = str(token)
+        if text in {"-C", "-c"}:
+            skip_next = True
+            continue
+        # Drop bare path operands; the record already carries worktree_path.
+        if ("/" in text or "\\" in text) and not text.startswith("-"):
+            continue
+        tokens.append(text)
+        if len(tokens) >= 4:
+            break
+    return " ".join(tokens)
+
+
+def report_progress(**fields: Any) -> None:
+    """Publish progress fields to this thread's sink, if one is installed.
+
+    Never raises: observability that can break a lane is worse than none.
+    """
+    sink = getattr(_PROGRESS, "sink", None)
+    if sink is None:
+        return
+    try:
+        sink(dict(fields))
+    except Exception:  # noqa: BLE001 — a broken sink must not fail the lane
+        pass
 
 # Forbidden git subcommands — never assembled by this module.
 _FORBIDDEN_GIT_VERBS = frozenset(
@@ -162,6 +263,7 @@ def default_git_runner(
 
     _reject_forbidden_git_args(args)
     cmd = ["git", *[str(a) for a in args]]
+    report_progress(last_step=_step_label(cmd), last_step_at=time.time())
     try:
         proc = subprocess.run(
             cmd,
@@ -207,40 +309,32 @@ def default_subprocess_runner(
     cwd: Path | None,
     timeout: float,
 ) -> dict[str, Any]:
-    """Real subprocess for grok spawn (production path)."""
+    """Real subprocess for grok spawn (production path).
+
+    Popen rather than ``subprocess.run`` for one reason: the executor's real pid
+    has to be published while it is still running. ``run`` never exposes it, so
+    the job record carried the MCP server's own pid instead — which made the
+    stale-record guard a no-op (the server is always alive) and turned the
+    operator instruction "kill the hung job's pid" into "kill the server and
+    every other lane with it".
+    """
     import subprocess
 
     _reject_always_approve(args)
     cmd = [str(a) for a in args]
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(  # noqa: S603 — argv is guard-validated above
             cmd,
             cwd=str(cwd) if cwd else None,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             # Grok emits UTF-8 (goal text, summaries, box drawing). Decoding with
             # the Windows locale codepage crashes the reader thread on the first
             # non-cp1252 byte and drops the whole delegation result.
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
-            check=False,
         )
-        return {
-            "args": cmd,
-            "returncode": proc.returncode,
-            "stdout": proc.stdout or "",
-            "stderr": proc.stderr or "",
-            "timedOut": False,
-        }
-    except subprocess.TimeoutExpired as exc:
-        return {
-            "args": cmd,
-            "returncode": 124,
-            "stdout": (exc.stdout or "") if isinstance(exc.stdout, str) else "",
-            "stderr": f"timeout after {timeout}s",
-            "timedOut": True,
-        }
     except FileNotFoundError:
         return {
             "args": cmd,
@@ -249,6 +343,35 @@ def default_subprocess_runner(
             "stderr": f"binary not found: {cmd[0] if cmd else '?'}",
             "timedOut": False,
             "missing": True,
+        }
+
+    report_progress(worker_pid=proc.pid, phase=PHASE_EXECUTOR, phase_at=time.time())
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return {
+            "args": cmd,
+            "pid": proc.pid,
+            "returncode": proc.returncode,
+            "stdout": stdout or "",
+            "stderr": stderr or "",
+            "timedOut": False,
+        }
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        # Drain after the kill so the partial transcript is not lost — on a
+        # timeout that tail is usually the only evidence of what the run did.
+        try:
+            stdout, stderr = proc.communicate()
+        except Exception:  # noqa: BLE001 — never lose the timeout verdict itself
+            stdout, stderr = "", ""
+        marker = f"timeout after {timeout}s"
+        return {
+            "args": cmd,
+            "pid": proc.pid,
+            "returncode": 124,
+            "stdout": stdout or "",
+            "stderr": f"{marker}\n{stderr}" if stderr else marker,
+            "timedOut": True,
         }
 
 
@@ -308,6 +431,157 @@ def is_path_inside(child: Path, parent: Path) -> bool:
         return False
 
 
+def _git_timeout_error(
+    step: str,
+    result: dict[str, Any],
+    timeout: float,
+    **extra: Any,
+) -> dict[str, Any]:
+    """Structured GIT_TIMEOUT naming the step that ran out of budget.
+
+    Distinct from the capability errors (GIT_MISSING, BASE_UNREACHABLE,
+    WORKTREE_CREATE_FAILED) on purpose. Those say "this host cannot do it" and
+    are terminal; a timeout says "I stopped waiting" and is retryable. Collapsing
+    the two is what made a working channel read as a broken environment for
+    over a day: `git --version` returning in 0.13s from a shell was reported as
+    GIT_MISSING because the same call was starved to 60s inside the server.
+    """
+    return structured_error(
+        "GIT_TIMEOUT",
+        f"git {step} exceeded its {timeout:g}s budget (the command was not "
+        f"observed to fail — the wrapper stopped waiting)",
+        detail=(result.get("stderr") or "")[:500],
+        step=step,
+        timeout_seconds=timeout,
+        **extra,
+    )
+
+
+def _worktree_lock_state(
+    git: GitRunner,
+    root: Path,
+    target: Path,
+    timeout: float,
+) -> str:
+    """``locked`` / ``unlocked`` / ``absent`` / ``unknown`` for *target*.
+
+    ``git worktree add`` registers the worktree and locks it with reason
+    ``initializing`` before laying out the tree, releasing the lock when the
+    checkout completes. That lock is the only reliable "the tree is still being
+    written" signal available from outside, and reusing a still-initializing
+    worktree would hand the executor a half-checked-out repo.
+    """
+    listing = git(["worktree", "list", "--porcelain"], root, timeout)
+    if listing.get("returncode", 1) != 0:
+        return "unknown"
+    try:
+        target_r = Path(target).resolve()
+    except OSError:
+        return "unknown"
+
+    in_block = False
+    for raw in (listing.get("stdout") or "").splitlines():
+        line = raw.strip()
+        if line.startswith("worktree "):
+            path = line[len("worktree ") :].strip()
+            try:
+                in_block = Path(path).resolve() == target_r
+            except OSError:
+                in_block = False
+            continue
+        if not line:
+            # Blank line ends a record; a lock would have appeared inside it.
+            if in_block:
+                return "unlocked"
+            continue
+        if in_block and (line == "locked" or line.startswith("locked ")):
+            return "locked"
+    return "unlocked" if in_block else "absent"
+
+
+def _settled_worktree(
+    git: GitRunner,
+    root: Path,
+    target: Path,
+    branch: str,
+    timeout: float,
+) -> bool:
+    """True when *target* is a finished checkout of *branch* (not initializing)."""
+    if not Path(target).exists():
+        return False
+    if _worktree_lock_state(git, root, target, timeout) != "unlocked":
+        return False
+    head = git(["-C", str(target), "rev-parse", "--abbrev-ref", "HEAD"], root, timeout)
+    if head.get("returncode", 1) != 0:
+        return False
+    return (head.get("stdout") or "").strip() == branch
+
+
+# How long to keep watching a timed-out checkout before giving up on it, and how
+# often to look. Short on purpose: GIT_TIMEOUT is retryable, so an unsettled tree
+# is picked up by the next attempt's reuse path rather than waited out here.
+CHECKOUT_SETTLE_GRACE_SECONDS = 30.0
+CHECKOUT_SETTLE_POLL_SECONDS = 2.0
+
+# Indirection so tests can drive the settle loop without real sleeping.
+_settle_sleep: "Callable[[float], None]" = time.sleep
+
+
+def _after_checkout_timeout(
+    *,
+    git: GitRunner,
+    root: Path,
+    target: Path,
+    branch: str,
+    base_ref: str,
+    probe_timeout: float,
+    budget: float,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Decide what a timed-out ``worktree add`` actually left behind.
+
+    Killing the wrapper's subprocess does not cancel the work. ``git worktree
+    add`` runs the checkout in a spawned child, and on Windows terminating the
+    parent leaves that child to finish: measured 2026-07-27, the wrapper reported
+    WORKTREE_CREATE_FAILED while a complete 34-entry worktree sat on disk, clean,
+    on the right branch, lock released. Reporting failure there is not just a bad
+    label — it strands a valid lane behind WORKTREE_EXISTS_CONFLICT on the next
+    dispatch, taking the lane name out of service until someone cleans up by hand.
+
+    So: look before concluding. A settled tree on the expected branch is a
+    success. Anything else is a retryable GIT_TIMEOUT, and the worktree is left
+    in place for the next attempt to adopt.
+    """
+    report_progress(phase=PHASE_RECOVER, phase_at=time.time())
+    waited = 0.0
+    while True:
+        if _settled_worktree(git, root, target, branch, probe_timeout):
+            return {
+                "ok": True,
+                "lane": branch,
+                "branch": branch,
+                "worktree_path": str(target),
+                "base_ref": base_ref,
+                "reused": False,
+                "recovered_after_timeout": True,
+                "timeout_seconds": budget,
+            }
+        if waited >= CHECKOUT_SETTLE_GRACE_SECONDS:
+            break
+        _settle_sleep(CHECKOUT_SETTLE_POLL_SECONDS)
+        waited += CHECKOUT_SETTLE_POLL_SECONDS
+
+    return _git_timeout_error(
+        "worktree add",
+        result,
+        budget,
+        worktree_path=str(target),
+        lane=branch,
+        branch=branch,
+        settle_grace_seconds=CHECKOUT_SETTLE_GRACE_SECONDS,
+    )
+
+
 def prepare_worktree(
     *,
     repo_root: Path,
@@ -316,6 +590,7 @@ def prepare_worktree(
     lanes_parent: Path | None = None,
     git_runner: GitRunner | None = None,
     timeout: float = 60.0,
+    checkout_timeout: float | None = None,
     require_clean_base: bool = True,
 ) -> dict[str, Any]:
     """Create isolated worktree on grok/* branch off base_ref (fail-closed).
@@ -323,6 +598,9 @@ def prepare_worktree(
     Rejects: missing git, dirty main tree (when require_clean_base), target path
     inside the main repo working tree, reserved lanes (via normalize_lane).
     Does not spawn grok. Does not push or merge.
+
+    ``timeout`` budgets the probes; ``checkout_timeout`` (default: the same
+    value, so direct callers keep the old behaviour) budgets ``worktree add``.
     """
     git = git_runner or default_git_runner
     root = Path(repo_root).resolve()
@@ -344,8 +622,14 @@ def prepare_worktree(
             repo_root=str(root),
         )
 
+    checkout_budget = timeout if checkout_timeout is None else float(checkout_timeout)
+
+    report_progress(phase=PHASE_PREFLIGHT, phase_at=time.time())
+
     # Probe git availability.
     version = git(["--version"], root, timeout)
+    if version.get("timedOut"):
+        return _git_timeout_error("--version", version, timeout)
     if version.get("missing") or version.get("returncode", 1) != 0:
         return structured_error(
             "GIT_MISSING",
@@ -355,6 +639,8 @@ def prepare_worktree(
 
     # Base reachability.
     rev = git(["rev-parse", "--verify", base_ref], root, timeout)
+    if rev.get("timedOut"):
+        return _git_timeout_error("rev-parse", rev, timeout, base_ref=base_ref)
     if rev.get("returncode", 1) != 0:
         return structured_error(
             "BASE_UNREACHABLE",
@@ -364,6 +650,8 @@ def prepare_worktree(
 
     if require_clean_base:
         dirty = git(["status", "--porcelain"], root, timeout)
+        if dirty.get("timedOut"):
+            return _git_timeout_error("status", dirty, timeout)
         if dirty.get("returncode", 1) != 0:
             return structured_error(
                 "BASE_STATUS_FAILED",
@@ -378,13 +666,34 @@ def prepare_worktree(
 
     # If worktree already exists at target, reuse only when on expected branch.
     if target.exists():
+        report_progress(phase=PHASE_WORKTREE, phase_at=time.time(), reusing=True)
         existing_branch = git(
             ["-C", str(target), "rev-parse", "--abbrev-ref", "HEAD"],
             root,
             timeout,
         )
+        if existing_branch.get("timedOut"):
+            return _git_timeout_error(
+                "rev-parse HEAD (existing worktree)",
+                existing_branch,
+                timeout,
+                worktree_path=str(target),
+            )
         head = (existing_branch.get("stdout") or "").strip()
         if existing_branch.get("returncode") == 0 and head == normalized:
+            # A worktree from a previous attempt may still be laying out its
+            # tree (git holds an ``initializing`` lock until the checkout ends).
+            # Reusing it here would drop the executor into a half-written repo.
+            lock_state = _worktree_lock_state(git, root, target, timeout)
+            if lock_state == "locked":
+                return structured_error(
+                    "WORKTREE_INITIALIZING",
+                    f"worktree {target} is still being checked out by git; "
+                    "retry once the lock clears",
+                    worktree_path=str(target),
+                    lane=normalized,
+                    branch=normalized,
+                )
             return {
                 "ok": True,
                 "lane": normalized,
@@ -403,19 +712,42 @@ def prepare_worktree(
 
     # Prefer: worktree add -b <branch> <path> <base>
     # If branch already exists, try worktree add <path> <branch>.
+    report_progress(phase=PHASE_WORKTREE, phase_at=time.time(), reusing=False)
     add = git(
         ["worktree", "add", "-b", normalized, str(target), base_ref],
         root,
-        timeout,
+        checkout_budget,
     )
+    if add.get("timedOut"):
+        return _after_checkout_timeout(
+            git=git,
+            root=root,
+            target=target,
+            branch=normalized,
+            base_ref=base_ref,
+            probe_timeout=timeout,
+            budget=checkout_budget,
+            result=add,
+        )
     if add.get("returncode", 1) != 0:
         stderr = (add.get("stderr") or "") + (add.get("stdout") or "")
         if "already exists" in stderr.lower() or "already checked out" in stderr.lower():
             add2 = git(
                 ["worktree", "add", str(target), normalized],
                 root,
-                timeout,
+                checkout_budget,
             )
+            if add2.get("timedOut"):
+                return _after_checkout_timeout(
+                    git=git,
+                    root=root,
+                    target=target,
+                    branch=normalized,
+                    base_ref=base_ref,
+                    probe_timeout=timeout,
+                    budget=checkout_budget,
+                    result=add2,
+                )
             if add2.get("returncode", 1) != 0:
                 return structured_error(
                     "WORKTREE_CREATE_FAILED",
@@ -776,6 +1108,7 @@ def delegate(
         lanes_parent=parent,
         git_runner=git_runner,
         timeout=git_timeout_seconds(),
+        checkout_timeout=git_checkout_timeout_seconds(),
         require_clean_base=require_clean_base,
     )
     if not prep.get("ok"):
@@ -794,6 +1127,7 @@ def delegate(
     # existing anchors. That default blocked exactly such a dispatch the first time
     # it ran, so the hard failure is now opt-in via fail_on_missing_anchors and the
     # normal path just surfaces missing_anchors for the driver and the integrator.
+    report_progress(phase=PHASE_ANCHORS, phase_at=time.time(), worktree_path=wt)
     anchor_check = validate_goal_anchors(goal, wt)
     missing_anchors = list(anchor_check.get("missing") or ())
     checked_anchors = list(anchor_check.get("checked") or ())
@@ -841,6 +1175,7 @@ def delegate(
 
     # Always collect diffstat when worktree exists (even on executor error).
     # R6: base_ref-aware so committed lane work is reported, not just dirty files.
+    report_progress(phase=PHASE_COLLECT, phase_at=time.time())
     diff = collect_diff(wt, git_runner=git_runner, base_ref=base_ref)
 
     # R7-C: trust git over prose. A verdict claiming files or a commit that the
@@ -1013,16 +1348,30 @@ def _assert_readonly_cli_args(args: Sequence[str]) -> None:
 
 # Explicit export list documents that push/merge helpers do not exist.
 __all__ = [
+    "CHECKOUT_SETTLE_GRACE_SECONDS",
+    "CHECKOUT_SETTLE_POLL_SECONDS",
+    "DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS",
+    "DEFAULT_GIT_TIMEOUT_SECONDS",
+    "PHASE_ANCHORS",
+    "PHASE_COLLECT",
+    "PHASE_EXECUTOR",
+    "PHASE_PREFLIGHT",
+    "PHASE_RECOVER",
+    "PHASE_WORKTREE",
     "DelegationResult",
     "RunnerConfig",
     "collect_diff",
     "default_git_runner",
     "default_subprocess_runner",
     "delegate",
+    "git_checkout_timeout_seconds",
+    "git_timeout_seconds",
     "is_path_inside",
     "prepare_worktree",
+    "report_progress",
     "resolve_lanes_parent",
     "run_delegation",
     "run_readonly_cli",
+    "set_progress_sink",
     "worktree_path_for_lane",
 ]

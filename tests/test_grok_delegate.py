@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import time
 import os
 import sys
@@ -25,6 +26,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from grok_delegate import audit as audit_mod  # noqa: E402
+from grok_delegate import driver  # noqa: E402
 from grok_delegate import guard  # noqa: E402
 from grok_delegate import runner  # noqa: E402
 from grok_delegate import server  # noqa: E402
@@ -1949,6 +1951,425 @@ class RoundSevenGitTimeoutTests(unittest.TestCase):
     def test_capped(self) -> None:
         with mock.patch.dict(os.environ, {"GROK_DELEGATE_GIT_TIMEOUT_SECONDS": "99999"}):
             self.assertEqual(runner.git_timeout_seconds(), 3600.0)
+
+
+class _TimeoutGit:
+    """git double that can time out a chosen verb and report worktree lock state.
+
+    ``settled`` decides what the post-timeout probe sees: the worktree either
+    finished its checkout (the real, measured case — the killed parent's child
+    completes it) or is still initializing.
+    """
+
+    def __init__(
+        self,
+        *,
+        branch: str = "grok/canary",
+        timeout_on: str | None = None,
+        settled: bool = True,
+        locked: bool = False,
+        present: bool = True,
+        create_target: bool = True,
+    ) -> None:
+        self.branch = branch
+        self.timeout_on = timeout_on
+        self.settled = settled
+        self.locked = locked
+        self.present = present
+        self.create_target = create_target
+        self.calls: list[list[str]] = []
+        self.timeouts: list[tuple[list[str], float]] = []
+        self.target: Path | None = None
+
+    def timeout_for(self, token: str) -> float | None:
+        for argv, timeout in self.timeouts:
+            if token in argv:
+                return timeout
+        return None
+
+    def _ok(self, argv: list[str], stdout: str = "") -> dict[str, Any]:
+        return {
+            "args": argv,
+            "returncode": 0,
+            "stdout": stdout,
+            "stderr": "",
+            "timedOut": False,
+        }
+
+    def _timeout(self, argv: list[str], timeout: float) -> dict[str, Any]:
+        return {
+            "args": argv,
+            "returncode": 124,
+            "stdout": "",
+            "stderr": f"timeout after {timeout}s",
+            "timedOut": True,
+        }
+
+    def __call__(
+        self,
+        args: "list[str] | tuple[str, ...]",
+        cwd: Path | None,
+        timeout: float,
+    ) -> dict[str, Any]:
+        argv = [str(a) for a in args]
+        self.calls.append(argv)
+        self.timeouts.append((argv, timeout))
+
+        timed_out = bool(self.timeout_on) and self.timeout_on in argv
+
+        if "worktree" in argv and "add" in argv:
+            # Order matters, and it is the whole point of this double: killing
+            # the wrapper's subprocess does not cancel the checkout. git has
+            # already registered the worktree and spawned the child that lays out
+            # the tree, and on Windows that child outlives the terminated parent.
+            # So the target appears on disk even on the call that "failed".
+            path = None
+            if "-b" in argv:
+                i = argv.index("-b")
+                if i + 2 < len(argv):
+                    path = Path(argv[i + 2])
+            else:
+                i = argv.index("add")
+                if i + 1 < len(argv):
+                    path = Path(argv[i + 1])
+            if path is not None:
+                self.target = path
+                if self.create_target:
+                    path.mkdir(parents=True, exist_ok=True)
+            if timed_out:
+                return self._timeout(argv, timeout)
+            return self._ok(argv)
+
+        if timed_out:
+            return self._timeout(argv, timeout)
+
+        if argv[0] == "--version":
+            return self._ok(argv, "git version 2.54.0\n")
+        if "rev-parse" in argv and "--verify" in argv:
+            return self._ok(argv, "abc123\n")
+        if "rev-parse" in argv and "--abbrev-ref" in argv:
+            if not self.settled:
+                return {
+                    "args": argv,
+                    "returncode": 128,
+                    "stdout": "",
+                    "stderr": "fatal: not a git repository\n",
+                    "timedOut": False,
+                }
+            return self._ok(argv, f"{self.branch}\n")
+        if "status" in argv and "--porcelain" in argv:
+            return self._ok(argv)
+        if "worktree" in argv and "list" in argv:
+            if not self.present or self.target is None:
+                return self._ok(argv, "")
+            block = [f"worktree {self.target.as_posix()}", "HEAD abc123"]
+            block.append(f"branch refs/heads/{self.branch}")
+            if self.locked:
+                block.append("locked initializing")
+            return self._ok(argv, "\n".join(block) + "\n\n")
+        return self._ok(argv)
+
+
+class RoundEightCheckoutTimeoutBudgetTests(unittest.TestCase):
+    """A probe and a checkout are not the same operation and cannot share a budget.
+
+    `git --version` does milliseconds of work; `git worktree add` lays out the
+    whole tree and legitimately runs for minutes on a large repo. One number for
+    both set the checkout ceiling by what a probe needs.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        self.repo.mkdir()
+        self.lanes = Path(self.tmp.name) / "pcp-lanes"
+        self.lanes.mkdir()
+        self._env = mock.patch.dict(os.environ, {}, clear=False)
+        self._env.start()
+        for var in (
+            "GROK_DELEGATE_GIT_TIMEOUT_SECONDS",
+            "GROK_DELEGATE_GIT_CHECKOUT_TIMEOUT_SECONDS",
+        ):
+            os.environ.pop(var, None)
+
+    def tearDown(self) -> None:
+        self._env.stop()
+        self.tmp.cleanup()
+
+    def test_checkout_default_is_far_above_the_probe_default(self) -> None:
+        self.assertGreater(
+            runner.DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS,
+            runner.DEFAULT_GIT_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(
+            runner.git_checkout_timeout_seconds(),
+            runner.DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS,
+        )
+
+    def test_checkout_env_override(self) -> None:
+        os.environ["GROK_DELEGATE_GIT_CHECKOUT_TIMEOUT_SECONDS"] = "1200"
+        self.assertEqual(runner.git_checkout_timeout_seconds(), 1200.0)
+
+    def test_checkout_never_below_the_probe_budget(self) -> None:
+        """Raising only the probe knob means "slow host" — honour it everywhere."""
+        os.environ["GROK_DELEGATE_GIT_TIMEOUT_SECONDS"] = "900"
+        os.environ["GROK_DELEGATE_GIT_CHECKOUT_TIMEOUT_SECONDS"] = "120"
+        self.assertEqual(runner.git_checkout_timeout_seconds(), 900.0)
+
+    def test_checkout_capped(self) -> None:
+        os.environ["GROK_DELEGATE_GIT_CHECKOUT_TIMEOUT_SECONDS"] = "99999"
+        self.assertEqual(runner.git_checkout_timeout_seconds(), 3600.0)
+
+    def test_checkout_garbage_falls_back(self) -> None:
+        for raw in ("abc", "0", "-5"):
+            os.environ["GROK_DELEGATE_GIT_CHECKOUT_TIMEOUT_SECONDS"] = raw
+            self.assertEqual(
+                runner.git_checkout_timeout_seconds(),
+                runner.DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS,
+                msg=raw,
+            )
+
+    def test_prepare_spends_the_checkout_budget_on_the_checkout(self) -> None:
+        git = _TimeoutGit(branch="grok/budget")
+        runner.prepare_worktree(
+            repo_root=self.repo,
+            lane="budget",
+            lanes_parent=self.lanes,
+            git_runner=git,
+            timeout=7.0,
+            checkout_timeout=99.0,
+        )
+        self.assertEqual(git.timeout_for("--version"), 7.0)
+        self.assertEqual(git.timeout_for("add"), 99.0)
+
+    def test_direct_callers_keep_a_single_budget(self) -> None:
+        """checkout_timeout defaults to timeout, so old call sites are unchanged."""
+        git = _TimeoutGit(branch="grok/budget")
+        runner.prepare_worktree(
+            repo_root=self.repo,
+            lane="budget",
+            lanes_parent=self.lanes,
+            git_runner=git,
+            timeout=7.0,
+        )
+        self.assertEqual(git.timeout_for("add"), 7.0)
+
+
+class RoundEightGitTimeoutIsNotAFailureTests(unittest.TestCase):
+    """The claim's Defect 1: a wrapper timeout was reported as an environment refusal.
+
+    Measured 2026-07-27 on this host: `git worktree add` hit the 60s ceiling and
+    the wrapper returned WORKTREE_CREATE_FAILED — while a complete 34-entry
+    worktree sat on disk, clean, on the right branch, lock released. The same
+    barrier had previously been reported as GIT_MISSING and BASE_UNREACHABLE, so
+    a working channel read as a broken environment for over a day.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        self.repo.mkdir()
+        self.lanes = Path(self.tmp.name) / "pcp-lanes"
+        self.lanes.mkdir()
+        self._sleep_patch = mock.patch.object(runner, "_settle_sleep", lambda _s: None)
+        self._sleep_patch.start()
+
+    def tearDown(self) -> None:
+        self._sleep_patch.stop()
+        self.tmp.cleanup()
+
+    def _prepare(self, git: _TimeoutGit, lane: str = "canary") -> dict[str, Any]:
+        return runner.prepare_worktree(
+            repo_root=self.repo,
+            lane=lane,
+            lanes_parent=self.lanes,
+            git_runner=git,
+            timeout=5.0,
+            checkout_timeout=9.0,
+        )
+
+    def test_version_timeout_is_not_git_missing(self) -> None:
+        git = _TimeoutGit(timeout_on="--version")
+        result = self._prepare(git)
+        self.assertEqual(result.get("error"), "GIT_TIMEOUT")
+        self.assertNotEqual(result.get("error"), "GIT_MISSING")
+        self.assertEqual(result.get("step"), "--version")
+
+    def test_base_rev_parse_timeout_is_not_base_unreachable(self) -> None:
+        git = _TimeoutGit(timeout_on="--verify")
+        result = self._prepare(git)
+        self.assertEqual(result.get("error"), "GIT_TIMEOUT")
+        self.assertNotEqual(result.get("error"), "BASE_UNREACHABLE")
+
+    def test_timed_out_checkout_that_finished_is_a_success(self) -> None:
+        """The measured case: the tree is there, complete, on the right branch."""
+        git = _TimeoutGit(
+            branch="grok/canary", timeout_on="add", settled=True, locked=False
+        )
+        result = self._prepare(git)
+        self.assertTrue(result.get("ok"), result)
+        self.assertTrue(result.get("recovered_after_timeout"))
+        self.assertEqual(result.get("branch"), "grok/canary")
+        self.assertEqual(result.get("timeout_seconds"), 9.0)
+
+    def test_timed_out_checkout_still_initializing_is_retryable(self) -> None:
+        git = _TimeoutGit(branch="grok/canary", timeout_on="add", locked=True)
+        result = self._prepare(git)
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("error"), "GIT_TIMEOUT")
+        self.assertNotEqual(result.get("error"), "WORKTREE_CREATE_FAILED")
+
+    def test_timeout_message_names_the_real_cause(self) -> None:
+        """`message` said "git worktree add failed"; the truth was only in `detail`."""
+        git = _TimeoutGit(branch="grok/canary", timeout_on="add", locked=True)
+        result = self._prepare(git)
+        self.assertIn("budget", str(result.get("message")).lower())
+        self.assertNotIn("worktree add failed", str(result.get("message")))
+        self.assertEqual(result.get("step"), "worktree add")
+        self.assertEqual(result.get("timeout_seconds"), 9.0)
+
+    def test_genuine_checkout_failure_is_still_a_hard_error(self) -> None:
+        """No regression: a real `worktree add` failure keeps its own code."""
+        git = MockGit(worktree_add_ok=False)
+        result = runner.prepare_worktree(
+            repo_root=self.repo,
+            lane="canary",
+            lanes_parent=self.lanes,
+            git_runner=git,
+        )
+        self.assertEqual(result.get("error"), "WORKTREE_CREATE_FAILED")
+
+    def test_initializing_worktree_is_not_handed_to_the_executor(self) -> None:
+        """A lane left mid-checkout must not be reused as if it were ready."""
+        target = runner.worktree_path_for_lane(self.lanes, "grok/canary")
+        target.mkdir(parents=True)
+        git = _TimeoutGit(branch="grok/canary", locked=True)
+        git.target = target
+        result = self._prepare(git)
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("error"), "WORKTREE_INITIALIZING")
+
+    def test_settled_existing_worktree_is_reused(self) -> None:
+        """Defect 3's recovery path: the next attempt adopts what was left behind."""
+        target = runner.worktree_path_for_lane(self.lanes, "grok/canary")
+        target.mkdir(parents=True)
+        git = _TimeoutGit(branch="grok/canary", locked=False)
+        git.target = target
+        result = self._prepare(git)
+        self.assertTrue(result.get("ok"), result)
+        self.assertTrue(result.get("reused"))
+
+
+class RoundEightTimeoutIsRetryableTests(unittest.TestCase):
+    """The claim's Defect 1b: a hard code blocks the lane on the spot.
+
+    WORKTREE_CREATE_FAILED sat in driver.hard_codes, so one starved git call took
+    the lane out of service without a single retry — and the executor never ran.
+    """
+
+    def test_git_timeout_is_not_a_hard_block(self) -> None:
+        self.assertIn("GIT_TIMEOUT", driver.RETRYABLE_PREPARE_CODES)
+        self.assertIn("WORKTREE_INITIALIZING", driver.RETRYABLE_PREPARE_CODES)
+
+    def test_hard_codes_and_retryable_codes_are_disjoint(self) -> None:
+        """A code cannot be both retryable and terminal."""
+        source = Path(driver.__file__).read_text(encoding="utf-8")
+        block = source.split("hard_codes = {", 1)[1].split("}", 1)[0]
+        hard = {
+            line.strip().strip('",')
+            for line in block.splitlines()
+            if line.strip().startswith('"')
+        }
+        self.assertTrue(hard, "could not parse hard_codes")
+        self.assertEqual(hard & set(driver.RETRYABLE_PREPARE_CODES), set())
+
+
+class RoundEightStepLabelTests(unittest.TestCase):
+    """`last_step` answers "what is it doing", so it must stay readable."""
+
+    def test_verb_and_flags_survive(self) -> None:
+        self.assertEqual(
+            runner._step_label(["git", "rev-parse", "--verify", "dev"]),
+            "git rev-parse --verify dev",
+        )
+
+    def test_absolute_paths_are_stripped(self) -> None:
+        label = runner._step_label(
+            ["git", "-C", "D:/ZAI/pcp-lanes/canary", "rev-parse", "--abbrev-ref", "HEAD"]
+        )
+        self.assertEqual(label, "git rev-parse --abbrev-ref HEAD")
+        self.assertNotIn("pcp-lanes", label)
+
+    def test_label_is_bounded(self) -> None:
+        long_cmd = ["git", "log"] + [f"--flag{i}" for i in range(20)]
+        self.assertLessEqual(len(runner._step_label(long_cmd).split()), 4)
+
+
+class RoundEightServerLoggingTests(unittest.TestCase):
+    """The modules logged; nothing collected it.
+
+    Searching the whole project for a trace of a running dispatch turned up
+    neither .log nor .jsonl, so a stuck lane could only be diagnosed by watching
+    the filesystem by hand — which is how "the channel is dead" got believed.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self._logger = logging.getLogger("grok_delegate")
+        self._saved = list(self._logger.handlers)
+        self._saved_level = self._logger.level
+        self._saved_propagate = self._logger.propagate
+
+    def tearDown(self) -> None:
+        for h in list(self._logger.handlers):
+            if h not in self._saved:
+                self._logger.removeHandler(h)
+                h.close()
+        self._logger.handlers = list(self._saved)
+        self._logger.setLevel(self._saved_level)
+        self._logger.propagate = self._saved_propagate
+        self.tmp.cleanup()
+
+    def test_disabled_without_configuration(self) -> None:
+        """No env, no file: the server must not litter the disk unasked."""
+        self.assertIsNone(server.configure_logging({}))
+
+    def test_explicit_path_is_written(self) -> None:
+        target = self.dir / "nested" / "gd.log"
+        result = server.configure_logging({"GROK_DELEGATE_LOG_FILE": str(target)})
+        self.assertEqual(result, target)
+        logging.getLogger("grok_delegate.runner").warning("probe-line")
+        self.assertTrue(target.is_file())
+        self.assertIn("probe-line", target.read_text(encoding="utf-8"))
+
+    def test_defaults_alongside_durable_jobs(self) -> None:
+        result = server.configure_logging({"GROK_DELEGATE_JOBS_DIR": str(self.dir)})
+        self.assertEqual(result, self.dir / "grok-delegate.log")
+
+    def test_never_propagates_to_a_stdout_root_handler(self) -> None:
+        """stdout is the JSON-RPC channel; a log line there corrupts it."""
+        server.configure_logging({"GROK_DELEGATE_LOG_FILE": str(self.dir / "a.log")})
+        self.assertFalse(logging.getLogger("grok_delegate").propagate)
+
+    def test_reconfigure_does_not_stack_handlers(self) -> None:
+        for _ in range(3):
+            server.configure_logging({"GROK_DELEGATE_LOG_FILE": str(self.dir / "b.log")})
+        tagged = [
+            h
+            for h in logging.getLogger("grok_delegate").handlers
+            if getattr(h, "_gd_tag", None) == server._LOG_HANDLER_TAG
+        ]
+        self.assertEqual(len(tagged), 1)
+
+    def test_unwritable_path_degrades_instead_of_raising(self) -> None:
+        """A bad log path must never stop the server from serving."""
+        blocker = self.dir / "not-a-dir"
+        blocker.write_text("x", encoding="utf-8")
+        self.assertIsNone(
+            server.configure_logging({"GROK_DELEGATE_LOG_FILE": str(blocker / "c.log")})
+        )
+
 
 class RoundEightLaneVerdictToggleTests(unittest.TestCase):
     """The lane verdict schema is what ends a run; a caller must be able to drop it.

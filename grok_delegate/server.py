@@ -17,6 +17,8 @@ Tools:
 from __future__ import annotations
 
 import json
+import logging
+import logging.handlers
 import os
 import sys
 import traceback
@@ -94,7 +96,7 @@ except ImportError:  # flat import when package dir is on sys.path
     )
 
 SERVER_NAME = "grok-delegate"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 PROTOCOL_VERSION = "2024-11-05"
 
 TOOL_DELEGATE = "grok_delegate"
@@ -129,8 +131,13 @@ _TOOL_DESCRIPTIONS = {
     ),
     TOOL_POLL: (
         "Poll a background delegation started with grok_delegate_start. With job_id: "
-        "that job's state and result (branch, changed_files, commits, diffstat). "
-        "Without job_id: newest job summaries. Read-only."
+        "that job's state and result (branch, changed_files, commits, diffstat), plus "
+        "live progress while running — phase (preflight/worktree/worktree_recover/"
+        "anchors/executor/collect), elapsed_s, phase_elapsed_s, last_step, and "
+        "worker_pid once the executor is spawned. A dispatch spends its first minutes "
+        "in git with no process and no lane directory to see: that is normal, and "
+        "phase is how you tell it apart from a stuck server. Without job_id: newest "
+        "job summaries. Read-only."
     ),
     TOOL_STATUS: (
         "Structured health status: grok binary/version, auth presence (without "
@@ -951,6 +958,70 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
     return _jsonrpc_error(req_id, -32601, f"method not found: {method}")
 
 
+# Bound the log so an unattended server cannot fill the disk.
+LOG_MAX_BYTES = 2_000_000
+LOG_BACKUP_COUNT = 3
+_LOG_HANDLER_TAG = "grok-delegate-file"
+
+
+def configure_logging(env: Mapping[str, str] | None = None) -> Path | None:
+    """Attach a rotating file log; return its path, or None when disabled.
+
+    The modules already log — nothing ever collected it, so the server ran with
+    no on-disk trace at all and a stuck dispatch could only be diagnosed by
+    watching the filesystem by hand. Explicit path via GROK_DELEGATE_LOG_FILE,
+    otherwise alongside the durable job records (an operator who asked for those
+    asked for durable state). Level via GROK_DELEGATE_LOG_LEVEL, default INFO.
+
+    Never a stdout handler: stdout is the JSON-RPC channel, and a log line
+    written there corrupts the protocol.
+    """
+    source = env if env is not None else os.environ
+    raw = (source.get("GROK_DELEGATE_LOG_FILE") or "").strip()
+    if raw:
+        target = Path(raw)
+    else:
+        jobs_dir = (source.get("GROK_DELEGATE_JOBS_DIR") or "").strip()
+        if not jobs_dir:
+            return None
+        target = Path(jobs_dir) / "grok-delegate.log"
+
+    root = logging.getLogger("grok_delegate")
+    for existing in list(root.handlers):
+        if getattr(existing, "_gd_tag", None) == _LOG_HANDLER_TAG:
+            root.removeHandler(existing)
+            try:
+                existing.close()
+            except Exception:  # noqa: BLE001 — a stale handler must not block setup
+                pass
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            target,
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+    except OSError:
+        # An unwritable log path degrades to no logging. It must never stop a
+        # server from serving.
+        return None
+
+    handler._gd_tag = _LOG_HANDLER_TAG  # type: ignore[attr-defined]
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    level_name = (source.get("GROK_DELEGATE_LOG_LEVEL") or "INFO").strip().upper()
+    root.setLevel(getattr(logging, level_name, logging.INFO))
+    root.addHandler(handler)
+    # Do not let records escape to a root handler the host may have pointed at
+    # stdout.
+    root.propagate = False
+    root.info("logging to %s (level=%s)", target, logging.getLevelName(root.level))
+    return target
+
+
 def configure_durable_jobs(env: Mapping[str, str] | None = None) -> Path | None:
     """Enable durable job records from GROK_DELEGATE_JOBS_DIR and rehydrate them.
 
@@ -976,6 +1047,7 @@ def serve_stdio(
     """Blocking stdio JSON-RPC loop (line-delimited or Content-Length framed)."""
     inn = stdin or sys.stdin
     out = stdout or sys.stdout
+    configure_logging()
     configure_durable_jobs()
 
     while True:

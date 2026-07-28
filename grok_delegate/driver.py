@@ -65,6 +65,19 @@ DEFAULT_MAX_ATTEMPTS = 2
 DEFAULT_COOLDOWN_SECONDS = 0.0
 DEFAULT_GATE_PROFILE = "python"
 
+# Prepare-stage failures that say "not yet", not "not possible". They must NOT
+# join hard_codes below: a hard code blocks the lane on the spot, and blocking on
+# these was the single reason a healthy channel never launched its executor —
+# every dispatch died at a starved git call that had, in fact, done the work.
+# Retrying is cheap and self-healing, because prepare_worktree adopts a lane
+# worktree a previous attempt left behind.
+RETRYABLE_PREPARE_CODES = frozenset(
+    {
+        "GIT_TIMEOUT",
+        "WORKTREE_INITIALIZING",
+    }
+)
+
 # Escalating write-first nudges appended to the goal on empty-result retries.
 # Index 0 is unused (first attempt has no nudge); later indices grow firmer.
 _WRITE_FIRST_NUDGES: tuple[str, ...] = (
@@ -743,6 +756,37 @@ def process_lane(
         # Hard prepare/spawn failures → block immediately (no empty-retry).
         err = result.get("error")
         if err and not result.get("ok"):
+            # A timeout is not a verdict about the host. The wrapper stopped
+            # waiting; git may well have finished. Retrying costs one dispatch
+            # and usually succeeds outright, because prepare_worktree adopts the
+            # worktree the timed-out attempt left behind. Blocking here instead
+            # is what kept the executor from ever starting: one slow checkout
+            # took the lane out of service permanently.
+            if str(err) in RETRYABLE_PREPARE_CODES:
+                emit_state_change(
+                    lane=lane_name,
+                    status=STATUS_IN_FLIGHT,
+                    outcome="prepare_timeout",
+                    error=str(err),
+                    base_ref=base_ref,
+                    changed_file_count=0,
+                    audit_emit=audit_emit,
+                )
+                if attempt_idx + 1 < max_attempts:
+                    continue
+                return _block_lane(
+                    lane,
+                    reason=str(err),
+                    message=(
+                        f"{result.get('message') or err} "
+                        f"(still unresolved after {attempts_used} attempt(s))"
+                    )[:500],
+                    base_ref=base_ref,
+                    audit_emit=audit_emit,
+                    started=started,
+                    verdicts_dir=verdicts_dir,
+                    result=result,
+                )
             # Empty-ish failures that still mean "executor ran but wrote nothing"
             # should fall through to empty detection; known hard codes block.
             hard_codes = {
