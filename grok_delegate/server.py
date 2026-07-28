@@ -41,6 +41,7 @@ try:
         DEFAULT_EXECUTE_SANDBOX,
         DEFAULT_PLAN_SANDBOX,
         HARD_CAP_MAX_TURNS,
+        SERVER_VERSION as _guard_server_version,
         GuardError,
         parse_allowed_roots_env,
         path_in_allowlist,
@@ -72,6 +73,7 @@ except ImportError:  # flat import when package dir is on sys.path
         DEFAULT_EXECUTE_SANDBOX,
         DEFAULT_PLAN_SANDBOX,
         HARD_CAP_MAX_TURNS,
+        SERVER_VERSION as _guard_server_version,
         GuardError,
         parse_allowed_roots_env,
         path_in_allowlist,
@@ -96,7 +98,7 @@ except ImportError:  # flat import when package dir is on sys.path
     )
 
 SERVER_NAME = "grok-delegate"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = _guard_server_version
 PROTOCOL_VERSION = "2024-11-05"
 
 TOOL_DELEGATE = "grok_delegate"

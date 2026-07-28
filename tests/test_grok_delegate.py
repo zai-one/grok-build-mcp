@@ -2284,6 +2284,34 @@ class RoundEightTimeoutIsRetryableTests(unittest.TestCase):
         self.assertEqual(hard & set(driver.RETRYABLE_PREPARE_CODES), set())
 
 
+class RoundEightVersionIsSingleSourcedTests(unittest.TestCase):
+    """status reported its own hardcoded version and the two drifted.
+
+    Caught live: the module had moved to 0.3.0 while `grok_delegate_status`
+    still answered 0.2.0 — so the one read-only call an operator would make to
+    check "did my restart take effect?" answered with the old number, which is
+    the same class of defect as the rest of this claim.
+    """
+
+    def test_status_reports_the_server_version(self) -> None:
+        with mock.patch.dict(
+            os.environ, {"GROK_DELEGATE_ALLOWED_ROOTS": str(Path.cwd())}
+        ):
+            body = server.handle_tool_call("grok_delegate_status", {})
+        self.assertEqual(body["server"]["version"], server.SERVER_VERSION)
+
+    def test_no_second_version_literal_in_the_package(self) -> None:
+        """Only guard.py may spell the version out."""
+        pkg = Path(server.__file__).parent
+        offenders = []
+        for path in sorted(pkg.glob("*.py")):
+            if path.name == "guard.py":
+                continue
+            if f'"{server.SERVER_VERSION}"' in path.read_text(encoding="utf-8"):
+                offenders.append(path.name)
+        self.assertEqual(offenders, [], f"version literal duplicated in {offenders}")
+
+
 class RoundEightStepLabelTests(unittest.TestCase):
     """`last_step` answers "what is it doing", so it must stay readable."""
 

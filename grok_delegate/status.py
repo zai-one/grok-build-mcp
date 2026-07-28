@@ -19,6 +19,7 @@ try:
         DEFAULT_PLAN_SANDBOX,
         HARD_CAP_MAX_TURNS,
         KNOWN_SANDBOX_PROFILES,
+        SERVER_VERSION,
         GuardError,
         structured_error,
         validate_grok_bin,
@@ -31,6 +32,7 @@ except ImportError:  # flat import
         DEFAULT_PLAN_SANDBOX,
         HARD_CAP_MAX_TURNS,
         KNOWN_SANDBOX_PROFILES,
+        SERVER_VERSION,
         GuardError,
         structured_error,
         validate_grok_bin,
@@ -366,7 +368,7 @@ def build_status_report(
         "ok": True,
         "server": {
             "name": "grok-delegate",
-            "version": "0.2.0",
+            "version": SERVER_VERSION,
             "hard_cap_max_turns": HARD_CAP_MAX_TURNS,
         },
         "grok": {
