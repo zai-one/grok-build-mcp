@@ -863,6 +863,99 @@ class DriverLoopTests(DriverTestCase):
         self.assertEqual(loaded["note"], "n")
 
 
+class PrepareTimeoutIsRetryableTests(DriverTestCase):
+    """A wrapper timeout is not a verdict about the host.
+
+    Measured 2026-07-27: `git worktree add` hit the per-call ceiling, the wrapper
+    reported WORKTREE_CREATE_FAILED, and because that code sits in hard_codes the
+    lane was blocked on the spot — no retry, executor never spawned. The checkout
+    had in fact completed. One slow git call took the lane name out of service
+    until someone cleaned up by hand.
+    """
+
+    @staticmethod
+    def _timeout_result() -> dict[str, Any]:
+        return {
+            "ok": False,
+            "error": "GIT_TIMEOUT",
+            "message": "git worktree add exceeded its 600s budget",
+            "changed_files": [],
+            "commits": [],
+        }
+
+    def test_timeout_then_success_reaches_the_executor(self) -> None:
+        g = self._write_goal("t.md", "do the work")
+        self._write_queue(_queue(_lane("t", goal_file=g, max_attempts=2)))
+        delegate = RecordingDelegate(
+            responses=[
+                self._timeout_result(),
+                _ok_delegate(changed_files=["a.py"], commits=["c1"]),
+            ]
+        )
+        result = self._run(delegate=delegate, max_attempts=2)
+        self.assertEqual(len(delegate.calls), 2, "the timeout must be retried")
+        self.assertEqual(result["ready_for_merge"], 1)
+        self.assertEqual(result["blocked"], 0)
+        q = self._read_queue()
+        self.assertEqual(q["lanes"][0]["status"], D.STATUS_READY_FOR_MERGE)
+
+    def test_exhausted_timeouts_block_under_their_own_reason(self) -> None:
+        """Not EMPTY_RESULT: the executor never ran, so it wrote nothing by
+        definition, and labelling it "empty" sends the operator hunting the
+        wrong defect."""
+        g = self._write_goal("t2.md")
+        self._write_queue(_queue(_lane("t2", goal_file=g)))
+        delegate = RecordingDelegate(
+            responses=[self._timeout_result(), self._timeout_result()]
+        )
+        result = self._run(delegate=delegate, max_attempts=2)
+        self.assertEqual(result["blocked"], 1)
+        q = self._read_queue()
+        self.assertEqual(q["lanes"][0]["blocked_reason"], "GIT_TIMEOUT")
+        self.assertEqual(q["lanes"][0]["attempts"], 2)
+
+    def test_initializing_worktree_is_retried_too(self) -> None:
+        g = self._write_goal("t3.md")
+        self._write_queue(_queue(_lane("t3", goal_file=g, max_attempts=2)))
+        delegate = RecordingDelegate(
+            responses=[
+                {
+                    "ok": False,
+                    "error": "WORKTREE_INITIALIZING",
+                    "message": "still being checked out",
+                    "changed_files": [],
+                    "commits": [],
+                },
+                _ok_delegate(changed_files=["a.py"], commits=["c1"]),
+            ]
+        )
+        result = self._run(delegate=delegate, max_attempts=2)
+        self.assertEqual(len(delegate.calls), 2)
+        self.assertEqual(result["ready_for_merge"], 1)
+
+    def test_genuine_create_failure_still_blocks_immediately(self) -> None:
+        """No regression: a real failure must not buy itself a retry."""
+        g = self._write_goal("t4.md")
+        self._write_queue(_queue(_lane("t4", goal_file=g, max_attempts=2)))
+        delegate = RecordingDelegate(
+            responses=[
+                {
+                    "ok": False,
+                    "error": "WORKTREE_CREATE_FAILED",
+                    "message": "git worktree add failed",
+                    "changed_files": [],
+                    "commits": [],
+                },
+                _ok_delegate(changed_files=["a.py"]),
+            ]
+        )
+        result = self._run(delegate=delegate, max_attempts=2)
+        self.assertEqual(len(delegate.calls), 1, "hard failures must not retry")
+        self.assertEqual(result["blocked"], 1)
+        q = self._read_queue()
+        self.assertEqual(q["lanes"][0]["blocked_reason"], "WORKTREE_CREATE_FAILED")
+
+
 class CliTests(DriverTestCase):
     def test_main_requires_queue(self) -> None:
         code = D.main([])

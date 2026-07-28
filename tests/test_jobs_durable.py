@@ -22,6 +22,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from grok_delegate import jobs_store as JS  # noqa: E402
+from grok_delegate import runner  # noqa: E402
 
 
 def _record(
@@ -324,6 +325,53 @@ class StaleRunningTests(unittest.TestCase):
         rec = _record(state=JS.STATE_DONE, pid=1, finished_at=1.0)
         self.assertFalse(JS.is_stale_running(rec, alive_check=lambda _p: False))
 
+    def test_restart_downgrades_running_record_from_another_incarnation(self) -> None:
+        """The case the downgrade exists for, and never fired before.
+
+        Records used to store the server's own pid, so the liveness probe asked
+        "is this very process alive?" — always yes — and a record left ``running``
+        by a dead server stayed ``running`` forever.
+        """
+        rec = _record(state=JS.STATE_RUNNING, server_pid=4242)
+        # 4242 is alive (a reused pid, or a second server) but is not us.
+        self.assertTrue(
+            JS.is_stale_running(
+                rec, alive_check=lambda _p: True, self_pid=os.getpid()
+            )
+        )
+        applied = JS.apply_stale_running(
+            rec, alive_check=lambda _p: True, self_pid=os.getpid()
+        )
+        self.assertEqual(applied["state"], JS.STATE_UNKNOWN)
+        self.assertEqual(applied["error"], "STALE_RUNNING")
+
+    def test_running_record_from_this_incarnation_stays_running(self) -> None:
+        """Our own live record must not be downgraded."""
+        rec = _record(state=JS.STATE_RUNNING, server_pid=os.getpid())
+        self.assertFalse(
+            JS.is_stale_running(rec, alive_check=lambda _p: True, self_pid=os.getpid())
+        )
+
+    def test_worker_pid_is_not_used_for_liveness(self) -> None:
+        """A dead executor pid must not, by itself, invalidate the record.
+
+        The lane may legitimately be between phases (preflight, checkout,
+        collect) with no executor running at all.
+        """
+        rec = _record(
+            state=JS.STATE_RUNNING, server_pid=os.getpid(), worker_pid=999999
+        )
+        self.assertFalse(
+            JS.is_stale_running(rec, alive_check=lambda _p: True, self_pid=os.getpid())
+        )
+
+    def test_legacy_pid_record_still_readable(self) -> None:
+        """Records written before the split keep the old liveness semantics."""
+        rec = _record(state=JS.STATE_RUNNING, pid=4242)
+        self.assertNotIn("server_pid", rec)
+        self.assertFalse(JS.is_stale_running(rec, alive_check=lambda _p: True))
+        self.assertTrue(JS.is_stale_running(rec, alive_check=lambda _p: False))
+
     def test_load_jobs_marks_stale_running_unknown(self) -> None:
         """load_jobs: dead-pid running → state unknown in rehydrated registry."""
         rec = _record(job_id="job-stale", state=JS.STATE_RUNNING, pid=99999)
@@ -523,7 +571,67 @@ class JobsPersistenceWiringTests(unittest.TestCase):
         record = self.jobs.start_job(
             lambda: {"ok": True}, lane="pid", thread_starter=self._sync
         )
-        self.assertEqual(record.get("pid"), os.getpid())
+        # server_pid identifies the incarnation that owns the record; it is what
+        # the stale-running downgrade compares against after a restart.
+        self.assertEqual(record.get("server_pid"), os.getpid())
+
+    def test_server_pid_is_not_offered_as_a_kill_target(self) -> None:
+        """The record must never present the server's pid as the worker's.
+
+        The old single ``pid`` field held the server's, so "kill the hung job's
+        pid" meant "kill the MCP server and every other lane with it".
+        """
+        record = self.jobs.start_job(
+            lambda: {"ok": True}, lane="pid", thread_starter=self._sync
+        )
+        self.assertIsNone(record.get("worker_pid"))
+        self.assertNotEqual(record.get("worker_pid"), os.getpid())
+
+    def test_worker_pid_reported_by_runner_lands_in_the_record(self) -> None:
+        """Progress published from inside the delegation reaches the record."""
+
+        def _work() -> dict:
+            runner.report_progress(worker_pid=4242, phase=runner.PHASE_EXECUTOR)
+            return {"ok": True}
+
+        record = self.jobs.start_job(
+            _work, lane="worker-pid", thread_starter=self._sync
+        )
+        final = self.jobs.get_job(record["job_id"])
+        assert final is not None
+        self.assertEqual(final.get("worker_pid"), 4242)
+
+    def test_progress_cannot_overwrite_lifecycle_fields(self) -> None:
+        """A progress key must never fabricate a state, result or error."""
+        record = self.jobs.start_job(
+            lambda: {"ok": True}, lane="guard", thread_starter=self._sync
+        )
+        jid = record["job_id"]
+        self.jobs.update_job(jid, {"state": "done", "result": {"ok": True}})
+        final = self.jobs.get_job(jid)
+        assert final is not None
+        self.assertEqual(final["state"], self.jobs.STATE_DONE)
+        self.assertEqual(final["result"], {"ok": True})
+        # The lane really finished, so the record is terminal; a late progress
+        # update must not reanimate it either.
+        self.jobs.update_job(jid, {"phase": "executor"})
+        after = self.jobs.get_job(jid)
+        assert after is not None
+        self.assertEqual(after["state"], self.jobs.STATE_DONE)
+
+    def test_poll_reports_phase_and_elapsed(self) -> None:
+        """poll must answer "how far along", not just "a pid and a start time"."""
+        record = self.jobs.start_job(
+            lambda: {"ok": True}, lane="phase", thread_starter=self._sync
+        )
+        final = self.jobs.get_job(record["job_id"])
+        assert final is not None
+        self.assertIn("phase", final)
+        self.assertIn("elapsed_s", final)
+        self.assertGreaterEqual(final["elapsed_s"], 0.0)
+        summary = self.jobs.list_jobs(limit=5)[0]
+        self.assertIn("phase", summary)
+        self.assertIn("elapsed_s", summary)
 
     def test_rehydrate_after_simulated_restart(self) -> None:
         self.jobs.start_job(

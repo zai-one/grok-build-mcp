@@ -13,6 +13,7 @@ push/merge guarantee are unchanged, and nothing here executes a command itself.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -24,6 +25,8 @@ try:
     from . import jobs_store  # type: ignore[no-redef]
 except ImportError:  # flat import when package dir is on sys.path
     import jobs_store  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 # Job states.
 STATE_RUNNING = "running"
@@ -40,6 +43,25 @@ MAX_JOBS = 64
 
 _JOBS: "dict[str, dict[str, Any]]" = {}
 _LOCK = threading.Lock()
+
+# Fields a running delegation may publish into its own record. A whitelist, not a
+# merge: progress is reported from inside the runner, and no progress key may
+# ever reach ``state``, ``result``, ``error`` or ``job_id`` — those belong to the
+# job lifecycle and a stray key there would fabricate an outcome.
+_PROGRESS_FIELDS = frozenset(
+    {
+        "phase",
+        "phase_at",
+        "worker_pid",
+        "last_step",
+        "last_step_at",
+        "worktree_path",
+        "reusing",
+    }
+)
+
+# Phase of a job that has been registered but has not entered the runner yet.
+PHASE_QUEUED = "queued"
 
 # R7-D: durable location for job records. In-memory only was a real gap — a server
 # restart lost every status while the work itself survived on the lane branch, so the
@@ -103,6 +125,62 @@ def _evict_locked() -> None:
         _JOBS.pop(jid, None)
 
 
+def update_job(job_id: str, fields: "dict[str, Any]") -> dict[str, Any] | None:
+    """Merge whitelisted progress *fields* into a live record; return the copy.
+
+    Why a live record needs updating at all: a dispatch spends its first minutes
+    inside git with no process, no branch and no lane directory to look at, and
+    ``poll`` used to answer with a pid and a start time. That is
+    indistinguishable from a wedged server, and the wrong reading of it —
+    "the channel is dead" — cost more debugging than the actual defect.
+    """
+    allowed = {k: v for k, v in fields.items() if k in _PROGRESS_FIELDS}
+    if not allowed:
+        return None
+    to_persist: dict[str, Any] | None = None
+    phase_changed = False
+    with _LOCK:
+        rec = _JOBS.get(str(job_id))
+        if rec is None:
+            return None
+        # A terminal record is history; late progress must not reanimate it.
+        if rec.get("state") != STATE_RUNNING:
+            return dict(rec)
+        phase_changed = "phase" in allowed and allowed["phase"] != rec.get("phase")
+        rec.update(allowed)
+        to_persist = dict(rec)
+    if phase_changed:
+        logger.info(
+            "job %s lane=%s phase=%s step=%s",
+            job_id,
+            to_persist.get("lane"),
+            to_persist.get("phase"),
+            to_persist.get("last_step"),
+        )
+    if to_persist is not None:
+        _persist(to_persist)
+    return to_persist
+
+
+def _bind_progress_sink(job_id: str | None) -> None:
+    """Route this thread's runner progress into *job_id* (None clears it).
+
+    Imported lazily: jobs.py is deliberately free of runner internals, and a
+    persistence-only user of this module must not pull in the spawn path.
+    """
+    try:
+        try:
+            from . import runner  # type: ignore[no-redef]
+        except ImportError:  # flat import when package dir is on sys.path
+            import runner  # type: ignore
+    except ImportError:
+        return
+    if job_id is None:
+        runner.set_progress_sink(None)
+        return
+    runner.set_progress_sink(lambda fields: update_job(job_id, fields))
+
+
 def start_job(
     work: Callable[[], dict[str, Any]],
     *,
@@ -122,7 +200,18 @@ def start_job(
         "lane": lane,
         "tool": tool,
         "state": STATE_RUNNING,
-        "pid": os.getpid(),
+        # Two pids, because they answer two different questions and conflating
+        # them broke both. ``server_pid`` identifies the incarnation that owns
+        # this record — a record from another pid cannot have a live thread here,
+        # which is the only sound basis for the stale-running downgrade.
+        # ``worker_pid`` is the executor itself, and it is the one an operator
+        # may kill; the old single ``pid`` field held the server's, so following
+        # that instruction would have taken down every other lane too.
+        "server_pid": os.getpid(),
+        "worker_pid": None,
+        "phase": PHASE_QUEUED,
+        "phase_at": time.time(),
+        "last_step": None,
         "started_at": time.time(),
         "finished_at": None,
         "result": None,
@@ -149,6 +238,7 @@ def start_job(
             _persist(to_persist)
 
     def _run() -> None:
+        _bind_progress_sink(jid)
         try:
             result = work()
             _finish(
@@ -158,6 +248,8 @@ def start_job(
             )
         except BaseException as exc:  # noqa: BLE001 — never lose a job to a raise
             _finish(STATE_ERROR, result=None, error=f"{type(exc).__name__}: {exc}")
+        finally:
+            _bind_progress_sink(None)
 
     if thread_starter is not None:
         thread_starter(_run)
@@ -167,11 +259,31 @@ def start_job(
     return snapshot(jid) or dict(record)
 
 
+def _with_elapsed(rec: "dict[str, Any]") -> "dict[str, Any]":
+    """Add wall-clock ``elapsed_s`` (and ``phase_elapsed_s`` while running).
+
+    Computed at read time rather than stored: the caller wants to know how long
+    this has been going *now*, and a number frozen at write time answers a
+    question nobody asked.
+    """
+    out = dict(rec)
+    started = out.get("started_at")
+    if isinstance(started, (int, float)):
+        end = out.get("finished_at")
+        end = end if isinstance(end, (int, float)) else time.time()
+        out["elapsed_s"] = round(max(0.0, end - started), 3)
+    if out.get("state") == STATE_RUNNING:
+        phase_at = out.get("phase_at")
+        if isinstance(phase_at, (int, float)):
+            out["phase_elapsed_s"] = round(max(0.0, time.time() - phase_at), 3)
+    return out
+
+
 def snapshot(job_id: str) -> dict[str, Any] | None:
     """Copy of one job record, or None when unknown."""
     with _LOCK:
         rec = _JOBS.get(str(job_id))
-        return dict(rec) if rec is not None else None
+        return _with_elapsed(rec) if rec is not None else None
 
 
 def get_job(job_id: str) -> dict[str, Any] | None:
@@ -189,15 +301,18 @@ def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
         )
         out: list[dict[str, Any]] = []
         for rec in records[: max(0, int(limit))]:
+            summary = _with_elapsed(rec)
             out.append(
                 {
-                    "job_id": rec.get("job_id"),
-                    "lane": rec.get("lane"),
-                    "tool": rec.get("tool"),
-                    "state": rec.get("state"),
-                    "started_at": rec.get("started_at"),
-                    "finished_at": rec.get("finished_at"),
-                    "error": rec.get("error"),
+                    "job_id": summary.get("job_id"),
+                    "lane": summary.get("lane"),
+                    "tool": summary.get("tool"),
+                    "state": summary.get("state"),
+                    "phase": summary.get("phase"),
+                    "started_at": summary.get("started_at"),
+                    "finished_at": summary.get("finished_at"),
+                    "elapsed_s": summary.get("elapsed_s"),
+                    "error": summary.get("error"),
                 }
             )
         return out
@@ -211,6 +326,7 @@ def reset_jobs_for_tests() -> None:
 
 __all__ = [
     "MAX_JOBS",
+    "PHASE_QUEUED",
     "STATE_DONE",
     "STATE_ERROR",
     "STATE_RUNNING",
@@ -223,4 +339,5 @@ __all__ = [
     "reset_jobs_for_tests",
     "snapshot",
     "start_job",
+    "update_job",
 ]

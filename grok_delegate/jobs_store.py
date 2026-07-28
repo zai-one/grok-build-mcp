@@ -125,6 +125,7 @@ def is_stale_running(
     record: Mapping[str, Any],
     *,
     alive_check: AliveCheck | None = None,
+    self_pid: int | None = None,
 ) -> bool:
     """True when a ``running`` record's owning process is gone (or never set).
 
@@ -133,20 +134,46 @@ def is_stale_running(
     ``unknown`` — callers should re-label stale rows rather than claim work is
     still in flight. Injectable ``alive_check`` keeps unit tests free of real
     process signals.
+
+    The decisive field is ``server_pid``: the incarnation that owns the thread.
+    Records used to store the executor-facing ``pid``, which on the write path
+    was the server's own — so the liveness probe asked "is this very process
+    alive?", answered yes forever, and the downgrade above never once fired.
+    A record stamped by a *different* pid is stale by construction: whatever that
+    process is doing, this one holds no thread for it and cannot report progress,
+    so ``unknown`` is the honest answer. Legacy records (``pid``, no
+    ``server_pid``) keep the old liveness-probe behaviour so a rehydrate across
+    the upgrade still reads them.
     """
     if str(record.get("state") or "") != STATE_RUNNING:
         return False
-    raw_pid = record.get("pid")
-    if raw_pid is None:
-        # No pid recorded → cannot prove the worker is alive.
-        return True
+
+    raw_server_pid = record.get("server_pid")
+    if raw_server_pid is None:
+        # Legacy record written before the pid split.
+        raw_pid = record.get("pid")
+        if raw_pid is None:
+            # No pid recorded → cannot prove the worker is alive.
+            return True
+        try:
+            pid = int(raw_pid)
+        except (TypeError, ValueError):
+            return True
+        checker = alive_check if alive_check is not None else is_process_alive
+        try:
+            return not checker(pid)
+        except Exception:  # noqa: BLE001 — check failure means stale, never raise
+            return True
+
     try:
-        pid = int(raw_pid)
+        server_pid = int(raw_server_pid)
     except (TypeError, ValueError):
+        return True
+    if server_pid != (os.getpid() if self_pid is None else int(self_pid)):
         return True
     checker = alive_check if alive_check is not None else is_process_alive
     try:
-        return not checker(pid)
+        return not checker(server_pid)
     except Exception:  # noqa: BLE001 — treat check failure as stale, never raise
         return True
 
@@ -155,10 +182,11 @@ def apply_stale_running(
     record: Mapping[str, Any],
     *,
     alive_check: AliveCheck | None = None,
+    self_pid: int | None = None,
 ) -> dict[str, Any]:
     """Copy *record*; rewrite stale ``running`` → ``unknown`` when the pid is dead."""
     out = dict(record)
-    if is_stale_running(out, alive_check=alive_check):
+    if is_stale_running(out, alive_check=alive_check, self_pid=self_pid):
         out["state"] = STATE_UNKNOWN
         # setdefault is wrong here: a live record normally carries error=None, so the
         # key EXISTS and the reason would be silently dropped — leaving an "unknown"
@@ -224,6 +252,7 @@ def load_jobs(
     jobs_dir: str | Path,
     *,
     alive_check: AliveCheck | None = None,
+    self_pid: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Rehydrate all job records from *jobs_dir*.
 
@@ -257,7 +286,9 @@ def load_jobs(
         record = _read_job_file(entry)
         if record is None:
             continue
-        record = apply_stale_running(record, alive_check=alive_check)
+        record = apply_stale_running(
+            record, alive_check=alive_check, self_pid=self_pid
+        )
         job_id = str(record.get("job_id") or entry.stem)
         record["job_id"] = job_id
         loaded[job_id] = record
