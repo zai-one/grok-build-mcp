@@ -13,6 +13,14 @@ import re
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence
 
+# Single source of truth for the version this server reports. It lives here,
+# not in server.py, because status.py reports it too and cannot import server
+# (server imports status). Duplicating the literal is exactly how the two
+# drifted: status kept answering 0.2.0 after the server moved to 0.3.0, so the
+# one call an operator would make to check "did my restart take effect?"
+# answered with the old number.
+SERVER_VERSION = "0.3.0"
+
 # Server-side hard cap for --max-turns (B5).
 HARD_CAP_MAX_TURNS = 60
 
