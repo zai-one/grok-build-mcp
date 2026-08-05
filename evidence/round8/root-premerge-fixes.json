@@ -83,7 +83,7 @@
     "self_test_result": "PASS"
   },
   "current_hash_live_receipt": {
-    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-root-fixes-current-6ln1xxob\\repo",
+    "temporary_repo": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-root-fixes-current-6ln1xxob\\repo",
     "temporary_repo_head": "ce836387203b9553b0d690976ee9d2b14f0046ab",
     "mcp_protocol": "2024-11-05",
     "mcp_server": "grok-delegate 0.4.0",

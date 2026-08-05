@@ -23,7 +23,7 @@
   },
   "legacy_execute": {
     "verdict": "GO",
-    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-legacy-execute-6b7tkge3",
+    "temporary_repo": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-legacy-execute-6b7tkge3",
     "changed_files": ["legacy-output.txt"],
     "artifact_content": "ROUND8_LEGACY_EXECUTE_OK\n",
     "external_test": "1 passed",
@@ -31,7 +31,7 @@
   },
   "acp_stdio": {
     "verdict": "GO",
-    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-stdio-live3-e6tna2e6",
+    "temporary_repo": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-mcp-stdio-live3-e6tna2e6",
     "mcp_initialize": true,
     "acp_initialize": true,
     "acp_protocol_version": 1,
@@ -46,7 +46,7 @@
   },
   "acp_stdio_non_git_consult": {
     "verdict": "GO",
-    "temporary_root": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-consult-cancel-d_vxie3n\\non-git",
+    "temporary_root": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-mcp-consult-cancel-d_vxie3n\\non-git",
     "git_repository": false,
     "receipt_status": "completed",
     "summary": "ROUND8_NON_GIT_CONSULT_OK",
@@ -54,7 +54,7 @@
   },
   "acp_stdio_cancel": {
     "verdict": "GO",
-    "temporary_root": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-cancel2-kwkcrwp1",
+    "temporary_root": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-mcp-cancel2-kwkcrwp1",
     "session_observed_before_cancel": true,
     "receipt_status": "cancelled",
     "stop_reason": "cancelled",
@@ -64,8 +64,8 @@
   "acp_websocket": {
     "verdict": "GO",
     "mode": "managed-per-task-loopback-daemon",
-    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-ws-live-c7e5809f",
-    "worktree": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-ws-live-c7e5809f-lanes2\\round8-ws-live-final",
+    "temporary_repo": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-mcp-ws-live-c7e5809f",
+    "worktree": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-mcp-ws-live-c7e5809f-lanes2\\round8-ws-live-final",
     "http_upgrade_101": true,
     "acp_initialize": true,
     "acp_protocol_version": 1,
@@ -92,7 +92,7 @@
     "prompt_replayed_automatically": false
   },
   "final_typed_acceptance_after_skeptic_fixes": {
-    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-final-live-f864748f",
+    "temporary_repo": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-final-live-f864748f",
     "mcp_protocol": "2024-11-05",
     "server_version": "0.4.0",
     "tools_list_count": 16,
@@ -150,7 +150,7 @@
     "captured_at": "2026-08-05T10:25:00Z",
     "mcp_server_version": "0.4.0",
     "tools_list_count": 16,
-    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-final-live-f864748f",
+    "temporary_repo": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-final-live-f864748f",
     "legacy": {
       "job_id": "job-01e2e3567df61d6e",
       "receipt_status": "completed",
@@ -205,7 +205,7 @@
   },
   "root_premerge_current_hash_acceptance": {
     "captured_at": "2026-08-05T11:24:00Z",
-    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-root-fixes-current-6ln1xxob\\repo",
+    "temporary_repo": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-root-fixes-current-6ln1xxob\\repo",
     "temporary_repo_head": "ce836387203b9553b0d690976ee9d2b14f0046ab",
     "mcp_protocol": "2024-11-05",
     "mcp_server": "grok-delegate 0.4.0",

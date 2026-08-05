@@ -30,7 +30,7 @@
     "typed_tools": 8
   },
   "current_snapshot_live_acceptance": {
-    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-final-live-f864748f",
+    "temporary_repo": "C:\\Users\\<USER>\\AppData\\Local\\Temp\\round8-final-live-f864748f",
     "legacy": {
       "verdict": "GO",
       "job_id": "job-01e2e3567df61d6e",

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "captured_at": "2026-08-05T08:23:30Z",
   "platform": "Windows",
-  "worktree": "D:\\ZAI\\MCP\\grok-lanes\\safe-consult-acp-bridge",
+  "worktree": "D:\\<WORKSPACE>\\MCP\\grok-lanes\\safe-consult-acp-bridge",
   "branch": "grok/safe-consult-acp-bridge",
   "head": "b99b23931917a17ec433db332bc0067189af0eb5",
   "grok_cli": {

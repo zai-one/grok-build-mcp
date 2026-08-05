@@ -2,7 +2,7 @@
 
 Round 8 server remains an MCP stdio process. The configuration below contains
 exact roots and no credentials. Run it only after the branch is merged into
-`D:\ZAI\MCP\Grok CLI`.
+`<REPO_PATH>`.
 
 ## Codex CLI
 
@@ -10,11 +10,11 @@ Copy into PowerShell:
 
 ```powershell
 codex mcp add grok-delegate `
-  --env 'PYTHONPATH=D:\ZAI\MCP\Grok CLI' `
-  --env 'GROK_DELEGATE_ALLOWED_ROOTS=D:\ZAI\MCP\Grok CLI' `
-  --env 'GROK_DELEGATE_REPO_ROOT=D:\ZAI\MCP\Grok CLI' `
-  --env 'GROK_DELEGATE_LANES_PARENT=D:\ZAI\MCP\grok-lanes' `
-  --env 'GROK_DELEGATE_JOBS_DIR=C:\Users\codex\AppData\Local\grok-delegate\jobs' `
+  --env 'PYTHONPATH=<REPO_PATH>' `
+  --env 'GROK_DELEGATE_ALLOWED_ROOTS=<REPO_PATH>' `
+  --env 'GROK_DELEGATE_REPO_ROOT=<REPO_PATH>' `
+  --env 'GROK_DELEGATE_LANES_PARENT=<LANES_PARENT>' `
+  --env 'GROK_DELEGATE_JOBS_DIR=<JOBS_DIR>' `
   -- py -3 -m grok_delegate.server
 ```
 
@@ -32,11 +32,11 @@ Merge this server entry into the host's MCP JSON:
       "command": "py",
       "args": ["-3", "-m", "grok_delegate.server"],
       "env": {
-        "PYTHONPATH": "D:\\ZAI\\MCP\\Grok CLI",
-        "GROK_DELEGATE_ALLOWED_ROOTS": "D:\\ZAI\\MCP\\Grok CLI",
-        "GROK_DELEGATE_REPO_ROOT": "D:\\ZAI\\MCP\\Grok CLI",
-        "GROK_DELEGATE_LANES_PARENT": "D:\\ZAI\\MCP\\grok-lanes",
-        "GROK_DELEGATE_JOBS_DIR": "C:\\Users\\codex\\AppData\\Local\\grok-delegate\\jobs"
+        "PYTHONPATH": "<REPO_PATH>",
+        "GROK_DELEGATE_ALLOWED_ROOTS": "<REPO_PATH>",
+        "GROK_DELEGATE_REPO_ROOT": "<REPO_PATH>",
+        "GROK_DELEGATE_LANES_PARENT": "<LANES_PARENT>",
+        "GROK_DELEGATE_JOBS_DIR": "<JOBS_DIR>"
       }
     }
   }

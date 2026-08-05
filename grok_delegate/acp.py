@@ -1085,7 +1085,8 @@ _FORBIDDEN_COMMAND = re.compile(
 )
 _ALLOWED_COMMAND = re.compile(
     r"(?i)^\s*(?:"
-    r"(?:py(?:thon)?(?:\.exe)?(?:\s+-\d+)?)\s+-m\s+(?:pytest|unittest)\b|"
+    # Absolute or bare Python launcher + module runner (posix + Windows).
+    r"(?:\S*[\\/])?(?:py(?:thon\d*)?(?:\.exe)?(?:\s+-\d+)?)\s+-m\s+(?:pytest|unittest)\b|"
     r"pytest\b|npm(?:\.cmd)?\s+(?:test|run\s+test)\b|pnpm\s+test\b|"
     r"cargo\s+test\b|go\s+test\b|dotnet\s+test\b|"
     r"git\s+(?:status|diff|log|show|rev-parse)\b|"

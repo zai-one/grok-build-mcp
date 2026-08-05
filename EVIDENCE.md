@@ -1,6 +1,6 @@
 # grok_delegate — ROUND3 evidence (R1–R5)
 
-Working directory: `C:\Users\codex\Documents\Projects\MCP\Grok CLI`  
+Working directory: `C:\Users\<USER>\Documents\Projects\MCP\Grok CLI`  
 Source relocate: `pcp-lanes/grokd-delegate-mcp/tools/grok-delegate/`  
 Live CLI verified on this host: `grok --help`, `grok agent --help` (see implementer scratch `grok-help.txt`).
 

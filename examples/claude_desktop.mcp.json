@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "grok-delegate": {
+      "command": "python",
+      "args": ["-m", "grok_delegate.server"],
+      "env": {
+        "PYTHONPATH": "/ABSOLUTE/PATH/TO/grok-mcp",
+        "GROK_DELEGATE_ALLOWED_ROOTS": "<PROJECT_ROOT>",
+        "GROK_DELEGATE_REPO_ROOT": "<PROJECT_ROOT>",
+        "GROK_DELEGATE_LANES_PARENT": "<LANES_PARENT>",
+        "GROK_DELEGATE_JOBS_DIR": "<JOBS_DIR>"
+      }
+    }
+  }
+}

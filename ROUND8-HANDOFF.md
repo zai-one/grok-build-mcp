@@ -39,7 +39,7 @@ nonempty, independently tested change through every write transport.
 ## Reproduction
 
 ```powershell
-Set-Location 'D:\ZAI\MCP\grok-lanes\safe-consult-acp-bridge'
+Set-Location '<LANES_PARENT>\safe-consult-acp-bridge'
 py -3 -m pytest tests/test_round8_bridge.py -q
 py -3 -m pytest tests -q
 py -3 -m grok_delegate --self-test
@@ -106,11 +106,11 @@ tests/test_round8_bridge.py
 
 ```powershell
 codex mcp add grok-delegate `
-  --env 'PYTHONPATH=D:\ZAI\MCP\Grok CLI' `
-  --env 'GROK_DELEGATE_ALLOWED_ROOTS=D:\ZAI\MCP\Grok CLI' `
-  --env 'GROK_DELEGATE_REPO_ROOT=D:\ZAI\MCP\Grok CLI' `
-  --env 'GROK_DELEGATE_LANES_PARENT=D:\ZAI\MCP\grok-lanes' `
-  --env 'GROK_DELEGATE_JOBS_DIR=C:\Users\codex\AppData\Local\grok-delegate\jobs' `
+  --env 'PYTHONPATH=<REPO_PATH>' `
+  --env 'GROK_DELEGATE_ALLOWED_ROOTS=<REPO_PATH>' `
+  --env 'GROK_DELEGATE_REPO_ROOT=<REPO_PATH>' `
+  --env 'GROK_DELEGATE_LANES_PARENT=<LANES_PARENT>' `
+  --env 'GROK_DELEGATE_JOBS_DIR=C:\Users\<USER>\AppData\Local\grok-delegate\jobs' `
   -- py -3 -m grok_delegate.server
 ```
 

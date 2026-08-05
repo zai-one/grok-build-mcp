@@ -1,6 +1,6 @@
 Round 8 regression evidence
 Captured: 2026-08-05
-Worktree: D:\ZAI\MCP\grok-lanes\safe-consult-acp-bridge
+Worktree: <LANES_PARENT>\safe-consult-acp-bridge
 Branch: grok/safe-consult-acp-bridge
 
 Baseline command:
