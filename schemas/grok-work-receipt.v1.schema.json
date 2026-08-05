@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "grok-work-receipt.v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["schema_version", "status", "job_id", "transport", "objective_hash", "changed_files", "tests", "started_at", "finished_at"],
+  "properties": {
+    "schema_version": {"const": "grok-work-receipt.v1"},
+    "status": {"enum": ["completed", "no_changes", "blocked", "failed", "cancelled"]},
+    "job_id": {"type": "string"},
+    "session_id": {"type": ["string", "null"]},
+    "transport": {"enum": ["legacy", "stdio", "websocket"]},
+    "objective_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "branch": {"type": ["string", "null"]},
+    "worktree_path": {"type": ["string", "null"]},
+    "changed_files": {"type": "array", "items": {"type": "string"}},
+    "full_changed_files": {"type": "array", "items": {"type": "string"}},
+    "commits": {"type": "array", "items": {"type": "string"}},
+    "diffstat": {"type": "string"},
+    "tests": {"type": "array", "items": {"type": "object"}},
+    "artifacts": {"type": "array", "items": {"type": "string"}},
+    "findings": {"type": "array"},
+    "summary": {"type": "string"},
+    "blocked_reason": {"type": ["string", "null"]},
+    "error_code": {"type": ["string", "null"]},
+    "worker_alive_after_shutdown": {"type": ["boolean", "null"]},
+    "started_at": {"type": "string"},
+    "finished_at": {"type": "string"}
+  }
+}

@@ -64,6 +64,12 @@ try:
         run_inspect_json,
         run_models,
     )
+    from .agent_runtime import (  # type: ignore[no-redef]
+        cancel_agent_job,
+        runtime_status,
+        shutdown_runtime,
+        start_agent_job,
+    )
 except ImportError:  # flat import when package dir is on sys.path
     from audit import (  # noqa: E402
         build_delegation_audit,
@@ -96,6 +102,12 @@ except ImportError:  # flat import when package dir is on sys.path
         run_inspect_json,
         run_models,
     )
+    from grok_delegate.agent_runtime import (  # noqa: E402
+        cancel_agent_job,
+        runtime_status,
+        shutdown_runtime,
+        start_agent_job,
+    )
 
 SERVER_NAME = "grok-delegate"
 SERVER_VERSION = _guard_server_version
@@ -110,10 +122,35 @@ TOOL_DOCTOR = "grok_delegate_doctor"
 TOOL_MODELS = "grok_delegate_models"
 TOOL_INSPECT = "grok_delegate_inspect"
 
+TOOL_AGENT_STATUS = "grok_agent_status"
+TOOL_AGENT_START = "grok_agent_start"
+TOOL_AGENT_POLL = "grok_agent_poll"
+TOOL_AGENT_CANCEL = "grok_agent_cancel"
+TOOL_AGENT_CONSULT = "grok_agent_consult"
+TOOL_AGENT_REVIEW = "grok_agent_review"
+TOOL_AGENT_EXECUTE = "grok_agent_execute"
+TOOL_AGENT_FIX = "grok_agent_fix"
+
+AGENT_ROLE_TOOLS = {
+    TOOL_AGENT_CONSULT: "consult",
+    TOOL_AGENT_REVIEW: "skeptic",
+    TOOL_AGENT_EXECUTE: "execute",
+    TOOL_AGENT_FIX: "fix",
+}
+AGENT_TOOLS = frozenset(
+    {
+        TOOL_AGENT_STATUS,
+        TOOL_AGENT_START,
+        TOOL_AGENT_POLL,
+        TOOL_AGENT_CANCEL,
+        *AGENT_ROLE_TOOLS,
+    }
+)
+
 STATUS_TOOLS = frozenset({TOOL_STATUS, TOOL_DOCTOR, TOOL_MODELS, TOOL_INSPECT})
 # R6: TOOL_START shares the delegate validation path; TOOL_POLL is read-only.
 DELEGATE_TOOLS = frozenset({TOOL_DELEGATE, TOOL_PLAN, TOOL_START})
-ALL_TOOLS = DELEGATE_TOOLS | STATUS_TOOLS | {TOOL_POLL}
+ALL_TOOLS = DELEGATE_TOOLS | STATUS_TOOLS | {TOOL_POLL} | AGENT_TOOLS
 
 _TOOL_DESCRIPTIONS = {
     TOOL_DELEGATE: (
@@ -290,6 +327,90 @@ _INSPECT_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["repo_root"],
+    "additionalProperties": False,
+}
+
+_TASK_PACKET_PROPERTIES: dict[str, Any] = {
+    "schema_version": {"type": "string", "const": "grok-task-packet.v1"},
+    "objective": {"type": "string", "minLength": 1, "maxLength": 12000},
+    "role": {"type": "string", "enum": ["consult", "execute", "skeptic", "fix"]},
+    "project_root": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "base_ref": {"type": "string", "minLength": 1, "maxLength": 256},
+    "model": {"type": "string", "minLength": 1, "maxLength": 128},
+    "reasoning_effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]},
+    "permission_profile": {"type": "string", "enum": ["read-only", "workspace"]},
+    "max_turns": {"type": "integer", "minimum": 1, "maximum": 60},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+    "inputs": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
+    "constraints": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
+    "acceptance_criteria": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
+    "expected_artifacts": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
+    "test_commands": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
+    "correlation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+}
+
+
+def _agent_task_schema(*, require_role: bool, write_role: bool = False) -> dict[str, Any]:
+    required = ["objective", "project_root", "correlation_id"]
+    if require_role:
+        required.append("role")
+    if write_role:
+        required.extend(["expected_artifacts", "test_commands"])
+    task_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": _TASK_PACKET_PROPERTIES,
+        "required": required,
+        "additionalProperties": False,
+    }
+    if write_role:
+        task_schema["properties"] = {
+            **_TASK_PACKET_PROPERTIES,
+            "expected_artifacts": {**_TASK_PACKET_PROPERTIES["expected_artifacts"], "minItems": 1},
+            "test_commands": {**_TASK_PACKET_PROPERTIES["test_commands"], "minItems": 1},
+        }
+    elif require_role:
+        task_schema["allOf"] = [{
+            "if": {
+                "properties": {"role": {"enum": ["execute", "fix"]}},
+                "required": ["role"],
+            },
+            "then": {
+                "required": ["expected_artifacts", "test_commands"],
+                "properties": {
+                    "expected_artifacts": {"minItems": 1},
+                    "test_commands": {"minItems": 1},
+                },
+            },
+        }]
+    return {
+        "type": "object",
+        "properties": {
+            "task": task_schema,
+            "transport": {
+                "type": "string",
+                "enum": ["legacy", "stdio", "websocket", "auto"],
+                "default": "stdio",
+            },
+            "lane": {"type": "string", "maxLength": 96},
+        },
+        "required": ["task"],
+        "additionalProperties": False,
+    }
+
+
+_AGENT_POLL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "job_id": {"type": "string", "maxLength": 128},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+    },
+    "additionalProperties": False,
+}
+
+_AGENT_CANCEL_SCHEMA = {
+    "type": "object",
+    "properties": {"job_id": {"type": "string", "minLength": 1, "maxLength": 128}},
+    "required": ["job_id"],
     "additionalProperties": False,
 }
 
@@ -632,6 +753,99 @@ def handle_tool_call(
     """Transport-independent tool handler (callable without stdio)."""
     args = dict(arguments or {})
 
+    def typed_return(result: dict[str, Any], task: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        packet = task if isinstance(task, Mapping) else {}
+        event = build_delegation_audit(
+            principal=principal,
+            tool=name,
+            lane=str(args.get("lane") or result.get("lane") or ""),
+            base_ref=str(packet.get("base_ref") or ""),
+            cwd=str(packet.get("project_root") or result.get("worktree_path") or ""),
+            turns_used=None,
+            outcome="ok" if result.get("ok") else "error",
+            goal=str(packet.get("objective") or "") if packet else None,
+            error=str(result.get("error") or "") or None,
+            status=str(result.get("state") or result.get("status") or ""),
+        )
+        event["transport"] = str(args.get("transport") or result.get("transport") or "none")
+        if packet.get("correlation_id"):
+            event["correlation_id"] = str(packet["correlation_id"])
+        try:
+            audit_emit(event, stream=audit_stream)
+        except Exception:
+            pass
+        return result
+
+    # Round 8 primary typed surface.  The old grok_delegate_* names below stay
+    # as compatibility aliases over the legacy backend and diagnostics.
+    if name == TOOL_AGENT_STATUS:
+        if args:
+            return typed_return(structured_error("ARGUMENTS_UNKNOWN", "grok_agent_status accepts no arguments"))
+        report = handle_status_tool(
+            TOOL_STATUS,
+            {},
+            allowed_roots=allowed_roots,
+            repo_root=repo_root,
+            subprocess_runner=subprocess_runner,
+            which=which,
+            git_runner=git_runner,
+        )
+        return typed_return({"ok": bool(report.get("ok")), "legacy": report, "runtime": runtime_status()})
+
+    if name == TOOL_AGENT_POLL:
+        unknown = sorted(set(args) - {"job_id", "limit"})
+        if unknown:
+            return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
+        job_id = str(args.get("job_id") or "").strip()
+        if job_id:
+            record = jobs.get_job(job_id)
+            if record is None:
+                return typed_return(structured_error("JOB_UNKNOWN", f"unknown job_id: {job_id}"))
+            return typed_return({"ok": True, **record})
+        try:
+            limit = max(1, min(int(args.get("limit", 20)), 64))
+        except (TypeError, ValueError):
+            return typed_return(structured_error("LIMIT_INVALID", "limit must be an integer"))
+        return typed_return({"ok": True, "jobs": jobs.list_jobs(limit=limit)})
+
+    if name == TOOL_AGENT_CANCEL:
+        unknown = sorted(set(args) - {"job_id"})
+        if unknown:
+            return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
+        job_id = str(args.get("job_id") or "").strip()
+        if not job_id:
+            return typed_return(structured_error("JOB_ID_EMPTY", "job_id is required"))
+        return typed_return(cancel_agent_job(job_id))
+
+    if name == TOOL_AGENT_START or name in AGENT_ROLE_TOOLS:
+        unknown = sorted(set(args) - {"task", "transport", "lane"})
+        if unknown:
+            return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"), args.get("task") if isinstance(args.get("task"), Mapping) else None)
+        if allowed_roots is not None:
+            roots = load_allowed_roots(injected=allowed_roots)
+        elif repo_root is not None:
+            roots = [Path(repo_root).resolve()]
+        else:
+            roots = load_allowed_roots()
+        if not roots:
+            return typed_return(structured_error(
+                "ALLOWED_ROOTS_EMPTY",
+                "configure GROK_DELEGATE_ALLOWED_ROOTS or GROK_DELEGATE_REPO_ROOT",
+            ), args.get("task") if isinstance(args.get("task"), Mapping) else None)
+        try:
+            grok_bin = resolve_server_grok_bin({})
+        except GuardError as exc:
+            return typed_return(structured_error(exc.code, exc.message), args.get("task") if isinstance(args.get("task"), Mapping) else None)
+        typed_task = args.get("task") if isinstance(args.get("task"), Mapping) else {}
+        return typed_return(start_agent_job(
+            typed_task,
+            transport=str(args.get("transport") or "stdio"),
+            allowed_roots=roots,
+            forced_role=AGENT_ROLE_TOOLS.get(name),
+            lane=str(args.get("lane") or "") or None,
+            grok_bin=grok_bin,
+        ), typed_task)
+
     if name in STATUS_TOOLS:
         return handle_status_tool(
             name,
@@ -851,7 +1065,49 @@ def list_tools() -> list[dict[str, Any]]:
             },
         },
     }
-    return [
+    primary = [
+        {
+            "name": TOOL_AGENT_STATUS,
+            "description": "Version/auth-presence, exact roots, transport router, daemon and durable job status. Read-only.",
+            "inputSchema": _STATUS_SCHEMA,
+        },
+        {
+            "name": TOOL_AGENT_START,
+            "description": "Asynchronously start a versioned typed task packet on an explicit legacy|stdio|websocket transport. auto means stdio only.",
+            "inputSchema": _agent_task_schema(require_role=True),
+        },
+        {
+            "name": TOOL_AGENT_POLL,
+            "description": "Read bounded progress/events and the final evidence receipt for a typed job.",
+            "inputSchema": _AGENT_POLL_SCHEMA,
+        },
+        {
+            "name": TOOL_AGENT_CANCEL,
+            "description": "Boundedly cancel one typed job without stopping the MCP server.",
+            "inputSchema": _AGENT_CANCEL_SCHEMA,
+        },
+        {
+            "name": TOOL_AGENT_CONSULT,
+            "description": "Start an isolated read-only consult session; non-git exact allowlisted roots are supported.",
+            "inputSchema": _agent_task_schema(require_role=False),
+        },
+        {
+            "name": TOOL_AGENT_REVIEW,
+            "description": "Start an independent read-only skeptic session over supplied evidence/diff inputs.",
+            "inputSchema": _agent_task_schema(require_role=False),
+        },
+        {
+            "name": TOOL_AGENT_EXECUTE,
+            "description": "Start workspace execution in a git worktree. completed requires a real diff and requested evidence.",
+            "inputSchema": _agent_task_schema(require_role=False, write_role=True),
+        },
+        {
+            "name": TOOL_AGENT_FIX,
+            "description": "Start a separate workspace fixer session scoped to confirmed findings in the task packet.",
+            "inputSchema": _agent_task_schema(require_role=False, write_role=True),
+        },
+    ]
+    compatibility = [
         {
             "name": TOOL_DELEGATE,
             "description": _TOOL_DESCRIPTIONS[TOOL_DELEGATE],
@@ -893,6 +1149,7 @@ def list_tools() -> list[dict[str, Any]]:
             "inputSchema": _INSPECT_SCHEMA,
         },
     ]
+    return primary + compatibility
 
 
 def _jsonrpc_result(req_id: Any, result: Any) -> dict[str, Any]:
@@ -1047,6 +1304,11 @@ def serve_stdio(
     stdout: TextIO | None = None,
 ) -> None:
     """Blocking stdio JSON-RPC loop (line-delimited or Content-Length framed)."""
+    if stdin is None and stdout is None and hasattr(sys.stdin, "buffer") and hasattr(sys.stdout, "buffer"):
+        configure_logging()
+        configure_durable_jobs()
+        _serve_binary_stdio(sys.stdin.buffer, sys.stdout.buffer)
+        return
     inn = stdin or sys.stdin
     out = stdout or sys.stdout
     configure_logging()
@@ -1101,6 +1363,55 @@ def serve_stdio(
             out.flush()
 
 
+def _serve_binary_stdio(inn: Any, out: Any) -> None:
+    """Byte-correct MCP framing; Content-Length always counts UTF-8 bytes."""
+    while True:
+        first = inn.readline()
+        if first == b"":
+            return
+        if not first.strip():
+            continue
+        framed = first.lower().startswith(b"content-length:")
+        if framed:
+            try:
+                length = int(first.split(b":", 1)[1].strip())
+            except ValueError:
+                continue
+            while True:
+                header = inn.readline()
+                if header in {b"", b"\r\n", b"\n"}:
+                    break
+            body = bytearray()
+            while len(body) < length:
+                chunk = inn.read(length - len(body))
+                if not chunk:
+                    break
+                body.extend(chunk)
+            if len(body) != length:
+                return
+        else:
+            body = bytearray(first.rstrip(b"\r\n"))
+        try:
+            message = json.loads(bytes(body).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            response = _jsonrpc_error(None, -32700, "parse error")
+        else:
+            try:
+                response = handle_jsonrpc(message)
+            except Exception as exc:  # noqa: BLE001
+                response = _jsonrpc_error(
+                    message.get("id") if isinstance(message, dict) else None,
+                    -32603,
+                    f"internal error: {type(exc).__name__}",
+                )
+                traceback.print_exc(file=sys.stderr)
+        if response is None:
+            continue
+        raw = json.dumps(response, ensure_ascii=False).encode("utf-8")
+        out.write((f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw) if framed else raw + b"\n")
+        out.flush()
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if "--help" in args or "-h" in args:
@@ -1114,8 +1425,11 @@ def main(argv: list[str] | None = None) -> int:
             "NOT the product admin-bridge (tools/mcp/).\n"
         )
         return 0
-    serve_stdio()
-    return 0
+    try:
+        serve_stdio()
+        return 0
+    finally:
+        shutdown_runtime()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"<SESSION_ID>","update":{"sessionUpdate":"tool_call","toolCallId":"<TOOL_CALL_ID>","title":"write","rawInput":{"file_path":"<CWD>\\permission-probe.txt","content":"OK\n"}}}}
+{"jsonrpc":"2.0","id":0,"method":"session/request_permission","params":{"sessionId":"<SESSION_ID>","toolCall":{"toolCallId":"<TOOL_CALL_ID>","kind":"edit","title":"Write `<CWD>\\permission-probe.txt`"},"options":[{"optionId":"allow-edits-session","name":"Yes, allow all edits during this session","kind":"allow_always"},{"optionId":"allow-once","name":"Yes","kind":"allow_once"},{"optionId":"reject-once","name":"No, and tell Grok what to do differently","kind":"reject_once"}]}}
+{"jsonrpc":"2.0","id":0,"result":{"outcome":{"outcome":"selected","optionId":"reject-once"}}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"<SESSION_ID>","update":{"sessionUpdate":"tool_call_update","toolCallId":"<TOOL_CALL_ID>","status":"failed","content":[{"type":"content","content":{"type":"text","text":"User rejected the execution for tool `write`"}}]}}}
+{"jsonrpc":"2.0","id":2,"result":{"stopReason":"cancelled"}}

@@ -2,6 +2,46 @@
 
 Рабочая папка для интеграции **Grok Build CLI** через MCP.
 
+## Round 8: единый MCP → три transport
+
+`grok_delegate` 0.4.0 предоставляет один typed MCP surface над тремя явно
+выбираемыми backend-ами:
+
+| Transport | Назначение | Процесс |
+|---|---|---|
+| `legacy` | Совместимый Grok CLI/headless путь | отдельный `grok --single`/legacy delegate |
+| `stdio` | Основной ACP v1 transport (`auto` указывает только сюда) | отдельный `grok agent stdio` на задачу |
+| `websocket` | ACP v1 через loopback WebSocket | управляемый `grok agent serve` на задачу либо явно настроенный loopback daemon |
+
+Общий lifecycle: `TaskPacket → TransportRouter → ACP/legacy executor → git
+readback → WorkReceipt`. Роли `consult`/`skeptic` read-only; `execute`/`fix`
+работают в отдельном git worktree. `completed` для write-роли требует непустой
+diff, изменённые ожидаемые артефакты и независимое test evidence.
+Для `execute`/`fix` обязательны явные `test_commands`; bridge повторно запускает
+их сам без shell и помечает evidence как `source=bridge-verifier`.
+Переиспользуемый worktree снимается до запуска: старый diff или заранее
+созданный ожидаемый файл не может подтвердить новую задачу. Любой changed file,
+не перечисленный в `expected_artifacts`, блокирует receipt.
+
+Новые инструменты: `grok_agent_status`, `grok_agent_start`,
+`grok_agent_poll`, `grok_agent_cancel`, `grok_agent_consult`,
+`grok_agent_review`, `grok_agent_execute`, `grok_agent_fix`. Старые
+`grok_delegate*` сохранены как compatibility surface legacy backend-а.
+
+Quick start для Windows после merge в канонический каталог:
+
+```powershell
+$env:PYTHONPATH = 'D:\ZAI\MCP\Grok CLI'
+$env:GROK_DELEGATE_ALLOWED_ROOTS = 'D:\ZAI\MCP\Grok CLI'
+$env:GROK_DELEGATE_LANES_PARENT = 'D:\ZAI\MCP\grok-lanes'
+$env:GROK_DELEGATE_JOBS_DIR = "$env:LOCALAPPDATA\grok-delegate\jobs"
+py -3 -m grok_delegate.server
+```
+
+Подробности: [Codex setup](docs/CODEX-MCP-SETUP.md),
+[transports](docs/ACP-TRANSPORTS.md), [security](docs/SECURITY.md) и
+[Round 8 handoff](ROUND8-HANDOFF.md).
+
 ## Что здесь подключено
 
 | Компонент | Как подключён | Файл |
@@ -67,11 +107,13 @@ py -3 -m pytest tests -q                  # unit (mocked)
 > синхронного пути теперь другие: idle-таймаут stdio-сервера (30 минут без ответа и progress-
 > уведомлений) и вызовы из субагентов, которые в фон не переводятся никогда.
 
-### Поллить часто — это не совет, а требование
+### Poll — наблюдение, а не механизм продвижения
 
-Измерено 2026-07-26: **фоновая задача продвигается только тогда, когда серверу приходит
-очередной MCP-запрос.** Между запросами лейн заморожен, и каждый вызов подпроцесса округляется
-вверх до интервала поллинга клиента. Один и тот же лейн, менялся только интервал:
+Историческое измерение 2026-07-26 показывало зависимость старого фонового пути
+от частоты poll. В Round 8 работа исполняется собственным bounded
+`ThreadPoolExecutor`; она продолжает выполняться без MCP poll. Poll только читает
+in-memory/durable record. Старое измерение оставлено ниже как контекст устранённого
+дефекта:
 
 | | поллинг 20s | поллинг 5s |
 |---|---|---|
@@ -79,9 +121,9 @@ py -3 -m pytest tests -q                  # unit (mocked)
 | `git rev-parse --verify dev` | 20.005s | 5.011s |
 | `git worktree add` | **отказ по таймауту** | 15.024s, успех |
 
-Практика: держать интервал в 1–3 секунды. Это обходной путь, а не лечение — корень в том, что
-фоновый поток зависит от обработки запросов главным, и правильное решение это вынести исполнение
-в отдельный процесс.
+Round 8 default: concurrency `1`, очередь `8`, отдельная ACP session на job.
+Значения ограничены через `GROK_DELEGATE_CONCURRENCY` (1–2) и
+`GROK_DELEGATE_MAX_QUEUED` (1–32); переполнение возвращает `QUEUE_FULL`.
 
 ### Таймаут — это не отказ окружения
 

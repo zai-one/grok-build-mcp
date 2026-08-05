@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-05T08:23:30Z",
+  "platform": "Windows",
+  "worktree": "D:\\ZAI\\MCP\\grok-lanes\\safe-consult-acp-bridge",
+  "branch": "grok/safe-consult-acp-bridge",
+  "head": "b99b23931917a17ec433db332bc0067189af0eb5",
+  "grok_cli": {
+    "version": "0.2.118",
+    "build": "1e1687c1cf",
+    "channel": "stable",
+    "auth_presence": true,
+    "auth_probe": "grok models",
+    "default_model": "grok-4.5"
+  },
+  "acp": {
+    "protocol_version": 1,
+    "stdio_initialize": "GO",
+    "stdio_session_new": "GO",
+    "stdio_non_git_consult": "GO",
+    "stdio_permission_request": "GO",
+    "stdio_cancel": "GO"
+  },
+  "tests": {
+    "pytest_passed": 362,
+    "pytest_subtests_passed": 43,
+    "self_test": "PASS"
+  },
+  "constraints": {
+    "global_config_mutated": false,
+    "credentials_read": false,
+    "push_or_merge": false,
+    "always_approve_used": false
+  }
+}

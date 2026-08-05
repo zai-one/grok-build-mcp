@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"<SESSION_ID>","prompt":[{"type":"text","text":"Cancellation protocol probe: run a terminal sleep command for 30 seconds, then reply done."}]}}
+{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"<SESSION_ID>"}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"cancelled"}}

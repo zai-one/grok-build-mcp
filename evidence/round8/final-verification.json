@@ -1,0 +1,114 @@
+{
+  "schema_version": "round8-final-verification.v1",
+  "captured_at": "2026-08-05T11:24:00Z",
+  "overall_verdict": "GO",
+  "phase_verdicts": {
+    "P0_protocol_fixtures": "GO",
+    "P1_legacy_cli_headless": "GO",
+    "P2_acp_stdio": "GO",
+    "P3_acp_websocket": "GO",
+    "P4_hardening_evidence": "GO"
+  },
+  "environment": {
+    "platform": "Windows",
+    "grok_version": "0.2.118 (1e1687c1cf) [stable]",
+    "mcp_server": "grok-delegate 0.4.0",
+    "mcp_protocol": "2024-11-05",
+    "acp_protocol": 1,
+    "branch": "grok/safe-consult-acp-bridge",
+    "base_head": "b99b23931917a17ec433db332bc0067189af0eb5",
+    "commits_created": 0,
+    "worktree_diffstat": "32 files, 6274 insertions, 41 deletions"
+  },
+  "protocol": {
+    "real_version_pinned_fixtures": [
+      "initialize", "session consult", "permission deny", "cancel", "websocket upgrade"
+    ],
+    "mcp_initialize": true,
+    "tools_list_count": 16,
+    "legacy_aliases_preserved": 8,
+    "typed_tools": 8
+  },
+  "current_snapshot_live_acceptance": {
+    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-final-live-f864748f",
+    "legacy": {
+      "verdict": "GO",
+      "job_id": "job-01e2e3567df61d6e",
+      "status": "completed",
+      "changed_files": ["legacy-typed-output.txt"],
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "independent_test_passed": true
+    },
+    "stdio": {
+      "verdict": "GO",
+      "job_id": "job-f70ba766f627f6bc",
+      "status": "completed",
+      "session_id_present": true,
+      "changed_files": ["stdio-typed-output.txt"],
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "independent_test_passed": true,
+      "worker_alive_after_shutdown": false
+    },
+    "websocket": {
+      "verdict": "GO",
+      "job_id": "job-c32b279a02292b8c",
+      "status": "completed",
+      "session_id_present": true,
+      "changed_files": ["websocket-typed-output.txt"],
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "independent_test_passed": true,
+      "worker_alive_after_shutdown": false
+    },
+    "mcp_ping_after_jobs": true,
+    "failed_attempts_promoted_to_success": false
+  },
+  "additional_live_acceptance": {
+    "legacy_non_git_consult": "GO",
+    "acp_stdio_non_git_consult": "GO",
+    "acp_stdio_cancel": "GO",
+    "websocket_reconnect_initialize_and_session_load": "GO"
+  },
+  "tests": {
+    "baseline": "362 passed, 43 subtests passed",
+    "round8_targeted": "51 passed, 1 skipped in 24.36s",
+    "root_premerge_focused": "6 passed, 46 deselected in 11.94s",
+    "final_full": "413 passed, 1 skipped, 43 subtests passed in 42.39s",
+    "self_test": "PASS"
+  },
+  "skeptic_gate": {
+    "initial_counts": {"BLOCK": 6, "HIGH": 8, "MEDIUM": 2},
+    "final_open_counts": {"BLOCK": 0, "HIGH": 0},
+    "final_verdict": "PASS"
+  },
+  "root_premerge_gap_recheck": {
+    "implementation_hashes_recorded": true,
+    "stale_or_incomplete_git_snapshot": "GO",
+    "recursive_redaction": "GO",
+    "surviving_worker_gate": "GO",
+    "fresh_stdio_job_id": "job-af10545752371eea",
+    "fresh_stdio_receipt": "completed",
+    "fresh_stdio_nonempty_change": true,
+    "fresh_stdio_bridge_and_independent_tests": true,
+    "independent_skeptic": "GO",
+    "open_block": 0,
+    "open_high": 0,
+    "details": "evidence/round8/root-premerge-fixes.json"
+  },
+  "safety_readback": {
+    "global_config_mutated": false,
+    "push_or_merge": false,
+    "credentials_read": false,
+    "secrets_recorded": false,
+    "always_approve_or_bypass_used": false,
+    "orphan_worker_observed_after_acceptance": false
+  },
+  "residual_risks": [
+    "Windows OS-level sandboxing is not claimed; controls are allowlists, worktrees, permissions, bounded processes and post-readback.",
+    "Grok 0.2.118 external WebSocket daemon should start in the task cwd; managed per-task mode is the supported write default.",
+    "A reconnect proves initialize plus session/load but never replays an in-flight write prompt automatically; it returns ACP_RETRY_REQUIRED.",
+    "One directory-symlink test skips on this host because creating that symlink requires unavailable Windows privilege; deterministic containment tests still pass."
+  ]
+}

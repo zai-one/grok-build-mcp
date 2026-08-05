@@ -1,0 +1,247 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-05T09:09:00Z",
+  "platform": "Windows",
+  "grok_version": "0.2.118 (1e1687c1cf)",
+  "secrets_read_or_recorded": false,
+  "global_config_mutated": false,
+  "push_or_merge": false,
+  "mcp": {
+    "protocol": "2024-11-05",
+    "server_version": "0.4.0",
+    "tools_list_count": 16,
+    "initialize": "GO",
+    "tools_list": "GO",
+    "status_start_poll": "GO",
+    "ping_after_cancel_or_completion": "GO"
+  },
+  "legacy_consult": {
+    "verdict": "GO",
+    "command_shape": "grok --cwd <TEMP> --output-format json --permission-mode plan --max-turns 3 --no-subagents --disable-web-search --single <PROMPT>",
+    "non_git": true,
+    "summary": "ROUND8_LEGACY_CONSULT_OK"
+  },
+  "legacy_execute": {
+    "verdict": "GO",
+    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-legacy-execute-6b7tkge3",
+    "changed_files": ["legacy-output.txt"],
+    "artifact_content": "ROUND8_LEGACY_EXECUTE_OK\n",
+    "external_test": "1 passed",
+    "no_changes": false
+  },
+  "acp_stdio": {
+    "verdict": "GO",
+    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-stdio-live3-e6tna2e6",
+    "mcp_initialize": true,
+    "acp_initialize": true,
+    "acp_protocol_version": 1,
+    "session_created": true,
+    "receipt_status": "completed",
+    "changed_files": ["acp-output.txt"],
+    "artifact_content": "ROUND8_ACP_EXECUTE_OK\n",
+    "test_command": "py -3 -m unittest test_round8 -v",
+    "test_passed": true,
+    "external_test_passed": true,
+    "worker_alive_after_shutdown": false
+  },
+  "acp_stdio_non_git_consult": {
+    "verdict": "GO",
+    "temporary_root": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-consult-cancel-d_vxie3n\\non-git",
+    "git_repository": false,
+    "receipt_status": "completed",
+    "summary": "ROUND8_NON_GIT_CONSULT_OK",
+    "worker_alive_after_shutdown": false
+  },
+  "acp_stdio_cancel": {
+    "verdict": "GO",
+    "temporary_root": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-cancel2-kwkcrwp1",
+    "session_observed_before_cancel": true,
+    "receipt_status": "cancelled",
+    "stop_reason": "cancelled",
+    "worker_alive_after_shutdown": false,
+    "mcp_server_alive_after_cancel": true
+  },
+  "acp_websocket": {
+    "verdict": "GO",
+    "mode": "managed-per-task-loopback-daemon",
+    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-ws-live-c7e5809f",
+    "worktree": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-mcp-ws-live-c7e5809f-lanes2\\round8-ws-live-final",
+    "http_upgrade_101": true,
+    "acp_initialize": true,
+    "acp_protocol_version": 1,
+    "session_id_present": true,
+    "receipt_schema": "grok-work-receipt.v1",
+    "receipt_status": "completed",
+    "receipt_ok": true,
+    "stop_reason": "end_turn",
+    "changed_files": ["ws-output.txt"],
+    "artifact_content": "ROUND8_WS_EXECUTE_OK\n",
+    "test_command": "py -3 -m unittest test_round8 -v",
+    "test_passed": true,
+    "external_test_passed": true,
+    "worker_alive_after_shutdown": false,
+    "mcp_server_alive_after_job": true,
+    "secret_source": "ephemeral child environment",
+    "secret_recorded": false
+  },
+  "websocket_version_note": {
+    "grok_0_2_118_cross_cwd_session_new": "observed stall",
+    "mitigation": "managed daemon starts in exact task cwd; external daemon mode documents same-cwd constraint",
+    "live_reconnect_initialize": true,
+    "live_session_load_after_reconnect": true,
+    "prompt_replayed_automatically": false
+  },
+  "final_typed_acceptance_after_skeptic_fixes": {
+    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-final-live-f864748f",
+    "mcp_protocol": "2024-11-05",
+    "server_version": "0.4.0",
+    "tools_list_count": 16,
+    "status_ok": true,
+    "default_transport": "stdio",
+    "auto_behavior": "stdio-only-no-fallback",
+    "legacy_initial_attempt": {
+      "status": "timeout",
+      "changed_files": [],
+      "cause": "cancellable wrapper did not drain child pipes",
+      "promoted_to_success": false
+    },
+    "legacy_retry_after_pipe_fix": {
+      "job_id": "job-461fb15ae472d88e",
+      "receipt_status": "completed",
+      "receipt_ok": true,
+      "changed_files": ["legacy-typed-output.txt"],
+      "artifact_content": "ROUND8_LEGACY_TYPED_OK\n",
+      "test_command": "py -3 -m unittest test_legacy -v",
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "independent_test_passed": true,
+      "mcp_server_alive": true
+    },
+    "stdio": {
+      "job_id": "job-5f1763725627e01f",
+      "receipt_status": "completed",
+      "receipt_ok": true,
+      "session_id_present": true,
+      "changed_files": ["stdio-typed-output.txt"],
+      "artifact_content": "ROUND8_STDIO_TYPED_OK\n",
+      "test_command": "py -3 -m unittest test_stdio -v",
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "independent_test_passed": true,
+      "worker_alive_after_shutdown": false
+    },
+    "websocket": {
+      "job_id": "job-8a94015a6b65ea08",
+      "receipt_status": "completed",
+      "receipt_ok": true,
+      "session_id_present": true,
+      "changed_files": ["websocket-typed-output.txt"],
+      "artifact_content": "ROUND8_WEBSOCKET_TYPED_OK\n",
+      "test_command": "py -3 -m unittest test_websocket -v",
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "independent_test_passed": true,
+      "worker_alive_after_shutdown": false
+    },
+    "mcp_ping_after_jobs": true,
+    "mcp_server_alive_after_jobs": true
+  },
+  "final_current_snapshot_acceptance": {
+    "captured_at": "2026-08-05T10:25:00Z",
+    "mcp_server_version": "0.4.0",
+    "tools_list_count": 16,
+    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-final-live-f864748f",
+    "legacy": {
+      "job_id": "job-01e2e3567df61d6e",
+      "receipt_status": "completed",
+      "receipt_ok": true,
+      "changed_files": ["legacy-typed-output.txt"],
+      "test_command": "py -3 -m unittest test_legacy -v",
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "artifact_content_ok": true,
+      "independent_test_passed": true
+    },
+    "stdio_initial_attempt": {
+      "job_id": "job-1d5e284cbb7ec0dc",
+      "receipt_status": "cancelled",
+      "promoted_to_success": false,
+      "cause": "agent requested an extra py -c verification command outside exact test_commands; deny-by-default policy rejected it"
+    },
+    "stdio_retry_exact_command": {
+      "job_id": "job-f70ba766f627f6bc",
+      "receipt_status": "completed",
+      "receipt_ok": true,
+      "session_id_present": true,
+      "changed_files": ["stdio-typed-output.txt"],
+      "test_command": "py -3 -m unittest test_stdio -v",
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "artifact_content_ok": true,
+      "independent_test_passed": true,
+      "worker_alive_after_shutdown": false
+    },
+    "websocket_initial_attempt": {
+      "job_id": "job-0174e47e1340301b",
+      "receipt_status": "failed",
+      "promoted_to_success": false,
+      "cause": "managed stderr queue was bounded but not continuously drained, causing false ACP_OUTPUT_LIMIT"
+    },
+    "websocket_retry_after_drain_fix": {
+      "job_id": "job-c32b279a02292b8c",
+      "receipt_status": "completed",
+      "receipt_ok": true,
+      "session_id_present": true,
+      "changed_files": ["websocket-typed-output.txt"],
+      "test_command": "py -3 -m unittest test_websocket -v",
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "artifact_content_ok": true,
+      "independent_test_passed": true,
+      "worker_alive_after_shutdown": false
+    },
+    "mcp_ping_after_jobs": true,
+    "secrets_recorded": false
+  },
+  "root_premerge_current_hash_acceptance": {
+    "captured_at": "2026-08-05T11:24:00Z",
+    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-root-fixes-current-6ln1xxob\\repo",
+    "temporary_repo_head": "ce836387203b9553b0d690976ee9d2b14f0046ab",
+    "mcp_protocol": "2024-11-05",
+    "mcp_server": "grok-delegate 0.4.0",
+    "tools_list_count": 16,
+    "stdio": {
+      "job_id": "job-af10545752371eea",
+      "receipt_status": "completed",
+      "receipt_ok": true,
+      "session_id_present": true,
+      "changed_files": ["current-hash.txt"],
+      "full_changed_files": ["current-hash.txt"],
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "artifact_content_ok": true,
+      "independent_test_passed": true,
+      "worker_alive_after_shutdown": false
+    },
+    "fail_closed_attempts": [
+      {
+        "status": "blocked",
+        "reason": "UNEXPECTED_CHANGED_FILES: __pycache__",
+        "promoted_to_success": false
+      },
+      {
+        "status": "cancelled",
+        "reason": "agent requested a concatenated command outside exact test_commands",
+        "promoted_to_success": false
+      }
+    ],
+    "mcp_ping_after_job": true,
+    "secrets_recorded": false
+  },
+  "transport_verdicts": {
+    "legacy_consult": "GO",
+    "legacy_execute": "GO",
+    "acp_stdio": "GO",
+    "acp_websocket": "GO"
+  }
+}
