@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "grok-task-packet.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["objective", "role", "project_root", "correlation_id"],
+  "properties": {
+    "schema_version": {"const": "grok-task-packet.v1"},
+    "objective": {"type": "string", "minLength": 1, "maxLength": 12000},
+    "role": {"enum": ["consult", "execute", "skeptic", "fix"]},
+    "project_root": {"type": "string", "minLength": 1, "maxLength": 1024},
+    "base_ref": {"type": "string", "minLength": 1, "maxLength": 256, "default": "master"},
+    "model": {"type": "string", "minLength": 1, "maxLength": 128, "default": "grok-4.5"},
+    "reasoning_effort": {"enum": ["low", "medium", "high", "xhigh", "max"], "default": "high"},
+    "permission_profile": {"enum": ["read-only", "workspace"]},
+    "max_turns": {"type": "integer", "minimum": 1, "maximum": 60, "default": 40},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 1800},
+    "inputs": {"$ref": "#/$defs/boundedStringArray"},
+    "constraints": {"$ref": "#/$defs/boundedStringArray"},
+    "acceptance_criteria": {"$ref": "#/$defs/boundedStringArray"},
+    "expected_artifacts": {"$ref": "#/$defs/boundedStringArray"},
+    "test_commands": {"$ref": "#/$defs/boundedStringArray"},
+    "correlation_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
+  },
+  "$defs": {
+    "boundedStringArray": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"role": {"enum": ["execute", "fix"]}}, "required": ["role"]},
+      "then": {
+        "required": ["expected_artifacts", "test_commands"],
+        "properties": {
+          "expected_artifacts": {"minItems": 1},
+          "test_commands": {"minItems": 1}
+        }
+      }
+    }
+  ]
+}

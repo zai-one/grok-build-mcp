@@ -19,6 +19,11 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+try:
+    from .contracts import redact_value
+except ImportError:
+    from contracts import redact_value  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # Mirror jobs.MAX_JOBS so disk and memory stay aligned when wired.
@@ -35,6 +40,7 @@ _SAFE_JOB_ID = re.compile(r"[^A-Za-z0-9._-]+")
 
 # Bound a single job JSON payload so a huge result cannot blow memory on load.
 MAX_JOB_FILE_BYTES = 1_000_000
+JOB_RECORD_SCHEMA = "grok-job-record.v2"
 
 AliveCheck = Callable[[int], bool]
 
@@ -69,12 +75,20 @@ def ensure_jobs_dir(jobs_dir: str | Path) -> Path | None:
     if not path.is_dir():
         logger.warning("jobs_dir is not a directory: %s", path)
         return None
-    # Probe writability with a throwaway touch when possible.
-    probe = path / ".write_probe"
+    # Probe writability with a unique file.  A fixed .write_probe races when a
+    # progress event and a terminal receipt persist concurrently on Windows.
+    probe: Path | None = None
     try:
-        probe.write_text("", encoding="utf-8")
+        fd, raw_probe = tempfile.mkstemp(prefix=".write_probe.", dir=str(path))
+        os.close(fd)
+        probe = Path(raw_probe)
         probe.unlink(missing_ok=True)
     except OSError as exc:
+        if probe is not None:
+            try:
+                probe.unlink(missing_ok=True)
+            except OSError:
+                pass
         logger.warning("jobs_dir unwritable (%s): %s", path, exc)
         return None
     return path
@@ -193,6 +207,8 @@ def apply_stale_running(
         # state with no explanation for the operator or the driver.
         if not out.get("error"):
             out["error"] = "STALE_RUNNING"
+        out["recovery_state"] = "orphaned"
+        out["recoverable"] = bool(out.get("worktree_path"))
     return out
 
 
@@ -358,9 +374,56 @@ def evict_on_disk(
 
 def _serialize_record(record: Mapping[str, Any]) -> str:
     """JSON-encode a job record for disk (UTF-8 safe, sorted keys)."""
-    # Shallow copy so callers cannot observe mutation; drop non-JSON-ish noise.
-    data = dict(record)
-    return json.dumps(data, ensure_ascii=False, sort_keys=True, default=str) + "\n"
+    data = dict(redact_value(dict(record)))
+    data["job_record_schema"] = JOB_RECORD_SCHEMA
+    data["events"] = list(data.get("events") or [])[-64:]
+    result = data.get("result")
+    if isinstance(result, dict):
+        result = dict(result)
+        result["events"] = list(result.get("events") or [])[-64:]
+        result["summary"] = str(result.get("summary") or "")[:16_000]
+        result["tests"] = [
+            {
+                **dict(test),
+                "command": str(test.get("command") or "")[:1_000],
+                "output_preview": str(test.get("output_preview") or "")[:2_000],
+            }
+            for test in list(result.get("tests") or [])[:64]
+            if isinstance(test, Mapping)
+        ]
+        result["findings"] = list(result.get("findings") or [])[:64]
+        for key in ("changed_files", "full_changed_files", "commits", "artifacts"):
+            result[key] = [str(value)[:1_024] for value in list(result.get(key) or [])[:256]]
+        data["result"] = result
+
+    def encode() -> str:
+        return json.dumps(data, ensure_ascii=False, sort_keys=True, default=str) + "\n"
+
+    payload = encode()
+    if len(payload.encode("utf-8")) <= MAX_JOB_FILE_BYTES:
+        return payload
+    # Events are progress convenience; the terminal receipt and state are the
+    # durable contract and must survive restart.
+    data["events"] = []
+    if isinstance(data.get("result"), dict):
+        data["result"]["events"] = []
+        data["result"]["summary"] = str(data["result"].get("summary") or "")[:4_000]
+    payload = encode()
+    if len(payload.encode("utf-8")) <= MAX_JOB_FILE_BYTES:
+        return payload
+    if isinstance(data.get("result"), dict):
+        keep = {
+            "schema_version", "status", "ok", "job_id", "session_id", "transport",
+            "objective_hash", "branch", "worktree_path", "changed_files", "full_changed_files", "commits",
+            "diffstat", "tests", "artifacts", "findings", "blocked_reason",
+            "started_at", "finished_at", "stop_reason", "agent_version",
+            "worker_alive_after_shutdown",
+        }
+        data["result"] = {key: value for key, value in data["result"].items() if key in keep}
+    payload = encode()
+    if len(payload.encode("utf-8")) > MAX_JOB_FILE_BYTES:
+        raise ValueError("bounded job receipt still exceeds reload cap")
+    return payload
 
 
 def _read_job_file(path: Path) -> dict[str, Any] | None:
@@ -387,7 +450,14 @@ def _read_job_file(path: Path) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         logger.warning("load_jobs: non-object job file %s", path)
         return None
-    return data
+    version = data.get("job_record_schema")
+    if version is None:
+        data["migrated_from"] = "grok-job-record.v1"
+        data["job_record_schema"] = JOB_RECORD_SCHEMA
+    elif version != JOB_RECORD_SCHEMA:
+        logger.warning("load_jobs: unsupported job schema %r in %s", version, path)
+        return None
+    return dict(redact_value(data))
 
 
 def _as_float(value: Any, *, default: float = 0.0) -> float:
@@ -400,6 +470,7 @@ def _as_float(value: Any, *, default: float = 0.0) -> float:
 __all__ = [
     "DEFAULT_MAX_JOBS",
     "MAX_JOB_FILE_BYTES",
+    "JOB_RECORD_SCHEMA",
     "STATE_DONE",
     "STATE_ERROR",
     "STATE_RUNNING",

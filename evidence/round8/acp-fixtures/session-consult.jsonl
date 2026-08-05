@@ -1,0 +1,5 @@
+{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"<CWD>","mcpServers":[]}}
+{"jsonrpc":"2.0","id":1,"result":{"sessionId":"<SESSION_ID>"}}
+{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"<SESSION_ID>","prompt":[{"type":"text","text":"Read-only protocol smoke. Reply with exactly ROUND8_ACP_STDIO_OK and do not use tools."}]}}
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"<SESSION_ID>","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ROUND8_ACP_STDIO_OK"}}}}
+{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}

@@ -35,6 +35,8 @@ ALLOWED_FIELDS = frozenset(
         "ts",
         "branch",
         "worktree_path",
+        "transport",
+        "correlation_id",
     }
 )
 
@@ -93,7 +95,7 @@ def sanitize_event(event: Mapping[str, Any]) -> dict[str, Any]:
         # Drop oversized string fields (e.g. accidental summary dumps).
         if isinstance(value, str) and len(value) > 2000:
             value = value[:2000] + "…(truncated)"
-        if key in {"cwd", "worktree_path", "base_ref", "lane", "branch", "principal", "tool"}:
+        if key in {"cwd", "worktree_path", "base_ref", "lane", "branch", "principal", "tool", "transport", "correlation_id"}:
             if isinstance(value, str):
                 value = _redact_pathish(value)
         out[key] = value

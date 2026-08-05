@@ -1,0 +1,6 @@
+{"direction":"client->server","transport":"websocket","message":{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"grok-delegate","version":"0.4.0"}}}}
+{"direction":"server->client","transport":"websocket","message":{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentCapabilities":{},"authMethods":[],"_meta":{"agentVersion":"0.2.118"}}}}
+{"direction":"client->server","transport":"websocket","message":{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"<TEMP_WORKTREE>","mcpServers":[]}}}
+{"direction":"server->client","transport":"websocket","message":{"jsonrpc":"2.0","id":1,"result":{"sessionId":"<REDACTED_SESSION_ID>"}}}
+{"direction":"client->server","transport":"websocket","message":{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"<REDACTED_SESSION_ID>","prompt":[{"type":"text","text":"<BOUNDED_TASK_PROMPT>"}]}}}
+{"direction":"server->client","transport":"websocket","message":{"jsonrpc":"2.0","id":2,"result":{"stopReason":"end_turn"}}}

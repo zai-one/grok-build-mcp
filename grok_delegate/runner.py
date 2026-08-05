@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 try:
     from .guard import (
@@ -795,6 +795,29 @@ def collect_diff(
     git = git_runner or default_git_runner
     wt = Path(worktree_path)
     commits: list[str] = []
+
+    def snapshot_failure(probe: str, result: Mapping[str, Any]) -> dict[str, Any]:
+        """Return a bounded failure without copying possibly-secret git output."""
+        return {
+            "ok": False,
+            "error": "DIFF_SNAPSHOT_FAILED",
+            "error_code": "DIFF_SNAPSHOT_FAILED",
+            "failed_probe": probe,
+            "probe_returncode": result.get("returncode"),
+            "probe_timed_out": bool(result.get("timedOut")),
+            "probe_missing": bool(result.get("missing")),
+            "changed_files": [],
+            "diffstat": "",
+            "commits": [],
+        }
+
+    def probe_failed(result: Mapping[str, Any]) -> bool:
+        return (
+            result.get("returncode") != 0
+            or bool(result.get("timedOut"))
+            or bool(result.get("missing"))
+        )
+
     name_status = git(
         ["-C", str(wt), "diff", "--name-only", "HEAD"],
         None,
@@ -812,6 +835,14 @@ def collect_diff(
         None,
         timeout,
     )
+
+    for probe, result in (
+        ("diff_name_only_head", name_status),
+        ("status_porcelain", porcelain),
+        ("diff_stat_head", stat),
+    ):
+        if probe_failed(result):
+            return snapshot_failure(probe, result)
 
     changed: list[str] = []
     if name_status.get("returncode") == 0:
@@ -845,22 +876,24 @@ def collect_diff(
             None,
             timeout,
         )
-        if committed.get("returncode") == 0:
-            for line in (committed.get("stdout") or "").splitlines():
-                p = line.strip()
-                if p and p not in changed:
-                    changed.append(p)
+        if probe_failed(committed):
+            return snapshot_failure("diff_name_only_base", committed)
+        for line in (committed.get("stdout") or "").splitlines():
+            p = line.strip()
+            if p and p not in changed:
+                changed.append(p)
 
         log = git(
             ["-C", str(wt), "log", "--oneline", f"{base}..HEAD"],
             None,
             timeout,
         )
-        if log.get("returncode") == 0:
-            for line in (log.get("stdout") or "").splitlines():
-                entry = line.strip()
-                if entry:
-                    commits.append(entry)
+        if probe_failed(log):
+            return snapshot_failure("log_base_head", log)
+        for line in (log.get("stdout") or "").splitlines():
+            entry = line.strip()
+            if entry:
+                commits.append(entry)
 
         if not diffstat:
             committed_stat = git(
@@ -868,10 +901,11 @@ def collect_diff(
                 None,
                 timeout,
             )
-            if committed_stat.get("returncode") == 0:
-                diffstat = (committed_stat.get("stdout") or "").strip()
-                if len(diffstat) > 8000:
-                    diffstat = diffstat[:8000] + "\n…(truncated)"
+            if probe_failed(committed_stat):
+                return snapshot_failure("diff_stat_base", committed_stat)
+            diffstat = (committed_stat.get("stdout") or "").strip()
+            if len(diffstat) > 8000:
+                diffstat = diffstat[:8000] + "\n…(truncated)"
 
     return {
         "ok": True,
@@ -1177,6 +1211,27 @@ def delegate(
     # R6: base_ref-aware so committed lane work is reported, not just dirty files.
     report_progress(phase=PHASE_COLLECT, phase_at=time.time())
     diff = collect_diff(wt, git_runner=git_runner, base_ref=base_ref)
+
+    if not diff.get("ok"):
+        return {
+            "ok": False,
+            "lane": normalized,
+            "branch": branch,
+            "worktree_path": wt,
+            "turns_used": run_result.get("turns_used"),
+            "status": "failed",
+            "summary": "",
+            "changed_files": [],
+            "diffstat": "",
+            "commits": [],
+            "missing_anchors": missing_anchors,
+            "verdict": None,
+            "verdict_status": "unavailable",
+            "error": "DIFF_SNAPSHOT_FAILED",
+            "error_code": "DIFF_SNAPSHOT_FAILED",
+            "failed_probe": diff.get("failed_probe"),
+            "message": "mandatory git diff snapshot probe failed",
+        }
 
     # R7-C: trust git over prose. A verdict claiming files or a commit that the
     # diff cannot confirm is VERDICT_UNSUPPORTED, so a lane cannot self-certify.

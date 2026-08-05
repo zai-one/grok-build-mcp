@@ -57,6 +57,14 @@ _PROGRESS_FIELDS = frozenset(
         "last_step_at",
         "worktree_path",
         "reusing",
+        # Round 8 typed-agent progress.  Events are bounded before they reach
+        # this module; lifecycle state/result remain protected by the whitelist.
+        "events",
+        "transport",
+        "session_id",
+        "agent_pid",
+        "correlation_id",
+        "cancel_requested",
     }
 )
 
@@ -80,7 +88,8 @@ def _persist(record: "dict[str, Any]") -> None:
     if _JOBS_DIR is None:
         return
     try:
-        jobs_store.save_job(record, _JOBS_DIR)
+        if jobs_store.save_job(record, _JOBS_DIR):
+            jobs_store.evict_on_disk(_JOBS_DIR, max_jobs=MAX_JOBS)
     except Exception:  # noqa: BLE001 — a jobs-dir problem must not fail the lane
         pass
 
@@ -149,6 +158,10 @@ def update_job(job_id: str, fields: "dict[str, Any]") -> dict[str, Any] | None:
         phase_changed = "phase" in allowed and allowed["phase"] != rec.get("phase")
         rec.update(allowed)
         to_persist = dict(rec)
+        # Serialize the durable write with lifecycle mutation.  Persisting a
+        # copied running record after releasing this lock allowed a concurrent
+        # terminal _finish() write to be overwritten by stale progress.
+        _persist(to_persist)
     if phase_changed:
         logger.info(
             "job %s lane=%s phase=%s step=%s",
@@ -157,9 +170,25 @@ def update_job(job_id: str, fields: "dict[str, Any]") -> dict[str, Any] | None:
             to_persist.get("phase"),
             to_persist.get("last_step"),
         )
-    if to_persist is not None:
-        _persist(to_persist)
     return to_persist
+
+
+def cancel_queued_job(job_id: str, result: dict[str, Any]) -> dict[str, Any] | None:
+    """Atomically terminalize a Future that was cancelled before it started."""
+    with _LOCK:
+        rec = _JOBS.get(str(job_id))
+        if rec is None:
+            return None
+        if rec.get("state") != STATE_RUNNING or rec.get("phase") != PHASE_QUEUED:
+            return dict(rec)
+        rec["state"] = STATE_DONE
+        rec["result"] = dict(result)
+        rec["error"] = None
+        rec["finished_at"] = time.time()
+        rec["cancel_requested"] = True
+        snapshot_record = dict(rec)
+        _persist(snapshot_record)
+        return snapshot_record
 
 
 def _bind_progress_sink(job_id: str | None) -> None:
@@ -234,15 +263,20 @@ def start_job(
                 rec["error"] = error
                 rec["finished_at"] = time.time()
                 to_persist = dict(rec)
-        if to_persist is not None:
-            _persist(to_persist)
+                # See update_job(): durable ordering must match in-memory
+                # lifecycle ordering, especially at the running->terminal edge.
+                _persist(to_persist)
 
     def _run() -> None:
         _bind_progress_sink(jid)
         try:
             result = work()
             _finish(
-                STATE_DONE if result.get("ok") else STATE_ERROR,
+                # A cancellation receipt is a successfully processed terminal
+                # lifecycle outcome, not a transport crash.
+                STATE_DONE
+                if result.get("ok") or result.get("status") == "cancelled"
+                else STATE_ERROR,
                 result=result,
                 error=result.get("error"),
             )

@@ -1,0 +1,121 @@
+{
+  "schema_version": "round8-root-premerge-fixes.v1",
+  "captured_at": "2026-08-05T11:24:00Z",
+  "source_thread_id": "019fd0ad-26bc-7662-980a-d864d0ffe71d",
+  "branch": "grok/safe-consult-acp-bridge",
+  "base_head": "b99b23931917a17ec433db332bc0067189af0eb5",
+  "commits_created": 0,
+  "implementation_hashes": {
+    "grok_delegate/contracts.py": "f407464da4ad74de3a7fe1be797d363d32b7a59871f062c5be2becf77f83f42a",
+    "grok_delegate/runner.py": "4558c79c0dc39e56233a015fbfc9378584fc014890c49ac7977ba9e2779ca8f2",
+    "grok_delegate/agent_runtime.py": "4cae800445506f34ddd35d9e73c771ceb027bd3d1f1b066a6223ea18c7d6a365",
+    "grok_delegate/acp.py": "7327f581ee179c5a3e92bbce87e694d24a27a78729e456edbce0ef50af04a3c0",
+    "grok_delegate/jobs_store.py": "1bab8aa69fad65de4580e2e48604d5d6b17099914e500d33c7de00e838208c6b",
+    "tests/test_round8_bridge.py": "14c1f811214be6e1d921721cfd7179440d3a356f2b8a2f5e8979b28d3884df02"
+  },
+  "before_reproductions": {
+    "command": "py -3 -m pytest -q tests/test_round8_bridge.py -k \"reused_worktree_preexisting or bare_credentials_and_pem or surviving_worker_forces\"",
+    "result": "3 failed",
+    "stale_worktree": {
+      "status": "completed",
+      "ok": true,
+      "changed_files": ["expected.txt"],
+      "attacker_exists": true
+    },
+    "redaction": {
+      "bare_credentials_redacted": false,
+      "pem_marker_redacted": false,
+      "mapping_key_persisted": true,
+      "live_receipt_secret_present": true
+    },
+    "surviving_worker": {
+      "status": "completed",
+      "ok": true,
+      "worker_alive_after_shutdown": true
+    }
+  },
+  "after_reproductions": {
+    "stale_committed_or_dirty_file": {
+      "status": "blocked",
+      "ok": false,
+      "changed_files": ["expected.txt"],
+      "full_changed_files": ["expected.txt", "attacker.py"],
+      "blocked_reason": "UNEXPECTED_CHANGED_FILES: attacker.py"
+    },
+    "incomplete_post_snapshot": {
+      "status": "failed",
+      "ok": false,
+      "changed_files": [],
+      "full_changed_files": [],
+      "blocked_reason": "DIFF_SNAPSHOT_FAILED",
+      "error_code": "DIFF_SNAPSHOT_FAILED",
+      "failed_probe": "status_porcelain",
+      "tests": [],
+      "attacker_exists": true
+    },
+    "redaction": {
+      "lower_and_upper_bare_credentials": "redacted",
+      "pem_begin_end_complete_unterminated": "redacted",
+      "mapping_keys_values": "redacted",
+      "list_tuple_set_frozenset": "redacted",
+      "unknown_scalar_stringification": "redacted",
+      "acp_summary_events": "redacted",
+      "durable_json_and_reload": "redacted",
+      "live_final_receipt": "redacted"
+    },
+    "surviving_worker": {
+      "status": "failed",
+      "ok": false,
+      "blocked_reason": "WORKER_STILL_ALIVE_AFTER_SHUTDOWN",
+      "error_code": "WORKER_STILL_ALIVE_AFTER_SHUTDOWN",
+      "error": "WORKER_STILL_ALIVE_AFTER_SHUTDOWN",
+      "worker_alive_after_shutdown": true
+    }
+  },
+  "tests": {
+    "focused_command": "py -3 -m pytest -q tests/test_round8_bridge.py -k \"reused_worktree_preexisting or incomplete_post_git_snapshot or verifier_cannot_revert or bare_credentials_and_pem or surviving_worker_forces\"",
+    "focused_result": "6 passed, 46 deselected in 11.94s",
+    "round8_command": "py -3 -m pytest -q tests/test_round8_bridge.py",
+    "round8_result": "51 passed, 1 skipped in 24.36s",
+    "full_command": "py -3 -m pytest -q",
+    "full_result": "413 passed, 1 skipped, 43 subtests passed in 42.39s",
+    "self_test_command": "py -3 -m grok_delegate --self-test",
+    "self_test_result": "PASS"
+  },
+  "current_hash_live_receipt": {
+    "temporary_repo": "C:\\Users\\codex\\AppData\\Local\\Temp\\round8-root-fixes-current-6ln1xxob\\repo",
+    "temporary_repo_head": "ce836387203b9553b0d690976ee9d2b14f0046ab",
+    "mcp_protocol": "2024-11-05",
+    "mcp_server": "grok-delegate 0.4.0",
+    "tools_list_count": 16,
+    "job_id": "job-af10545752371eea",
+    "transport": "stdio",
+    "state": "done",
+    "status": "completed",
+    "ok": true,
+    "session_id_present": true,
+    "changed_files": ["current-hash.txt"],
+    "full_changed_files": ["current-hash.txt"],
+    "test_source": "bridge-verifier",
+    "test_passed": true,
+    "artifact_exact": true,
+    "external_test_passed": true,
+    "worker_alive_after_shutdown": false,
+    "blocked_reason": null,
+    "mcp_ping_after_job": true
+  },
+  "failed_live_attempts_promoted_to_success": false,
+  "independent_skeptic": {
+    "verdict": "GO",
+    "open_block": 0,
+    "open_high": 0,
+    "mode": "read-only",
+    "current_hashes_verified": true,
+    "grok_or_live_transport_run_by_skeptic": false
+  },
+  "safety": {
+    "global_config_mutated": false,
+    "commit_merge_push": false,
+    "secrets_recorded": false
+  }
+}

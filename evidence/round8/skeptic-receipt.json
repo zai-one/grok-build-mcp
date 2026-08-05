@@ -1,0 +1,70 @@
+{
+  "schema_version": "round8-skeptic-receipt.v1",
+  "captured_at": "2026-08-05T11:24:00Z",
+  "reviewers_distinct_from_executor": true,
+  "initial_review": {
+    "mode": "independent-read-only",
+    "verdict": "NO-GO",
+    "finding_counts": {"BLOCK": 6, "HIGH": 8, "MEDIUM": 2},
+    "scope": [
+      "protocol correctness", "auth boundary", "path confinement",
+      "permission escalation", "process lifecycle", "durability",
+      "cancellation", "Windows framing and process behavior",
+      "fake versus live evidence", "false-success states"
+    ]
+  },
+  "fixer": {
+    "mode": "confirmed-findings-only",
+    "named_findings_closed": [
+      "B-01", "B-02", "B-03", "B-04", "B-05", "B-06",
+      "H-01", "H-02", "H-03", "H-04", "H-05", "H-06", "H-07", "H-08",
+      "reused-worktree stale diff", "durable stale persist race",
+      "cancel during git preflight", "pre-consumer output buffering",
+      "cancel before WebSocket session", "post-verifier stale diff",
+      "queued-job cancel"
+    ],
+    "targeted_readback": "79 passed, 1 skipped",
+    "full_readback_at_fixer_snapshot": "405 passed, 1 skipped, 43 subtests passed"
+  },
+  "recheck": {
+    "mode": "different-independent-read-only-reviewer",
+    "original_block_high_closed": true,
+    "late_findings": [
+      "managed WebSocket stderr queue was not continuously drained",
+      "chunk-local stderr redaction could miss a marker split across reader chunks"
+    ],
+    "late_findings_closed_with_regressions": true,
+    "final_open_counts": {"BLOCK": 0, "HIGH": 0},
+    "final_boundary_reproducer": {
+      "secret_present": false,
+      "redaction_marker_present": true,
+      "overflow": false
+    }
+  },
+  "final_test_readback": {
+    "round8_targeted": "51 passed, 1 skipped in 24.36s",
+    "root_premerge_focused": "6 passed, 46 deselected in 11.94s",
+    "full": "413 passed, 1 skipped, 43 subtests passed in 42.39s"
+  },
+  "root_premerge_recheck": {
+    "mode": "independent-read-only",
+    "reviewed_current_hashes": true,
+    "named_gaps": [
+      "stale or incomplete full git snapshot",
+      "recursive credential and PEM redaction across live and durable surfaces",
+      "surviving worker terminal failure"
+    ],
+    "bypasses_reproduced_and_closed": [
+      "nonzero timedOut or missing mandatory git probes",
+      "mapping keys and live finalized receipt",
+      "standalone PEM END marker",
+      "tuple containers and arbitrary scalar objects"
+    ],
+    "focused_result": "6 passed, 46 deselected in 11.70s",
+    "round8_result": "51 passed, 1 skipped in 24.53s",
+    "final_open_counts": {"BLOCK": 0, "HIGH": 0},
+    "verdict": "GO",
+    "worktree_or_config_changed_by_reviewer": false
+  },
+  "verdict": "PASS"
+}
