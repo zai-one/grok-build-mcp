@@ -1,5 +1,16 @@
 # grok-delegate (MCP)
 
+## ⚡ Host loop (Session v1.2)
+
+Unofficial bridge. **Save host tokens:**
+
+1. `grok_agent_session_begin({"goal":"…","host_budget":"small"})`  
+2. Loop `grok_agent_session_next` → do only `card` (`host_cmd` | `mcp_tool` | `end`)  
+3. Stop when `done=true`
+
+Skill **`grok-mcp` v1.0** enforces this. No OAuth in MCP config — CLI login only.
+
+
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-purple.svg)](https://modelcontextprotocol.io/)

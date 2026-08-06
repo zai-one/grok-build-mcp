@@ -1,4 +1,4 @@
-"""Adaptive Session Protocol v1.1 — plan compiler + budget guard.
+"""Adaptive Session Protocol v1.2 — plan compiler + budget guard + navigator.
 
 Unofficial community project. No OAuth/API material in outputs.
 """
@@ -37,6 +37,7 @@ _ALLOW = frozenset(
     {
         "grok_agent_session_begin",
         "grok_agent_session_tick",
+        "grok_agent_session_next",
         "grok_agent_session_end",
         "grok_agent_status",
         "grok_agent_economy",
@@ -182,7 +183,7 @@ def _shrink(obj: dict[str, Any], soft_max: int = _PAYLOAD_SOFT_MAX) -> dict[str,
     if _json_size(out) > soft_max:
         out = {
             "ok": out.get("ok", True),
-            "protocol": out.get("protocol", "session/v1.1"),
+            "protocol": out.get("protocol", "session/v1.2"),
             "session_id": out.get("session_id"),
             "mode": out.get("mode"),
             "plan": out.get("plan", [])[:3] if isinstance(out.get("plan"), list) else [],
@@ -278,44 +279,60 @@ def compile_plan(mode: str, goal: str, gate_ready: bool) -> list[dict[str, Any]]
     """≤5 steps; tools from allowlist only."""
     g = _clip(scrub_secrets(goal), 200) if goal else ""
     steps: list[dict[str, Any]] = []
-    if mode == "install" or not gate_ready and mode not in {"triage", "update", "feedback"}:
-        return steps  # host_script drives install; no MCP tools yet
+    if mode == "install" or (not gate_ready and mode not in {"triage", "update", "feedback"}):
+        return [
+            _step(1, "grok_agent_session_next", "Get one install command card"),
+            _step(2, "grok_agent_session_next", "Confirm gate / next card"),
+            _step(3, "grok_agent_session_end", "Receipt after install"),
+        ]
     if mode == "update":
-        return steps
+        return [
+            _step(1, "grok_agent_session_next", "Update command card"),
+            _step(2, "grok_agent_session_end", "Receipt"),
+        ]
     if mode == "feedback":
-        return steps
+        return [
+            _step(1, "grok_agent_session_next", "Issue draft card"),
+            _step(2, "grok_agent_session_end", "Done"),
+        ]
     if mode == "triage":
         steps.append(_step(1, "grok_agent_status", "Confirm gate/runtime"))
         steps.append(_step(2, "grok_delegate_doctor", "Diagnose CLI/auth"))
         steps.append(_step(3, "grok_agent_session_end", "Receipt + next"))
         return steps[:5]
     if mode == "brainstorm":
-        steps.append(_step(1, "grok_agent_consult", "Answer with tight goal", {"objective": g} if g else {}))
-        steps.append(_step(2, "grok_agent_session_end", "Short receipt"))
-        return steps
+        return [
+            _step(1, "grok_agent_consult", "Answer with tight goal", {"objective": g} if g else {}),
+            _step(2, "grok_agent_session_end", "Short receipt"),
+        ]
     if mode == "execute":
-        steps.append(
+        return [
             _step(
                 1,
                 "grok_agent_execute",
                 "Implement only listed scope",
                 {"objective": g, "max_turns": ECONOMY_DEFAULT_MAX_TURNS} if g else {"max_turns": ECONOMY_DEFAULT_MAX_TURNS},
-            )
-        )
-        steps.append(_step(2, "grok_agent_session_tick", "Compact progress"))
-        steps.append(_step(3, "grok_agent_poll", "Job receipt fields only"))
-        steps.append(_step(4, "grok_agent_session_end", "Host receipt"))
-        return steps
+            ),
+            _step(2, "grok_agent_poll", "Job receipt fields only"),
+            _step(3, "grok_agent_session_end", "Host receipt"),
+        ]
     if mode == "verify":
-        steps.append(_step(1, "grok_agent_poll", "Existing job status"))
-        steps.append(_step(2, "grok_agent_status", "Runtime check"))
-        steps.append(_step(3, "grok_agent_session_end", "Receipt"))
-        return steps
-    # operate
-    steps.append(_step(1, "grok_agent_status", "Once per session"))
-    steps.append(_step(2, "grok_agent_economy", "Playbook once"))
-    steps.append(_step(3, "grok_agent_session_end", "Or pick execute/brainstorm"))
-    return steps[:5]
+        return [
+            _step(1, "grok_agent_poll", "Existing job status"),
+            _step(2, "grok_agent_status", "Runtime check"),
+            _step(3, "grok_agent_session_end", "Receipt"),
+        ]
+    # operate / triage already handled above for triage
+    if mode == "triage":
+        return [
+            _step(1, "grok_agent_status", "Confirm gate/runtime"),
+            _step(2, "grok_delegate_doctor", "Diagnose CLI/auth"),
+            _step(3, "grok_agent_session_end", "Receipt + next"),
+        ]
+    return [
+        _step(1, "grok_agent_status", "Once per session"),
+        _step(2, "grok_agent_session_end", "Pick execute/brainstorm via new begin"),
+    ]
 
 
 def _budget(host_budget: str, max_tool_calls: int | None) -> dict[str, Any]:
@@ -341,9 +358,8 @@ def _host_script(mode: str, plan: list[dict[str, Any]], budget: Mapping[str, Any
             return _clip("Run skills/grok-mcp/scripts/update_mcp.sh then session_begin.", _SCRIPT_MAX)
         if mode == "feedback":
             return _clip("Fill templates/issue.md; draft_issue.py; no secrets.", _SCRIPT_MAX)
-    tools = " → ".join(s["tool"].replace("grok_agent_", "") for s in plan[:5])
     return _clip(
-        f"Follow plan only ({tools}). Max tools={budget.get('max_tool_calls')} polls={budget.get('max_polls')}. No tools outside plan/recommended. End via session_end.",
+        f"Call grok_agent_session_next until done=true (budget tools={budget.get('max_tool_calls')} polls={budget.get('max_polls')}). Do not invent tools. Then stop.",
         _SCRIPT_MAX,
     )
 
@@ -364,7 +380,7 @@ def session_begin(
             "ok": False,
             "error_code": "INTENT_INVALID",
             "error": f"intent must be one of: {', '.join(sorted(INTENTS))}",
-            "protocol": "session/v1.1",
+            "protocol": "session/v1.2",
         }
     hb = (host_budget or "small").strip().lower()
     if hb not in HOST_BUDGETS:
@@ -372,7 +388,7 @@ def session_begin(
             "ok": False,
             "error_code": "BUDGET_INVALID",
             "error": f"host_budget must be one of: {', '.join(sorted(HOST_BUDGETS))}",
-            "protocol": "session/v1.1",
+            "protocol": "session/v1.2",
         }
     goal_s = scrub_secrets(_clip(goal or "", _GOAL_MAX))
     enable_session_economy()
@@ -390,9 +406,14 @@ def session_begin(
     plan = compile_plan(mode, goal_s, bool(gate.get("ready")))
     # recommended = unique plan tools + route tools
     rec_tools: list[str] = []
-    for t in [s["tool"] for s in plan] + tools + ["grok_agent_session_tick", "grok_agent_session_end"]:
-        if t in _ALLOW and t not in rec_tools:
-            rec_tools.append(t)
+    for tname in (
+        ["grok_agent_session_next"]
+        + [s["tool"] for s in plan]
+        + tools
+        + ["grok_agent_session_tick", "grok_agent_session_end"]
+    ):
+        if tname in _ALLOW and tname not in rec_tools:
+            rec_tools.append(tname)
     bpreset = _budget(hb, max_tool_calls)
     budget = {
         "host_budget": hb,
@@ -422,7 +443,7 @@ def session_begin(
     script = _host_script(mode, plan, budget)
     out: dict[str, Any] = {
         "ok": True,
-        "protocol": "session/v1.1",
+        "protocol": "session/v1.2",
         "session_id": sid,
         "mode": mode,
         "gate_status": {
@@ -556,7 +577,7 @@ def session_tick(
 
     out: dict[str, Any] = {
         "ok": True,
-        "protocol": "session/v1.1",
+        "protocol": "session/v1.2",
         "session_id": sid,
         "job_id": jid,
         "state": state,
@@ -587,6 +608,231 @@ def session_tick(
         if out["job"].get("summary"):
             out["job"]["summary"] = _clip(str(out["job"]["summary"]), 160)
     return _shrink(out)
+
+
+
+def session_next(
+    *,
+    session_id: str | None = None,
+    advance: bool = True,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Return the single next action card — host should only call this until done."""
+    enable_session_economy()
+    sid = (session_id or "").strip() or None
+    sess = _sessions.get(sid) if sid else None
+    if sess is None:
+        return _shrink(
+            {
+                "ok": False,
+                "error_code": "SESSION_UNKNOWN",
+                "error": "call session_begin first",
+                "protocol": "session/v1.2",
+                "done": True,
+                "card": {"kind": "end", "why": "no session"},
+            }
+        )
+    # count as a poll/tool for budget
+    sess["polls_used"] = int(sess.get("polls_used") or 0) + 1
+    sess["tool_calls_used"] = int(sess.get("tool_calls_used") or 0) + 1
+    budget = dict(sess.get("budget") or _BUDGET_PRESETS["small"])
+    max_t = int(budget.get("max_tool_calls") or 6)
+    max_p = int(budget.get("max_polls") or 4)
+    used_t = int(sess.get("tool_calls_used") or 0)
+    used_p = int(sess.get("polls_used") or 0)
+    plan = list(sess.get("plan") or [])
+    step_i = int(sess.get("plan_step") or 0)
+    mode = str(sess.get("mode") or "operate")
+    goal = str(sess.get("goal") or "")
+
+    if used_t >= max_t or used_p >= max_p:
+        return _shrink(
+            {
+                "ok": True,
+                "protocol": "session/v1.2",
+                "session_id": sid,
+                "done": True,
+                "force_end": True,
+                "card": {"kind": "end", "tool": "grok_agent_session_end", "args": {"session_id": sid}, "why": "budget exhausted"},
+                "host_message": "Budget exhausted — call session_end now.",
+                "budget_remaining": {"tool_calls": 0, "polls": 0},
+            }
+        )
+
+    # Install/update host command cards before plan tools exhaust
+    if mode == "install" and step_i == 0:
+        card = {
+            "kind": "host_cmd",
+            "cmd": "curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh | bash",
+            "why": "One-command EASY install (then grok login)",
+            "args": {},
+        }
+        if advance:
+            sess["plan_step"] = 1
+        return _shrink(
+            {
+                "ok": True,
+                "protocol": "session/v1.2",
+                "session_id": sid,
+                "done": False,
+                "step": 0,
+                "steps_left": max(0, len(plan) - 1),
+                "card": card,
+                "host_message": _clip("Run the install cmd, then grok login, then session_next again.", 200),
+                "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
+            }
+        )
+    if mode == "install" and step_i == 1:
+        if advance:
+            sess["plan_step"] = 2
+        return _shrink(
+            {
+                "ok": True,
+                "protocol": "session/v1.2",
+                "session_id": sid,
+                "done": False,
+                "step": 1,
+                "card": {
+                    "kind": "host_cmd",
+                    "cmd": "grok login && grok --version",
+                    "why": "Auth gate",
+                },
+                "host_message": "Login if needed, then session_next (or session_end).",
+                "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
+            }
+        )
+    if mode == "update" and step_i == 0:
+        if advance:
+            sess["plan_step"] = 1
+        return _shrink(
+            {
+                "ok": True,
+                "protocol": "session/v1.2",
+                "session_id": sid,
+                "done": False,
+                "card": {
+                    "kind": "host_cmd",
+                    "cmd": "bash skills/grok-mcp/scripts/update_mcp.sh 2>/dev/null || curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh | bash",
+                    "why": "Update package + skills",
+                },
+                "host_message": "Run update cmd, then session_end.",
+                "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
+            }
+        )
+    if mode == "feedback" and step_i == 0:
+        if advance:
+            sess["plan_step"] = 1
+        draft_note = scrub_secrets(_clip(note or goal or "bug report", 200))
+        return _shrink(
+            {
+                "ok": True,
+                "protocol": "session/v1.2",
+                "session_id": sid,
+                "done": False,
+                "card": {
+                    "kind": "mcp_tool",
+                    "tool": "grok_agent_session_end",
+                    "args": {"session_id": sid, "suggest_issue": True, "note": draft_note},
+                    "why": "Scrubbed issue draft",
+                },
+                "host_message": "Call session_end with suggest_issue for draft.",
+                "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
+            }
+        )
+
+    # Generic: emit current plan step as card
+    if step_i >= len(plan):
+        return _shrink(
+            {
+                "ok": True,
+                "protocol": "session/v1.2",
+                "session_id": sid,
+                "done": True,
+                "force_end": True,
+                "card": {
+                    "kind": "end",
+                    "tool": "grok_agent_session_end",
+                    "args": {"session_id": sid},
+                    "why": "plan complete",
+                },
+                "host_message": "Plan complete — session_end.",
+                "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
+            }
+        )
+
+    # Skip navigator placeholders in plan (no recursion / no double budget)
+    while step_i < len(plan) and plan[step_i].get("tool") == "grok_agent_session_next":
+        step_i += 1
+        if advance:
+            sess["plan_step"] = step_i
+    if step_i >= len(plan):
+        return _shrink(
+            {
+                "ok": True,
+                "protocol": "session/v1.2",
+                "session_id": sid,
+                "done": True,
+                "force_end": True,
+                "card": {
+                    "kind": "end",
+                    "tool": "grok_agent_session_end",
+                    "args": {"session_id": sid},
+                    "why": "plan complete",
+                },
+                "host_message": "Plan complete — session_end.",
+                "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
+            }
+        )
+    step = plan[step_i]
+    tool = step.get("tool")
+
+    if tool == "grok_agent_session_end":
+        if advance:
+            sess["plan_step"] = step_i + 1
+        return _shrink(
+            {
+                "ok": True,
+                "protocol": "session/v1.2",
+                "session_id": sid,
+                "done": True,
+                "force_end": True,
+                "card": {
+                    "kind": "end",
+                    "tool": "grok_agent_session_end",
+                    "args": {"session_id": sid},
+                    "why": step.get("why") or "end",
+                },
+                "host_message": "Call session_end now.",
+                "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
+            }
+        )
+
+    card = {
+        "kind": "mcp_tool",
+        "tool": tool,
+        "args": dict(step.get("args_hint") or {}),
+        "why": step.get("why") or "",
+    }
+    # inject session id into poll/tick if needed
+    if tool in {"grok_agent_session_tick", "grok_agent_poll"} and "session_id" not in card["args"]:
+        card["args"]["session_id"] = sid
+    if advance:
+        sess["plan_step"] = step_i + 1
+    return _shrink(
+        {
+            "ok": True,
+            "protocol": "session/v1.2",
+            "session_id": sid,
+            "done": False,
+            "step": step_i,
+            "steps_left": max(0, len(plan) - step_i - 1),
+            "card": card,
+            "host_message": _clip(f"Call {tool} with provided args, then session_next.", 200),
+            "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
+            "disclaimer": "Unofficial — not xAI/Grok.",
+        }
+    )
+
 
 
 def session_end(
@@ -664,7 +910,7 @@ def session_end(
     }
     out: dict[str, Any] = {
         "ok": True,
-        "protocol": "session/v1.1",
+        "protocol": "session/v1.2",
         "session_id": sid,
         "receipt": receipt,
         "budget_report": {

@@ -1,11 +1,9 @@
 # Tools
 
-**Plan compiler = source of truth** (`session_begin.plan`).
-
 | Tool | Role |
 |---|---|
-| `grok_agent_session_begin` | mode + plan + budget + deny + host_script |
-| `grok_agent_session_tick` | step / budget_remaining / force_end |
-| `grok_agent_session_end` | receipt + budget_report + lesson |
+| `grok_agent_session_begin` | plan + budget + session_id |
+| `grok_agent_session_next` | **only** host loop — one card |
+| `grok_agent_session_end` | receipt + budget_report |
 
-Other tools: only if listed in plan/recommended for this session.
+All other tools appear only inside `card` from `grok_agent_session_next`.

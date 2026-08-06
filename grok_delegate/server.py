@@ -70,7 +70,7 @@ try:
         shutdown_runtime,
         start_agent_job,
     )
-    from .session import session_begin, session_end, session_tick  # type: ignore[no-redef]
+    from .session import session_begin, session_end, session_next, session_tick  # type: ignore[no-redef]
     from .economy import (  # type: ignore[no-redef]
         compact_job_record,
         economy_enabled,
@@ -114,7 +114,7 @@ except ImportError:  # flat import when package dir is on sys.path
         shutdown_runtime,
         start_agent_job,
     )
-    from grok_delegate.session import session_begin, session_end, session_tick  # noqa: E402
+    from grok_delegate.session import session_begin, session_end, session_next, session_tick  # noqa: E402
     from grok_delegate.economy import (  # noqa: E402
         compact_job_record,
         economy_enabled,
@@ -145,6 +145,7 @@ TOOL_AGENT_FIX = "grok_agent_fix"
 TOOL_AGENT_ECONOMY = "grok_agent_economy"
 TOOL_AGENT_SESSION_BEGIN = "grok_agent_session_begin"
 TOOL_AGENT_SESSION_TICK = "grok_agent_session_tick"
+TOOL_AGENT_SESSION_NEXT = "grok_agent_session_next"
 TOOL_AGENT_SESSION_END = "grok_agent_session_end"
 
 AGENT_ROLE_TOOLS = {
@@ -837,6 +838,20 @@ def handle_tool_call(
             )
         )
 
+    if name == TOOL_AGENT_SESSION_NEXT:
+        unknown = sorted(set(args) - {"session_id", "advance", "note"})
+        if unknown:
+            return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
+        adv = args.get("advance")
+        advance = True if adv is None else bool(adv)
+        return typed_return(
+            session_next(
+                session_id=str(args.get("session_id") or "") or None,
+                advance=advance,
+                note=str(args.get("note") or "") or None,
+            )
+        )
+
     if name == TOOL_AGENT_SESSION_END:
         unknown = sorted(set(args) - {"session_id", "job_id", "suggest_issue", "note"})
         if unknown:
@@ -1152,7 +1167,7 @@ def list_tools() -> list[dict[str, Any]]:
         {
             "name": TOOL_AGENT_SESSION_BEGIN,
             "description": (
-                "Session Protocol v1.1: begin session with plan compiler + budget guard. "
+                "Session Protocol v1.2: begin session with plan compiler + budget guard. "
                 "Pass intent, optional goal (≤500), host_budget tiny|small|normal. "
                 "Returns mode, plan[≤5], budget, deny_tools, host_script, skill_ref. Call first."
             ),
@@ -1187,7 +1202,7 @@ def list_tools() -> list[dict[str, Any]]:
         {
             "name": TOOL_AGENT_SESSION_TICK,
             "description": (
-                "Session Protocol v1.1: compact progress + budget. "
+                "Session Protocol v1.2: compact progress + budget. "
                 "Returns step, steps_left, budget_remaining, force_end. "
                 "Pass tool_used/step_done to count budget. verbose default false."
             ),
@@ -1204,9 +1219,25 @@ def list_tools() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": TOOL_AGENT_SESSION_NEXT,
+            "description": (
+                "Session Protocol v1.2 navigator: ONE next action card "
+                "(host_cmd|mcp_tool|end). Host loops this until done=true."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "advance": {"type": "boolean", "default": True},
+                    "note": {"type": "string"},
+                },
+            },
+        },
+        {
             "name": TOOL_AGENT_SESSION_END,
             "description": (
-                "Session Protocol v1: short receipt (status/job/changed/tests/next). "
+                "Session Protocol v1.2: short receipt (status/job/changed/tests/next). "
                 "Optional suggest_issue returns scrubbed issue draft (no auto-create)."
             ),
             "inputSchema": {

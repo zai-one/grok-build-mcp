@@ -67,3 +67,9 @@ Use router skill **`grok-mcp`** ([SKILLS.md](SKILLS.md)).
 2. Follow returned **`plan`** tools only (see `host_script`).
 3. **`session_tick`** until done/`force_end`, then **`session_end`**.
 4. Skill `grok-mcp` v0.9 — do not re-plan in prose.
+
+## Navigator (v1.2)
+
+1. `grok_agent_session_begin` with goal + host_budget=small  
+2. Loop **`grok_agent_session_next`** — do only what `card` says  
+3. Stop when `done=true`
