@@ -90,3 +90,15 @@ details and residual risk.
 
 Security fixes target the latest published release line on `main`. Older
 dev-only snapshots may not receive backports.
+
+## Token economy & remote (VPS)
+
+- Economy mode shrinks host-agent payloads (compact polls / playbooks). It does
+  **not** relax auth or root policy.
+- HTTP bearer tokens are **operator-generated secrets**, never OAuth/session
+  material from Grok or Codex CLI.
+- Prefer TLS reverse proxy for any non-loopback exposure. Treat the bearer as
+  single-tenant and rotate it if leaked.
+- This project is **unofficial** and not affiliated with xAI, Grok, OpenAI,
+  Codex, or Anthropic.
+

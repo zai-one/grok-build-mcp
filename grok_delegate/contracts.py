@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .guard import GuardError, path_in_allowlist
+from .economy import apply_task_economy_defaults
 
 TASK_SCHEMA_ID = "grok-task-packet.v1"
 RECEIPT_SCHEMA_ID = "grok-work-receipt.v1"
@@ -73,6 +74,7 @@ def validate_task_packet(
 ) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise GuardError("TASK_PACKET_INVALID", "task must be a JSON object")
+    value = apply_task_economy_defaults(dict(value))
     unknown = sorted(set(value) - _TASK_FIELDS)
     if unknown:
         raise GuardError(

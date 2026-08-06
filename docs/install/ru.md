@@ -5,7 +5,7 @@
 Grok CLI**. Сервер не реализует OAuth внутри MCP-конфига и **не должен**
 получать API-ключи или `GROK_AGENT_SECRET` в JSON-файлах хоста.
 
-Версия пакета: **0.4.1**
+Версия пакета: **0.5.0**
 
 ---
 
@@ -325,7 +325,7 @@ Grok CLI.
 
 После того как хост показал список tools:
 
-1. Убедитесь, что версия сервера **0.4.1** (initialize / status).
+1. Убедитесь, что версия сервера **0.5.0** (initialize / status).
 2. Вызовите **`grok_agent_status`** (или совместимый `grok_delegate_status`).
 3. Проверьте транспорт по умолчанию: **stdio** (`auto` → только stdio, без
    тихого каскада на WebSocket/legacy).
@@ -435,4 +435,69 @@ MCP **не** является WebSocket к хосту. WebSocket — тольк�
 - `docs/ACP-TRANSPORTS.md` — детали ACP stdio/WebSocket  
 - `docs/SECURITY.md` — enforcement и residual risk  
 - Корневой `SECURITY.md` — reporting и политика credentials  
-- `examples/` — JSON и shell-шаблоны только с плейсхолдерами  
+- `examples/` — JSON и shell-шаблоны только с плейсхолдерами
+
+
+---
+
+## Отказ от ответственности (неофициальный продукт)
+
+> **Сообщественный проект.** Это **не** официальный продукт **xAI**, **Grok**,
+> Anthropic, OpenAI или Codex. Нет аффилиации и поддержки. Аутентификация —
+> только **локальная сессия Grok CLI** (`grok login`). **Никогда** не кладите
+> OAuth, API-ключи или `GROK_AGENT_SECRET` в MCP-конфиг.
+
+---
+
+## Token economy (экономия токенов)
+
+Хост-агент (Claude / Cursor) оркестрирует короткими промптами; **Grok CLI**
+делает длинный coding loop на машине или VPS.
+
+| Переменная | Назначение |
+|---|---|
+| `GROK_DELEGATE_ECONOMY=1` | Более низкие default `max_turns` / timeout / reasoning |
+| `GROK_DELEGATE_ECONOMY_COMPACT_POLL=1` | Компактные poll/job payload для окна хоста |
+
+Инструмент сессии: **`grok_agent_economy`**.
+
+Последовательность: `status` → `economy` → `consult`/`review` → `execute` → `poll`.
+
+Гид: [../economy.md](../economy.md) (EN).
+
+---
+
+## FastMCP
+
+| Путь | Как |
+|---|---|
+| Локальный stdio | Хост/FastMCP запускает `python -m grok_delegate.server` |
+| Удалённый proxy | HTTP на VPS + TLS; локальный FastMCP `create_proxy` с bearer |
+
+[fastmcp.md](fastmcp.md) · [../../examples/fastmcp_proxy.py](../../examples/fastmcp_proxy.py)
+
+---
+
+## VPS (HTTP bearer, не OAuth)
+
+```bash
+export GROK_DELEGATE_ALLOWED_ROOTS="<PROJECT_ROOT>"
+export GROK_DELEGATE_HTTP_TOKEN_FILE="<TOKEN_FILE>"
+python -m grok_delegate.server --transport http --host 127.0.0.1 --port 8765
+```
+
+Bearer — **операторский секрет**, не Grok OAuth.  
+[vps.md](vps.md) · [../../examples/vps.systemd.service](../../examples/vps.systemd.service) ·
+[../../examples/http.env.example](../../examples/http.env.example)
+
+---
+
+## Переменные economy / HTTP
+
+| Переменная | Описание |
+|---|---|
+| `GROK_DELEGATE_ECONOMY` | Включает defaults бюджета задачи |
+| `GROK_DELEGATE_ECONOMY_COMPACT_POLL` | Компактный poll |
+| `GROK_DELEGATE_HTTP_TOKEN` | Bearer в env (взаимоисключён с file) |
+| `GROK_DELEGATE_HTTP_TOKEN_FILE` | Путь к файлу bearer (`<TOKEN_FILE>`) |
+| `GROK_DELEGATE_HTTP_HOST` / `PORT` | По умолчанию `127.0.0.1:8765` |

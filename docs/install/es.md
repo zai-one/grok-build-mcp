@@ -5,7 +5,7 @@ por stdin/stdout y reutiliza la sesión **ya iniciada del Grok CLI** en la
 máquina. No implementa OAuth dentro de la configuración MCP y **no debe**
 recibir claves API ni `GROK_AGENT_SECRET` en archivos JSON del host.
 
-Versión del paquete: **0.4.1**
+Versión del paquete: **0.5.0**
 
 ---
 
@@ -327,7 +327,7 @@ válida del Grok CLI.
 
 Cuando el host liste las tools:
 
-1. Confirme la versión del servidor **0.4.1** (initialize / status).
+1. Confirme la versión del servidor **0.5.0** (initialize / status).
 2. Llame a **`grok_agent_status`** (o la compatible `grok_delegate_status`).
 3. Confirme el transporte por defecto: **stdio** (`auto` → solo stdio, sin
    cascada silenciosa a WebSocket/legacy).
@@ -439,4 +439,69 @@ cuando el jobs dir esté configurado. No registre secretos.
 - `docs/ACP-TRANSPORTS.md` — detalles ACP stdio/WebSocket  
 - `docs/SECURITY.md` — aplicación de controles y riesgo residual  
 - `SECURITY.md` en la raíz — reporte y política de credenciales  
-- `examples/` — plantillas JSON y shell solo con marcadores  
+- `examples/` — plantillas JSON y shell solo con marcadores
+
+
+---
+
+## Aviso legal (producto no oficial)
+
+> **Proyecto comunitario.** **No** es un producto oficial de **xAI**, **Grok**,
+> Anthropic, OpenAI ni Codex. Sin afiliación ni respaldo. La autenticación es la
+> **sesión local del Grok CLI** (`grok login`). **Nunca** ponga OAuth, API keys
+> ni `GROK_AGENT_SECRET` en la configuración MCP.
+
+---
+
+## Economía de tokens
+
+El agente host (Claude / Cursor) orquesta con prompts cortos; el **Grok CLI**
+ejecuta el bucle largo de código en la máquina o en un VPS.
+
+| Variable | Propósito |
+|---|---|
+| `GROK_DELEGATE_ECONOMY=1` | Defaults más bajos de `max_turns` / timeout / reasoning |
+| `GROK_DELEGATE_ECONOMY_COMPACT_POLL=1` | Payloads compactos de poll/job |
+
+Herramienta de sesión: **`grok_agent_economy`**.
+
+Secuencia: `status` → `economy` → `consult`/`review` → `execute` → `poll`.
+
+Guía: [../economy.md](../economy.md) (EN).
+
+---
+
+## FastMCP
+
+| Ruta | Cómo |
+|---|---|
+| stdio local | FastMCP / host lanza `python -m grok_delegate.server` |
+| Proxy remoto | HTTP en VPS + TLS; FastMCP local `create_proxy` con bearer |
+
+[fastmcp.md](fastmcp.md) · [../../examples/fastmcp_proxy.py](../../examples/fastmcp_proxy.py)
+
+---
+
+## VPS (HTTP bearer, no OAuth)
+
+```bash
+export GROK_DELEGATE_ALLOWED_ROOTS="<PROJECT_ROOT>"
+export GROK_DELEGATE_HTTP_TOKEN_FILE="<TOKEN_FILE>"
+python -m grok_delegate.server --transport http --host 127.0.0.1 --port 8765
+```
+
+Bearer = **secreto del operador**, nunca OAuth de Grok.  
+[vps.md](vps.md) · [../../examples/vps.systemd.service](../../examples/vps.systemd.service) ·
+[../../examples/http.env.example](../../examples/http.env.example)
+
+---
+
+## Variables de entorno de economy / HTTP
+
+| Variable | Descripción |
+|---|---|
+| `GROK_DELEGATE_ECONOMY` | Activa defaults de presupuesto |
+| `GROK_DELEGATE_ECONOMY_COMPACT_POLL` | Poll compacto |
+| `GROK_DELEGATE_HTTP_TOKEN` | Bearer en env (excluyente con file) |
+| `GROK_DELEGATE_HTTP_TOKEN_FILE` | Ruta al bearer (`<TOKEN_FILE>`) |
+| `GROK_DELEGATE_HTTP_HOST` / `PORT` | Por defecto `127.0.0.1:8765` |

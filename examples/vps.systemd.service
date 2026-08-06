@@ -1,0 +1,40 @@
+# systemd unit template for grok-delegate HTTP MCP on a VPS
+# Copy to /etc/systemd/system/grok-delegate.service and replace placeholders.
+# Unofficial community project — not an official xAI/Grok product.
+#
+# Security:
+#   - Auth to models = local Grok CLI session for User= below
+#   - HTTP bearer via EnvironmentFile token path only (NOT OAuth)
+#   - Bind loopback; terminate TLS in a reverse proxy
+
+[Unit]
+Description=grok-delegate MCP (HTTP bearer)
+After=network.target
+
+[Service]
+Type=simple
+User=<SERVICE_USER>
+Group=<SERVICE_GROUP>
+WorkingDirectory=<REPO_PATH>
+
+# Non-secret policy + paths (edit EnvironmentFile outside git for tokens)
+Environment=GROK_DELEGATE_ALLOWED_ROOTS=<PROJECT_ROOT>
+Environment=GROK_DELEGATE_LANES_PARENT=<LANES_PARENT>
+Environment=GROK_DELEGATE_JOBS_DIR=<JOBS_DIR>
+Environment=GROK_DELEGATE_ECONOMY=1
+Environment=GROK_DELEGATE_HTTP_HOST=127.0.0.1
+Environment=GROK_DELEGATE_HTTP_PORT=8765
+# Prefer TOKEN_FILE — set path in a root-owned env file:
+Environment=GROK_DELEGATE_HTTP_TOKEN_FILE=<TOKEN_FILE>
+# EnvironmentFile=-/etc/grok-delegate/http.env
+
+ExecStart=<REPO_PATH>/.venv/bin/python -m grok_delegate.server --transport http --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+
+# Hardening suggestions (adjust for your distro)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

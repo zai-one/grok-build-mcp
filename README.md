@@ -1,15 +1,69 @@
 # grok-delegate (MCP)
 
-**Version 0.4.1** — Local **stdio MCP** bridge that delegates coding work to the
-host [Grok CLI](https://grok.x.ai/) agent with isolated git worktrees, typed
-receipts, and three explicit backend transports.
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-purple.svg)](https://modelcontextprotocol.io/)
+[![Version](https://img.shields.io/badge/version-0.5.0-informational.svg)](pyproject.toml)
 
-> **Security one-liner:** this repository must never contain OAuth tokens, API
-> keys, or WebSocket secrets. Model auth is the **local Grok CLI session**
-> (`grok login` → machine-local auth store). MCP config must only list paths and
-> non-secret policy env vars.
+**One-line pitch:** Local MCP bridge that lets Claude / Cursor orchestrate while **Grok CLI** does the heavy coding on your machine or VPS — isolated worktrees, typed receipts, token economy.
 
-## Install guides
+> ## ⚠️ Unofficial product disclaimer
+>
+> **This is a community project.** It is **not** an official product of **xAI**, **Grok**, Anthropic, OpenAI, or Codex. It is not affiliated with, endorsed by, or supported by those companies. Use at your own risk. Auth stays on your machine via the local Grok CLI session (`grok login`) — never put OAuth tokens or API keys in MCP config.
+
+---
+
+## Why this exists (token economy)
+
+| Role | Who pays tokens | What they do |
+|---|---|---|
+| **Host agent** (Claude, Cursor, …) | Short orchestration prompts | Plan, call tools, read compact receipts |
+| **Grok CLI** (local / VPS) | Long coding loop | Edit code, run tests, produce worktree diffs |
+| **Human** | Review time | Merge `grok/*` branches — this MCP never push/merges |
+
+Turn on economy defaults:
+
+```bash
+export GROK_DELEGATE_ECONOMY=1
+export GROK_DELEGATE_ECONOMY_COMPACT_POLL=1
+```
+
+Then call **`grok_agent_economy`** once per session for the host-agent playbook.
+
+Deep dive → [docs/economy.md](docs/economy.md)
+
+---
+
+## Quickstart
+
+```bash
+# 1) Install
+git clone <REPO_URL> <REPO_PATH>
+cd <REPO_PATH>
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[test]"
+
+# 2) Auth (local Grok CLI — not MCP OAuth)
+grok login
+
+# 3) Fail-closed roots
+export GROK_DELEGATE_ALLOWED_ROOTS="<PROJECT_ROOT>"
+export GROK_DELEGATE_LANES_PARENT="<LANES_PARENT>"
+
+# 4) Run stdio MCP (default for desktop hosts)
+grok-delegate
+# or: python -m grok_delegate.server
+```
+
+Self-check:
+
+```bash
+python -m grok_delegate --self-test
+```
+
+---
+
+## Install guides (languages)
 
 | Language | Guide |
 |---|---|
@@ -17,75 +71,23 @@ receipts, and three explicit backend transports.
 | Русский | [docs/install/ru.md](docs/install/ru.md) |
 | 简体中文 | [docs/install/zh-CN.md](docs/install/zh-CN.md) |
 | Español | [docs/install/es.md](docs/install/es.md) |
+| FastMCP | [docs/install/fastmcp.md](docs/install/fastmcp.md) |
+| VPS | [docs/install/vps.md](docs/install/vps.md) |
+| Economy | [docs/economy.md](docs/economy.md) |
 
-Also: [SECURITY](SECURITY.md) · [CONTRIBUTING](CONTRIBUTING.md) ·
-[ACP transports](docs/ACP-TRANSPORTS.md) · [Client setup examples](examples/)
+---
 
-## What it does
+## Client matrix
 
-| Capability | Detail |
-|---|---|
-| MCP surface | 8 typed `grok_agent_*` tools + 8 legacy `grok_delegate*` aliases |
-| Host transport | **stdio JSON-RPC MCP** (what Claude / Cursor / Codex spawn) |
-| Agent backends | `legacy` headless · ACP `stdio` · ACP **loopback WebSocket** |
-| Isolation | External git worktree on `grok/*` branch — **no push / no merge** |
-| Evidence | Diffstat, expected artifacts, independent `bridge-verifier` tests |
-| Fail-closed roots | `GROK_DELEGATE_ALLOWED_ROOTS` required; empty allowlist rejects work |
-
-**WebSocket note:** MCP clients still connect over **stdio**. WebSocket is the
-optional ACP channel between this bridge and a local `grok agent serve` daemon
-(loopback + ephemeral secret only).
-
-## Prerequisites
-
-- Python **3.10+**
-- **Grok CLI** installed and authenticated (`grok login`)
-- **git** available on `PATH`
-
-## Quick install
-
-```bash
-cd <REPO_PATH>
-python -m pip install -e ".[test]"
-```
-
-Configure allowlisted project roots (fail-closed):
-
-```bash
-export GROK_DELEGATE_ALLOWED_ROOTS="<PROJECT_ROOT>"
-export GROK_DELEGATE_LANES_PARENT="<LANES_PARENT>"   # outside the repo
-export GROK_DELEGATE_JOBS_DIR="<JOBS_DIR>"           # optional durable jobs
-```
-
-## Quick run
-
-```bash
-# stdio MCP server (default entry for desktop hosts)
-grok-delegate
-# or:
-python -m grok_delegate.server
-
-# operator checks (no host restart needed)
-python -m grok_delegate --self-test
-python -m pytest -q
-```
-
-## Connect clients
-
-Copy a template from [`examples/`](examples/) and replace placeholders only
-(`<REPO_PATH>`, `<PROJECT_ROOT>`, …). **Never** put `GROK_AGENT_SECRET`, OAuth
-tokens, or API keys in these files.
-
-| Client | How |
-|---|---|
-| **Claude Desktop** | Merge [`examples/claude_desktop.mcp.json`](examples/claude_desktop.mcp.json) into `claude_desktop_config.json` |
-| **Claude Code** | Project or user [`.mcp.json`](examples/claude-code.mcp.json) |
-| **Cursor** | [`.cursor/mcp.json`](examples/cursor.mcp.json) or Cursor MCP settings |
-| **Codex CLI** | [`examples/codex.cli.example.sh`](examples/codex.cli.example.sh) → `codex mcp add` |
-| **VS Code / Continue** | Same stdio command/args/env pattern as Claude |
-| **ChatGPT** | Web ChatGPT expects a **remote HTTPS MCP** connector. This package is **local stdio**. Use Claude/Cursor/Codex locally, or put a **trusted** TLS reverse-proxy in front of a remote MCP bridge **without** shipping Grok OAuth or agent secrets to the public internet. |
-
-Full steps: [docs/install/en.md](docs/install/en.md).
+| Client | Mode | Notes |
+|---|---|---|
+| **Claude Desktop** | stdio | [examples/claude_desktop.mcp.json](examples/claude_desktop.mcp.json) |
+| **Claude Code** | stdio | [examples/claude-code.mcp.json](examples/claude-code.mcp.json) |
+| **Cursor** | stdio / remote URL | [examples/cursor.mcp.json](examples/cursor.mcp.json) |
+| **Codex CLI** | stdio | [examples/codex.cli.example.sh](examples/codex.cli.example.sh) |
+| **VS Code / Continue** | stdio | Same command / args / env pattern |
+| **Remote (Claude remote MCP)** | HTTPS + bearer | TLS reverse proxy → HTTP MCP; **no OAuth in MCP config** |
+| **FastMCP** | stdio local or `create_proxy` | [docs/install/fastmcp.md](docs/install/fastmcp.md) · [examples/fastmcp_proxy.py](examples/fastmcp_proxy.py) |
 
 ### Minimal Claude Desktop fragment
 
@@ -98,47 +100,74 @@ Full steps: [docs/install/en.md](docs/install/en.md).
       "cwd": "<REPO_PATH>",
       "env": {
         "GROK_DELEGATE_ALLOWED_ROOTS": "<PROJECT_ROOT>",
-        "GROK_DELEGATE_LANES_PARENT": "<LANES_PARENT>"
+        "GROK_DELEGATE_LANES_PARENT": "<LANES_PARENT>",
+        "GROK_DELEGATE_ECONOMY": "1"
       }
     }
   }
 }
 ```
 
-## First verification
+> **Never** put `GROK_AGENT_SECRET`, OAuth tokens, or API keys in these files.
 
-1. `python -m grok_delegate --self-test` → PASS table  
-2. From the host: call `grok_agent_status`  
-3. Prefer `grok_agent_consult` before any `execute` on a real repo  
-4. For write roles, use a temporary git repository until receipts look correct  
+---
 
-## Transports (backend)
+## VPS one-liner (bearer HTTP, not OAuth)
 
-| Value | Meaning | Fallback |
-|---|---|---|
-| `stdio` (default / `auto`) | ACP v1 over `grok agent stdio` | none |
-| `websocket` | ACP v1 over managed loopback `grok agent serve` | none |
-| `legacy` | Headless `grok --single` compatibility path | none |
+```bash
+# On VPS (after grok login + pip install -e .):
+openssl rand -hex 32 > <TOKEN_FILE>
+export GROK_DELEGATE_HTTP_TOKEN_FILE="<TOKEN_FILE>"
+export GROK_DELEGATE_ALLOWED_ROOTS="<PROJECT_ROOT>"
+python -m grok_delegate.server --transport http --host 127.0.0.1 --port 8765
+# Put Caddy/nginx TLS reverse proxy in front; connect remote MCP with Bearer only.
+```
 
-Details: [docs/ACP-TRANSPORTS.md](docs/ACP-TRANSPORTS.md).
+Full guide → [docs/install/vps.md](docs/install/vps.md) · systemd unit → [examples/vps.systemd.service](examples/vps.systemd.service)
 
-## Security boundary
+---
 
-- No credentials in git, examples, or receipts  
-- Local Grok CLI session only — bridge does **not** read `auth.json` into logs  
-- WebSocket: loopback only, process-local secret, redacted from logs  
-- Deny-by-default tool permissions; no `--always-approve` / `bypassPermissions`  
-- Write work in external worktrees; operator merges after review  
+## FastMCP (short path)
+
+**Local stdio:** point FastMCP / your host at `python -m grok_delegate.server`.
+
+**Remote proxy:** use FastMCP `create_proxy` (or equivalent) against your TLS URL with a **local bearer** — see [docs/install/fastmcp.md](docs/install/fastmcp.md) and [examples/fastmcp_proxy.py](examples/fastmcp_proxy.py).
+
+---
+
+## What it does
+
+| Capability | Detail |
+|---|---|
+| MCP surface | `grok_agent_*` tools + legacy `grok_delegate*` aliases + **`grok_agent_economy`** |
+| Host transport | **stdio** (desktop) or **bearer HTTP** (VPS) |
+| Agent backends | `legacy` · ACP `stdio` · ACP loopback WebSocket |
+| Isolation | External git worktree on `grok/*` — **no push / no merge** |
+| Evidence | Diffstat, artifacts, bridge-verifier tests |
+| Roots | `GROK_DELEGATE_ALLOWED_ROOTS` required; empty allowlist rejects work |
+
+---
+
+## Security (no OAuth in MCP config)
+
+- Model auth = **local Grok CLI** session only
+- HTTP bearer = **operator-generated** secret (`GROK_DELEGATE_HTTP_TOKEN` / `_FILE`) — **not** Grok OAuth
+- No credentials in git, examples, or receipts
+- Fail-closed project roots; human merges after review
 
 See [SECURITY.md](SECURITY.md).
 
-## Development
+---
 
-```bash
-python -m pip install -e ".[test]"
-python -m pytest -q
-python -m compileall -q grok_delegate tests
-```
+## Links
+
+| Doc | Path |
+|---|---|
+| Economy | [docs/economy.md](docs/economy.md) |
+| ACP transports | [docs/ACP-TRANSPORTS.md](docs/ACP-TRANSPORTS.md) |
+| Security | [SECURITY.md](SECURITY.md) |
+| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| Examples | [examples/](examples/) |
 
 ## License
 

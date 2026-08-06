@@ -70,6 +70,11 @@ try:
         shutdown_runtime,
         start_agent_job,
     )
+    from .economy import (  # type: ignore[no-redef]
+        compact_job_record,
+        economy_enabled,
+        economy_playbook,
+    )
 except ImportError:  # flat import when package dir is on sys.path
     from audit import (  # noqa: E402
         build_delegation_audit,
@@ -108,6 +113,11 @@ except ImportError:  # flat import when package dir is on sys.path
         shutdown_runtime,
         start_agent_job,
     )
+    from grok_delegate.economy import (  # noqa: E402
+        compact_job_record,
+        economy_enabled,
+        economy_playbook,
+    )
 
 SERVER_NAME = "grok-delegate"
 SERVER_VERSION = _guard_server_version
@@ -130,6 +140,7 @@ TOOL_AGENT_CONSULT = "grok_agent_consult"
 TOOL_AGENT_REVIEW = "grok_agent_review"
 TOOL_AGENT_EXECUTE = "grok_agent_execute"
 TOOL_AGENT_FIX = "grok_agent_fix"
+TOOL_AGENT_ECONOMY = "grok_agent_economy"
 
 AGENT_ROLE_TOOLS = {
     TOOL_AGENT_CONSULT: "consult",
@@ -778,6 +789,13 @@ def handle_tool_call(
 
     # Round 8 primary typed surface.  The old grok_delegate_* names below stay
     # as compatibility aliases over the legacy backend and diagnostics.
+    if name == TOOL_AGENT_ECONOMY:
+        if args:
+            return typed_return(
+                structured_error("ARGUMENTS_UNKNOWN", "grok_agent_economy accepts no arguments")
+            )
+        return typed_return(economy_playbook())
+
     if name == TOOL_AGENT_STATUS:
         if args:
             return typed_return(structured_error("ARGUMENTS_UNKNOWN", "grok_agent_status accepts no arguments"))
@@ -801,12 +819,14 @@ def handle_tool_call(
             record = jobs.get_job(job_id)
             if record is None:
                 return typed_return(structured_error("JOB_UNKNOWN", f"unknown job_id: {job_id}"))
-            return typed_return({"ok": True, **record})
+            compact = compact_job_record(record)
+            return typed_return({"ok": True, **compact})
         try:
             limit = max(1, min(int(args.get("limit", 20)), 64))
         except (TypeError, ValueError):
             return typed_return(structured_error("LIMIT_INVALID", "limit must be an integer"))
-        return typed_return({"ok": True, "jobs": jobs.list_jobs(limit=limit)})
+        listed = [compact_job_record(j) for j in jobs.list_jobs(limit=limit)]
+        return typed_return({"ok": True, "jobs": listed, "economy": economy_enabled()})
 
     if name == TOOL_AGENT_CANCEL:
         unknown = sorted(set(args) - {"job_id"})
@@ -1066,6 +1086,15 @@ def list_tools() -> list[dict[str, Any]]:
         },
     }
     primary = [
+        {
+            "name": TOOL_AGENT_ECONOMY,
+            "description": (
+                "Token-economy playbook for host agents: when to consult vs execute, "
+                "how to poll compact receipts, and VPS offload tips. Call once; prefer "
+                "over re-planning. Read-only, no secrets."
+            ),
+            "inputSchema": _STATUS_SCHEMA,
+        },
         {
             "name": TOOL_AGENT_STATUS,
             "description": "Version/auth-presence, exact roots, transport router, daemon and durable job status. Read-only.",
@@ -1416,16 +1445,43 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if "--help" in args or "-h" in args:
         sys.stdout.write(
-            "grok-delegate MCP (dev-only)\n"
+            "grok-delegate MCP (unofficial community bridge)\n"
             "Usage: python -m grok_delegate.server\n"
+            "       python -m grok_delegate.server --transport http --host 127.0.0.1 --port 8765\n"
             "       python -m grok_delegate --self-test\n"
-            "       python -m grok_delegate --smoke-delegate\n"
             "Env: GROK_DELEGATE_ALLOWED_ROOTS, GROK_DELEGATE_REPO_ROOT,\n"
-            "     GROK_DELEGATE_BIN, GROK_DELEGATE_LANES_PARENT, GROK_DELEGATE_SANDBOX\n"
-            "NOT the product admin-bridge (tools/mcp/).\n"
+            "     GROK_DELEGATE_BIN, GROK_DELEGATE_LANES_PARENT, GROK_DELEGATE_SANDBOX,\n"
+            "     GROK_DELEGATE_ECONOMY=1, GROK_DELEGATE_HTTP_TOKEN\n"
+            "NOT an official xAI/Grok product. NOT the product admin-bridge.\n"
         )
         return 0
+    transport = "stdio"
+    host = os.environ.get("GROK_DELEGATE_HTTP_HOST", "127.0.0.1")
+    port = int(os.environ.get("GROK_DELEGATE_HTTP_PORT", "8765") or "8765")
+    i = 0
+    while i < len(args):
+        if args[i] == "--transport" and i + 1 < len(args):
+            transport = str(args[i + 1]).strip().lower()
+            i += 2
+            continue
+        if args[i] == "--host" and i + 1 < len(args):
+            host = str(args[i + 1]).strip()
+            i += 2
+            continue
+        if args[i] == "--port" and i + 1 < len(args):
+            port = int(args[i + 1])
+            i += 2
+            continue
+        i += 1
     try:
+        if transport == "http":
+            from .http_server import serve_http
+
+            serve_http(host=host, port=port)
+            return 0
+        if transport != "stdio":
+            sys.stderr.write(f"unknown transport: {transport}\n")
+            return 2
         serve_stdio()
         return 0
     finally:

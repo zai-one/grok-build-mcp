@@ -4,7 +4,7 @@
 宿主通信，并复用本机**已登录的 Grok CLI** 会话。它**不会**在 MCP 配置中实现
 OAuth，也**不得**在宿主 JSON 中写入 API 密钥或 `GROK_AGENT_SECRET`。
 
-软件包版本：**0.4.1**
+软件包版本：**0.5.0**
 
 ---
 
@@ -313,7 +313,7 @@ PASS/FAIL 表。全部通过需要有效的本地 Grok CLI 会话。
 
 宿主列出 tools 后：
 
-1. 确认服务器信息版本为 **0.4.1**（initialize / status）。
+1. 确认服务器信息版本为 **0.5.0**（initialize / status）。
 2. 调用 **`grok_agent_status`**（或兼容的 `grok_delegate_status`）。
 3. 确认默认传输行为：**stdio**（`auto` → 仅 stdio，不会静默回退到
    WebSocket/legacy）。
@@ -419,4 +419,67 @@ MCP **不是**到宿主的 WebSocket。WebSocket 仅是到**本地**回环 Grok 
 - `docs/ACP-TRANSPORTS.md` — ACP stdio/WebSocket 细节  
 - `docs/SECURITY.md` — 强制措施与残留风险  
 - 根目录 `SECURITY.md` — 报告流程与凭证策略  
-- `examples/` — 仅含占位符的 JSON 与 shell 模板  
+- `examples/` — 仅含占位符的 JSON 与 shell 模板
+
+
+---
+
+## 免责声明（非官方产品）
+
+> **社区项目。** 这 **不是** **xAI**、**Grok**、Anthropic、OpenAI 或 Codex 的官方产品，
+> 无隶属或背书。鉴权仅使用本机 **Grok CLI 会话**（`grok login`）。
+> **切勿** 将 OAuth、API key 或 `GROK_AGENT_SECRET` 写入 MCP 配置。
+
+---
+
+## Token 经济
+
+宿主代理（Claude / Cursor）用短提示编排；**Grok CLI** 在本机或 VPS 上执行长编码循环。
+
+| 环境变量 | 作用 |
+|---|---|
+| `GROK_DELEGATE_ECONOMY=1` | 在客户端省略时降低默认 max_turns / timeout / reasoning |
+| `GROK_DELEGATE_ECONOMY_COMPACT_POLL=1` | 压缩 poll/job 负载以节省宿主上下文 |
+
+会话工具：**`grok_agent_economy`**。
+
+推荐顺序：`status` → `economy` → `consult`/`review` → `execute` → `poll`。
+
+详见：[../economy.md](../economy.md)（英文）。
+
+---
+
+## FastMCP
+
+| 路径 | 方式 |
+|---|---|
+| 本地 stdio | FastMCP/宿主启动 `python -m grok_delegate.server` |
+| 远程代理 | VPS 上 HTTP + TLS；本地 FastMCP `create_proxy` + bearer |
+
+[fastmcp.md](fastmcp.md) · [../../examples/fastmcp_proxy.py](../../examples/fastmcp_proxy.py)
+
+---
+
+## VPS（HTTP bearer，非 OAuth）
+
+```bash
+export GROK_DELEGATE_ALLOWED_ROOTS="<PROJECT_ROOT>"
+export GROK_DELEGATE_HTTP_TOKEN_FILE="<TOKEN_FILE>"
+python -m grok_delegate.server --transport http --host 127.0.0.1 --port 8765
+```
+
+Bearer 为**运维生成的随机密钥**，不是 Grok OAuth。  
+[vps.md](vps.md) · [../../examples/vps.systemd.service](../../examples/vps.systemd.service) ·
+[../../examples/http.env.example](../../examples/http.env.example)
+
+---
+
+## Economy 相关环境变量
+
+| 变量 | 说明 |
+|---|---|
+| `GROK_DELEGATE_ECONOMY` | 启用任务预算默认值 |
+| `GROK_DELEGATE_ECONOMY_COMPACT_POLL` | 强制紧凑 poll |
+| `GROK_DELEGATE_HTTP_TOKEN` | HTTP bearer（env，与 file 互斥） |
+| `GROK_DELEGATE_HTTP_TOKEN_FILE` | bearer 文件路径（`<TOKEN_FILE>`） |
+| `GROK_DELEGATE_HTTP_HOST` / `PORT` | 默认 `127.0.0.1:8765` |
