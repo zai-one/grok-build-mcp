@@ -29,10 +29,17 @@ def economy_enabled(env: Mapping[str, str] | None = None) -> bool:
 def compact_poll_enabled(env: Mapping[str, str] | None = None) -> bool:
     source = env if env is not None else os.environ
     raw = str(source.get("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "")).strip().lower()
-    if raw in _TRUE:
-        return True
     if raw in {"0", "false", "no", "off"}:
         return False
+    if raw in _TRUE:
+        return True
+    try:
+        from .session import session_compact_active
+
+        if session_compact_active():
+            return True
+    except Exception:
+        pass
     return economy_enabled(source)
 
 

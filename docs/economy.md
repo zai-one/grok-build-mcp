@@ -1,3 +1,7 @@
+## Session Protocol (source of truth)
+
+Host agents should call `grok_agent_session_begin` first. It enables compact economy defaults and returns mode + tools + one `skill_ref`. Prefer that over re-reading this document.
+
 # Token economy (English)
 
 > ## ⚠️ Unofficial product disclaimer

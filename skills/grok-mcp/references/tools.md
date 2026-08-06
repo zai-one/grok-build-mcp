@@ -2,11 +2,13 @@
 
 | Mode | Tools |
 |---|---|
-| ready | `grok_agent_status` |
-| playbook | `grok_agent_economy` once/session |
+| **always first** | `grok_agent_session_begin` |
+| progress | `grok_agent_session_tick` |
+| finish | `grok_agent_session_end` |
+| playbook | `grok_agent_economy` (optional; begin covers most) |
 | brainstorm | `grok_agent_consult`, `grok_agent_review` |
-| execute | `grok_agent_execute` → `grok_agent_poll` |
-| verify | poll/status; review optional |
-| ops | doctor/models/inspect if broken |
+| execute | `grok_agent_execute` → poll/tick |
+| verify | poll/status/review |
+| ops | `grok_delegate_doctor` if gate broken |
 
-Prefer `grok_agent_*` over legacy `grok_delegate_*`.
+Prefer `session_*` over re-reading docs. `verbose=true` only when debugging.

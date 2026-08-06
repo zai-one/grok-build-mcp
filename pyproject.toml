@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "grok-delegate"
-version = "0.5.3"
+version = "0.6.0"
 description = "Local stdio MCP bridge for Grok CLI delegation (worktrees, ACP transports, receipts)"
 readme = "README.md"
 requires-python = ">=3.10"

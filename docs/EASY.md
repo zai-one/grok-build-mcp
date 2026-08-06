@@ -53,3 +53,10 @@ No multi-step pip/venv manual install is supported in docs anymore — use the s
 ## Agent skill
 
 Use router skill **`grok-mcp`** ([SKILLS.md](SKILLS.md)).
+
+## After install (Session Protocol)
+
+1. Wire host MCP (snippet from installer).
+2. In the host agent, call **`grok_agent_session_begin`** with `intent: "auto"`.
+3. Follow `recommended_tools` → work → **`grok_agent_session_end`**.
+4. Skill: `grok-mcp` (v0.8) — do not paste long docs into chat.

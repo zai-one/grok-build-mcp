@@ -70,6 +70,7 @@ try:
         shutdown_runtime,
         start_agent_job,
     )
+    from .session import session_begin, session_end, session_tick  # type: ignore[no-redef]
     from .economy import (  # type: ignore[no-redef]
         compact_job_record,
         economy_enabled,
@@ -113,6 +114,7 @@ except ImportError:  # flat import when package dir is on sys.path
         shutdown_runtime,
         start_agent_job,
     )
+    from grok_delegate.session import session_begin, session_end, session_tick  # noqa: E402
     from grok_delegate.economy import (  # noqa: E402
         compact_job_record,
         economy_enabled,
@@ -141,6 +143,9 @@ TOOL_AGENT_REVIEW = "grok_agent_review"
 TOOL_AGENT_EXECUTE = "grok_agent_execute"
 TOOL_AGENT_FIX = "grok_agent_fix"
 TOOL_AGENT_ECONOMY = "grok_agent_economy"
+TOOL_AGENT_SESSION_BEGIN = "grok_agent_session_begin"
+TOOL_AGENT_SESSION_TICK = "grok_agent_session_tick"
+TOOL_AGENT_SESSION_END = "grok_agent_session_end"
 
 AGENT_ROLE_TOOLS = {
     TOOL_AGENT_CONSULT: "consult",
@@ -796,6 +801,45 @@ def handle_tool_call(
             )
         return typed_return(economy_playbook())
 
+    if name == TOOL_AGENT_SESSION_BEGIN:
+        unknown = sorted(set(args) - {"intent"})
+        if unknown:
+            return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
+        intent = str(args.get("intent") or "auto")
+        return typed_return(
+            session_begin(
+                intent,
+                allowed_roots=allowed_roots,
+                which=which,
+                subprocess_runner=subprocess_runner,
+            )
+        )
+
+    if name == TOOL_AGENT_SESSION_TICK:
+        unknown = sorted(set(args) - {"session_id", "job_id", "verbose"})
+        if unknown:
+            return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
+        return typed_return(
+            session_tick(
+                session_id=str(args.get("session_id") or "") or None,
+                job_id=str(args.get("job_id") or "") or None,
+                verbose=bool(args.get("verbose")),
+            )
+        )
+
+    if name == TOOL_AGENT_SESSION_END:
+        unknown = sorted(set(args) - {"session_id", "job_id", "suggest_issue", "note"})
+        if unknown:
+            return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
+        return typed_return(
+            session_end(
+                session_id=str(args.get("session_id") or "") or None,
+                job_id=str(args.get("job_id") or "") or None,
+                suggest_issue=bool(args.get("suggest_issue")),
+                note=str(args.get("note") or "") or None,
+            )
+        )
+
     if name == TOOL_AGENT_STATUS:
         if args:
             return typed_return(structured_error("ARGUMENTS_UNKNOWN", "grok_agent_status accepts no arguments"))
@@ -1094,6 +1138,69 @@ def list_tools() -> list[dict[str, Any]]:
                 "over re-planning. Read-only, no secrets."
             ),
             "inputSchema": _STATUS_SCHEMA,
+        },
+        {
+            "name": TOOL_AGENT_SESSION_BEGIN,
+            "description": (
+                "Session Protocol v1: start a compact host session. Pass intent "
+                "(brainstorm|execute|verify|install|update|triage|feedback|auto). "
+                "Returns mode, gate_status, recommended_tools, skill_ref, next_step. "
+                "Call first each MCP task. Enables economy compact mode."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": [
+                            "brainstorm",
+                            "execute",
+                            "verify",
+                            "install",
+                            "update",
+                            "triage",
+                            "feedback",
+                            "auto",
+                        ],
+                        "default": "auto",
+                    }
+                },
+            },
+        },
+        {
+            "name": TOOL_AGENT_SESSION_TICK,
+            "description": (
+                "Session Protocol v1: compact progress for a job/session. "
+                "Returns state, percent, blockers, host_message (≤500). "
+                "verbose=true only when debugging."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "job_id": {"type": "string"},
+                    "verbose": {"type": "boolean", "default": False},
+                },
+            },
+        },
+        {
+            "name": TOOL_AGENT_SESSION_END,
+            "description": (
+                "Session Protocol v1: short receipt (status/job/changed/tests/next). "
+                "Optional suggest_issue returns scrubbed issue draft (no auto-create)."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "session_id": {"type": "string"},
+                    "job_id": {"type": "string"},
+                    "suggest_issue": {"type": "boolean", "default": False},
+                    "note": {"type": "string"},
+                },
+            },
         },
         {
             "name": TOOL_AGENT_STATUS,

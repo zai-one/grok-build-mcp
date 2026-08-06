@@ -1,4 +1,4 @@
 # Verify
 
-Poll/status only → summary + tests + paths.  
-Pass → receipt. Fail → one tight re-execute or human.
+`session_begin` intent=verify → tick/poll only → `session_end`.  
+Fail → one tight re-execute or human.

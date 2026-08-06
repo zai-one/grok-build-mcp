@@ -8,4 +8,4 @@
 | Codex CLI | `.codex/skills/grok-mcp/` | stdio launcher |
 | Other | `.agents/skills/grok-mcp/` | stdio |
 
-Short tool results. Don't paste references into user chat. Run scripts.
+**All hosts:** call `grok_agent_session_begin` at the start of any MCP work. Do not paste skill references into user chat; run scripts; keep tool results compact.

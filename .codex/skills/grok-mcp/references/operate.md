@@ -1,9 +1,8 @@
 # Operate
 
-1. Gate.
-2. `grok_agent_status` → `grok_agent_economy` once.
-3. Mode by size: brainstorm → execute → verify.
-4. Short receipts (`templates/receipt.md`).
-5. Source `~/.config/grok-mcp/env` if roots fail.
+1. `grok_agent_session_begin` intent=auto (or specific).
+2. Follow `recommended_tools` + `next_step` only.
+3. Tick while running; end for receipt.
+4. Open `skill_ref` **only** if stuck after begin.
 
-Tools: `tools.md`. VPS after local green.
+Source `~/.config/grok-mcp/env` if roots fail.

@@ -1,17 +1,13 @@
 # Skills
 
-One token-cheap **router**: `grok-mcp` (**v0.7**).
+Router **`grok-mcp` v0.8** — Session Protocol first.
 
-| Piece | Role |
-|---|---|
-| `SKILL.md` | always-small router + **token budget** |
-| `references/` | one file per mode + `tools.md` + `hosts.md` |
-| `scripts/` | run (`check_ready`, `update_mcp`, `draft_issue`) |
-| `templates/` | goal / receipt / issue |
+1. `grok_agent_session_begin` → mode + tools + skill_ref  
+2. Do work with recommended tools only  
+3. `grok_agent_session_tick` / `session_end`
 
 ```bash
 python scripts/sync_skills.py
 python scripts/verify_skills.py
+python scripts/smoke_session.py
 ```
-
-Host: *use skill `grok-mcp`*. Prefer MCP economy tool over long docs. Load **at most one** reference per turn.
