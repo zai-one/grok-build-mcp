@@ -3,13 +3,31 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.5.0-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.5.1-informational.svg)](pyproject.toml)
 
 **One-line pitch:** Local MCP bridge that lets Claude / Cursor orchestrate while **Grok CLI** does the heavy coding on your machine or VPS — isolated worktrees, typed receipts, token economy.
 
 > ## ⚠️ Unofficial product disclaimer
 >
 > **This is a community project.** It is **not** an official product of **xAI**, **Grok**, Anthropic, OpenAI, or Codex. It is not affiliated with, endorsed by, or supported by those companies. Use at your own risk. Auth stays on your machine via the local Grok CLI session (`grok login`) — never put OAuth tokens or API keys in MCP config.
+
+---
+
+
+## ⛔ Works only if Grok CLI is installed + logged in
+
+This repository is an **MCP bridge**, not a replacement for the Grok product.
+
+| You must already have… | Check |
+|---|---|
+| **Grok CLI** on the machine that runs the MCP | `grok --version` |
+| A completed **`grok login`** for that OS user | `python -m grok_delegate --self-test` → auth **present** |
+| This package installed + roots set | see Quickstart below |
+
+**New here?** Read **[docs/START_HERE.md](docs/START_HERE.md)** first (plain English).
+
+Or ask an agent: *use skill `install-grok-mcp`* (requires CLI+login already).  
+Skills for Claude / Codex / Cursor: `.claude/skills/`, `.codex/skills/`, `.agents/skills/`.
 
 ---
 
@@ -73,6 +91,8 @@ python -m grok_delegate --self-test
 | Español | [docs/install/es.md](docs/install/es.md) |
 | FastMCP | [docs/install/fastmcp.md](docs/install/fastmcp.md) |
 | VPS | [docs/install/vps.md](docs/install/vps.md) |
+| **START HERE** | [docs/START_HERE.md](docs/START_HERE.md) |
+| Skills | [docs/SKILLS.md](docs/SKILLS.md) |
 | Economy | [docs/economy.md](docs/economy.md) |
 
 ---
@@ -163,6 +183,7 @@ See [SECURITY.md](SECURITY.md).
 
 | Doc | Path |
 |---|---|
+| **START HERE** | [docs/START_HERE.md](docs/START_HERE.md) |
 | Economy | [docs/economy.md](docs/economy.md) |
 | ACP transports | [docs/ACP-TRANSPORTS.md](docs/ACP-TRANSPORTS.md) |
 | Security | [SECURITY.md](SECURITY.md) |

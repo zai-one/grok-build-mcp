@@ -117,6 +117,8 @@ def _run_self_test() -> int:
             "grok_delegate_doctor",
             "grok_delegate_models",
             "grok_delegate_inspect",
+            "grok_agent_status",
+            "grok_agent_economy",
         }
         missing = sorted(required - set(names))
         return not missing, f"tools={names}" if not missing else f"missing={missing}"
@@ -203,6 +205,14 @@ def _run_self_test() -> int:
         _print(f"  {mark:4}  {name:<{width}}  {detail}")
     _print("-" * 60)
     _print("RESULT: " + ("PASS" if all_ok else "FAIL"))
+    
+    if any(n in {"binary", "auth_presence"} and not ok for n, ok, _ in rows):
+        _print("")
+        _print("=== PLAIN ENGLISH ===")
+        _print("This MCP only works AFTER Grok CLI is installed AND you ran: grok login")
+        _print("Same OS user as the MCP process. See docs/START_HERE.md")
+        _print("Agent setup skill: install-grok-mcp")
+        _print("=====================")
     return 0 if all_ok else 1
 
 

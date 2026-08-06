@@ -1,5 +1,13 @@
 # Install guide (English)
 
+> ### ⛔ Before anything else
+>
+> This MCP **only works** after **Grok CLI (`grok login`)** is installed and authenticated on the
+> **same machine/user** that runs the server.  
+> Plain-English checklist: **[START_HERE.md](../START_HERE.md)**.  
+> Agent setup: skill **install-grok-mcp**.
+
+
 `grok-delegate` is a **local stdio MCP server**. It talks to MCP hosts over
 stdin/stdout and reuses your **already logged-in Grok CLI** session. It does
 not implement OAuth inside MCP config and must not receive API keys or

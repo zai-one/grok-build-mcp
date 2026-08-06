@@ -1,4 +1,8 @@
 # 安装指南（简体中文）
+> ### ⛔ 先安装 CLI
+>
+> 必须先安装 **Grok CLI** 并完成 `grok login`（同一机器/用户）。见 [START_HERE.md](../START_HERE.md)。技能：`install-grok-mcp`。
+
 
 `grok-delegate` 是一个**本地 stdio MCP 服务器**。它通过 stdin/stdout 与 MCP
 宿主通信，并复用本机**已登录的 Grok CLI** 会话。它**不会**在 MCP 配置中实现

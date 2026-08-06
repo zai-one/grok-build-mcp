@@ -121,11 +121,16 @@ def economy_playbook() -> dict[str, Any]:
     return {
         "ok": True,
         "economy": True,
+        "prerequisite": (
+            "Grok CLI must be installed and `grok login` completed on this host "
+            "before any tool can do useful work. This MCP is only a bridge."
+        ),
         "goal": (
             "Keep the host model thin: plan briefly, delegate coding to Grok on "
             "this machine/VPS, poll compact receipts, merge as a human."
         ),
         "do": [
+            "Confirm grok CLI + login (self-test auth present) before other tools.",
             "Call grok_agent_status once per session (not every turn).",
             "Prefer grok_agent_consult / grok_agent_review for Q&A and critique.",
             "For writes: one focused grok_agent_execute with a tight objective, "

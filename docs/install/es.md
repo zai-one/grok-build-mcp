@@ -1,4 +1,8 @@
 # Guía de instalación (español)
+> ### ⛔ Primero el CLI
+>
+> Este MCP **no funciona** sin **Grok CLI** y `grok login` en la misma máquina/usuario. Ver [START_HERE.md](../START_HERE.md). Skill: `install-grok-mcp`.
+
 
 `grok-delegate` es un **servidor MCP local por stdio**. Habla con los hosts MCP
 por stdin/stdout y reutiliza la sesión **ya iniciada del Grok CLI** en la
