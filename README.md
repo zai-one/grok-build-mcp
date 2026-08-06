@@ -30,6 +30,8 @@ grok login
 
 Merge `~/.config/grok-mcp/mcp/claude_desktop.snippet.json` into Claude/Cursor → restart → `grok_agent_status`.
 
+**Skill (router):** `grok-mcp` — see [docs/SKILLS.md](docs/SKILLS.md)
+
 **Full easy guide:** [docs/EASY.md](docs/EASY.md)
 
 | Language | Page |

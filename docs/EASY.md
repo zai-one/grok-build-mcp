@@ -49,3 +49,7 @@ grok login
 - Token economy tips: `docs/economy.md`
 
 No multi-step pip/venv manual install is supported in docs anymore — use the script.
+
+## Agent skill
+
+Use router skill **`grok-mcp`** ([SKILLS.md](SKILLS.md)).
