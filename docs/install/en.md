@@ -1,5 +1,14 @@
 # Install guide (English)
 
+## One-command install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh \
+  | bash -s -- --project "/absolute/path/to/your/project"
+```
+
+See [EASY.md](../EASY.md). You still need **Grok CLI** + `grok login`.
+
 > ### ⛔ Before anything else
 >
 > This MCP **only works** after **Grok CLI (`grok login`)** is installed and authenticated on the

@@ -3,7 +3,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.5.1-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.5.2-informational.svg)](pyproject.toml)
 
 **One-line pitch:** Local MCP bridge that lets Claude / Cursor orchestrate while **Grok CLI** does the heavy coding on your machine or VPS — isolated worktrees, typed receipts, token economy.
 
@@ -13,6 +13,31 @@
 
 ---
 
+
+
+## 60-second install (one command)
+
+> Unofficial community bridge. **Not** made by xAI/Grok.
+
+**macOS / Linux** — paste this (change the project path):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh \
+  | bash -s -- --project "$HOME/code/my-project"
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.ps1 | iex
+```
+
+The script installs Python (via `uv` if needed), this package, env files, and MCP snippets.  
+**You still run** `grok login` once (Grok product auth cannot be fully automated).
+
+Plain English: **[docs/EASY.md](docs/EASY.md)** · checklist: **[docs/START_HERE.md](docs/START_HERE.md)**
+
+---
 
 ## ⛔ Works only if Grok CLI is installed + logged in
 
@@ -53,6 +78,9 @@ Deep dive → [docs/economy.md](docs/economy.md)
 ---
 
 ## Quickstart
+
+Already ran the one-command installer? Skip to `grok login` + self-test.
+
 
 ```bash
 # 1) Install

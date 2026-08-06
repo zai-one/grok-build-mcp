@@ -27,6 +27,17 @@ grok login              # interactive; user completes browser/device flow
 python -m grok_delegate --self-test   # auth must be "present"
 ```
 
+
+## One-command install (preferred)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh \
+  | bash -s -- --project "<PROJECT_ROOT>"
+```
+
+Still requires Grok CLI + `grok login` after (or before) the script.
+Windows: `scripts/install.ps1`. See `docs/EASY.md`.
+
 ## Install package (only after CLI gate)
 
 ```bash
