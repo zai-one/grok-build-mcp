@@ -1,21 +1,17 @@
 # Skills
 
-One **router skill**: `grok-mcp` (Agent Skills layout).
+One token-cheap **router**: `grok-mcp` (**v0.7**).
 
-```text
-skills/grok-mcp/
-  SKILL.md           # router
-  references/        # install, operate, update, executor, verifier, brainstorm, feedback, …
-  scripts/           # check_ready, update_mcp, draft_issue
-  templates/         # goals, receipts, issues
-  assets/            # flow diagram (md)
-```
-
-Mirrored to `.claude/skills/`, `.codex/skills/`, `.agents/skills/`.
+| Piece | Role |
+|---|---|
+| `SKILL.md` | always-small router + **token budget** |
+| `references/` | one file per mode + `tools.md` + `hosts.md` |
+| `scripts/` | run (`check_ready`, `update_mcp`, `draft_issue`) |
+| `templates/` | goal / receipt / issue |
 
 ```bash
 python scripts/sync_skills.py
 python scripts/verify_skills.py
 ```
 
-Tell the host: *use skill `grok-mcp`*.
+Host: *use skill `grok-mcp`*. Prefer MCP economy tool over long docs. Load **at most one** reference per turn.
