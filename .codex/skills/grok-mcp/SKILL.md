@@ -1,47 +1,31 @@
 ---
 name: grok-mcp
 description: >
-  Router for unofficial grok-mcp. ALWAYS use for install/update/wire/debug/grok MCP,
-  delegate coding, verify, brainstorm, or MCP Issues. First tool: grok_agent_session_begin.
-  Triggers: grok-mcp, session_begin, grok login, economy, execute/poll, verify, brainstorm.
-  Prefer session_* + MCP tools over long docs; never multi-step pip or secrets.
-version: 0.8.0
+  Router for unofficial grok-mcp. ALWAYS use for MCP install/update/debug/delegate.
+  First: grok_agent_session_begin(goal, host_budget). Follow plan tools only. Triggers: grok-mcp,
+  session_begin, plan, budget, grok login, economy. Never multi-step pip or secrets.
+version: 0.9.0
 metadata:
-  short-description: "Session Protocol v1 router for grok-mcp"
+  short-description: "Session v1.1 plan compiler + budget guard for grok-mcp"
 ---
 
 # grok-mcp
 
-> Unofficial — not xAI/Grok. Auth = **`grok login`** only. No OAuth/keys in config/Issues.
+> Unofficial — not xAI/Grok. Auth = **`grok login`** only.
 
-## Token budget
+## Protocol
 
-| Load | When |
-|---|---|
-| This file | most turns |
-| **1** reference | only if `session_begin.skill_ref` says so |
-| templates/ | fill, don't narrate |
-| scripts/ | **run**, don't cat |
+1. **`grok_agent_session_begin`** `intent` + optional `goal` + `host_budget` (tiny|small|normal)
+2. Execute **only** `plan[]` / `recommended_tools` (never invent tools; honor `deny_tools`)
+3. **`grok_agent_session_tick`** with `tool_used`/`step_done`; stop if `force_end`
+4. **`grok_agent_session_end`** → receipt + `budget_report` + `lesson`
 
-## Protocol (always)
+Open **one** `references/*` only if `skill_ref` and plan insufficient.
 
-1. **`grok_agent_session_begin`** (intent: auto|brainstorm|execute|verify|install|update|triage|feedback)
-2. Use **only** `recommended_tools` from the response
-3. **`grok_agent_session_tick`** while jobs run (compact; `verbose` default false)
-4. **`grok_agent_session_end`** → short receipt (± suggest_issue draft)
+## Budget (token budget)
 
-Do **not** open `references/*` unless begin returns `skill_ref` and you need that one file.
-
-## Gate
-
-`grok --version` · `grok login` · EASY install · self-test. Fail → intent `install`/`triage`.
-
-## Economy
-
-session_begin enables compact mode. light ≪ execute · tight briefs · one job · no dumps.
-
-Env: `GROK_DELEGATE_ECONOMY=1` `GROK_DELEGATE_ECONOMY_COMPACT_POLL=1`
+Host executes plan; does **not** re-plan in prose. Caps from `budget`. Economy on begin.
 
 ## Never
 
-multi-step pip · secrets · execute for Q&A · claim OK without gate/session_begin
+Secrets · tools outside plan · long docs when plan exists · OK without begin

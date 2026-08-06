@@ -60,3 +60,10 @@ Use router skill **`grok-mcp`** ([SKILLS.md](SKILLS.md)).
 2. In the host agent, call **`grok_agent_session_begin`** with `intent: "auto"`.
 3. Follow `recommended_tools` → work → **`grok_agent_session_end`**.
 4. Skill: `grok-mcp` (v0.8) — do not paste long docs into chat.
+
+## Session Plan (v1.1)
+
+1. Call **`grok_agent_session_begin`** with `goal` and `host_budget: "small"`.
+2. Follow returned **`plan`** tools only (see `host_script`).
+3. **`session_tick`** until done/`force_end`, then **`session_end`**.
+4. Skill `grok-mcp` v0.9 — do not re-plan in prose.

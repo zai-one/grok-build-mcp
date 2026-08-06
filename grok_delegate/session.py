@@ -1,4 +1,4 @@
-"""Adaptive Session Protocol v1 — compact host↔MCP contract.
+"""Adaptive Session Protocol v1.1 — plan compiler + budget guard.
 
 Unofficial community project. No OAuth/API material in outputs.
 """
@@ -12,89 +12,130 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from . import jobs as jobs_mod
 from .economy import (
     ECONOMY_DEFAULT_MAX_TURNS,
     ECONOMY_DEFAULT_TIMEOUT_SECONDS,
     compact_job_record,
     compact_poll_enabled,
-    economy_enabled,
 )
-from . import jobs as jobs_mod
 from .guard import SERVER_VERSION
 from .status import probe_auth_presence, probe_grok_version
 
 INTENTS = frozenset(
+    {"brainstorm", "execute", "verify", "install", "update", "triage", "feedback", "auto"}
+)
+HOST_BUDGETS = frozenset({"tiny", "small", "normal"})
+_BUDGET_PRESETS = {
+    "tiny": {"max_tool_calls": 3, "max_polls": 2},
+    "small": {"max_tool_calls": 6, "max_polls": 4},
+    "normal": {"max_tool_calls": 12, "max_polls": 8},
+}
+
+# Real tool allowlist for plans
+_ALLOW = frozenset(
     {
-        "brainstorm",
-        "execute",
-        "verify",
-        "install",
-        "update",
-        "triage",
-        "feedback",
-        "auto",
+        "grok_agent_session_begin",
+        "grok_agent_session_tick",
+        "grok_agent_session_end",
+        "grok_agent_status",
+        "grok_agent_economy",
+        "grok_agent_consult",
+        "grok_agent_review",
+        "grok_agent_execute",
+        "grok_agent_fix",
+        "grok_agent_poll",
+        "grok_agent_cancel",
+        "grok_agent_start",
+        "grok_delegate_doctor",
+        "grok_delegate_status",
     }
 )
 
 _HOST_MSG_MAX = 500
-_PAYLOAD_SOFT_MAX = 1800  # chars JSON target ≤2KB
+_GOAL_MAX = 500
+_PAYLOAD_SOFT_MAX = 1536
+_WHY_MAX = 60
+_SCRIPT_MAX = 240
+_LESSON_MAX = 120
+
 _SECRETISH = re.compile(
-    r"(?i)(api[_-]?key|oauth|authorization|bearer\s+[a-z0-9._\-]{12,}|sk-[a-z0-9]{10,}|"
-    + "gh"
-    + "p_"
-    + r"[a-z0-9]+|xai-[a-z0-9]+)"
+    r"(?i)("
+    r"api[_-]?key\s*[:=]\s*\S+"
+    r"|oauth\s*[:=]\s*\S+"
+    r"|authorization\s*[:=]\s*\S+"
+    r"|bearer\s+[a-z0-9._\-]{12,}"
+    r"|sk-[a-z0-9]{10,}"
+    r"|" + "gh" + "p_" + r"[a-z0-9]+"
+    r"|xai-[a-z0-9]+"
+    r")"
 )
 
-# intent → mode + skill_ref + tools
 _ROUTES: dict[str, dict[str, Any]] = {
     "install": {
         "mode": "install",
         "skill_ref": "references/install.md",
         "tools": [],
+        "prefer": "install",
         "next": "Run one-command install + grok login; re-call session_begin.",
     },
     "update": {
         "mode": "update",
         "skill_ref": "references/update.md",
         "tools": [],
-        "next": "Run skills/grok-mcp/scripts/update_mcp.sh then session_begin.",
+        "prefer": "update",
+        "next": "Run update_mcp.sh then session_begin.",
     },
     "triage": {
         "mode": "triage",
         "skill_ref": "references/security.md",
         "tools": ["grok_agent_status", "grok_delegate_doctor"],
-        "next": "Fix gate failures; after 2+ product bugs use feedback mode.",
+        "prefer": "consult",
+        "next": "Fix gate; feedback after 2+ product bugs.",
     },
     "brainstorm": {
         "mode": "brainstorm",
         "skill_ref": "references/brainstorm.md",
         "tools": ["grok_agent_consult", "grok_agent_review"],
+        "prefer": "consult",
         "next": "Consult/review only; no execute until user confirms.",
     },
     "execute": {
         "mode": "execute",
         "skill_ref": "references/execute.md",
         "tools": ["grok_agent_execute", "grok_agent_poll", "grok_agent_cancel"],
-        "next": "One tight execute → poll job_id → session_end.",
+        "prefer": "execute",
+        "next": "One tight execute → poll → session_end.",
     },
     "verify": {
         "mode": "verify",
         "skill_ref": "references/verify.md",
         "tools": ["grok_agent_poll", "grok_agent_status", "grok_agent_review"],
-        "next": "Poll/status only; re-execute only on confirmed fail.",
+        "prefer": "consult",
+        "next": "Poll/status only; re-execute only on fail.",
     },
     "feedback": {
         "mode": "feedback",
         "skill_ref": "references/feedback.md",
         "tools": [],
-        "next": "Draft scrubbed GitHub issue via templates/issue.md.",
+        "prefer": "consult",
+        "next": "Draft scrubbed issue via templates/issue.md.",
     },
     "operate": {
         "mode": "operate",
         "skill_ref": "references/operate.md",
         "tools": ["grok_agent_status", "grok_agent_economy"],
-        "next": "Pick brainstorm/execute/verify from task size.",
+        "prefer": "consult",
+        "next": "Pick brainstorm/execute/verify by task size.",
     },
+}
+
+_DENY_BY_MODE: dict[str, list[str]] = {
+    "brainstorm": ["grok_agent_execute", "grok_agent_fix", "grok_agent_start"],
+    "verify": ["grok_agent_execute", "grok_agent_fix"],
+    "install": ["grok_agent_execute", "grok_agent_fix", "grok_agent_consult"],
+    "update": ["grok_agent_execute", "grok_agent_fix"],
+    "feedback": ["grok_agent_execute", "grok_agent_fix", "grok_agent_start"],
 }
 
 _sessions: dict[str, dict[str, Any]] = {}
@@ -106,11 +147,14 @@ def session_compact_active() -> bool:
 
 
 def enable_session_economy() -> None:
-    """Turn on compact economy for this process (session_begin)."""
     global _compact_session
     _compact_session = True
     os.environ.setdefault("GROK_DELEGATE_ECONOMY", "1")
     os.environ.setdefault("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+
+
+def scrub_secrets(text: str) -> str:
+    return _SECRETISH.sub("[REDACTED]", str(text or ""))
 
 
 def _clip(s: str, n: int) -> str:
@@ -118,31 +162,32 @@ def _clip(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def scrub_secrets(text: str) -> str:
-    return _SECRETISH.sub("[REDACTED]", text)
-
-
 def _json_size(obj: Any) -> int:
     return len(json.dumps(obj, ensure_ascii=False, default=str))
 
 
 def _shrink(obj: dict[str, Any], soft_max: int = _PAYLOAD_SOFT_MAX) -> dict[str, Any]:
-    """Drop optional verbose keys until under soft max."""
     out = dict(obj)
-    for key in ("playbook_hint", "defaults_detail", "debug"):
+    # drop heavy optional first
+    for key in ("playbook_hint", "debug", "defaults_detail", "job"):
         if _json_size(out) <= soft_max:
             break
-        out.pop(key, None)
-    # clip long strings
+        if key == "job" and isinstance(out.get("job"), dict):
+            out["job"] = {k: out["job"].get(k) for k in ("job_id", "state", "status") if k in out["job"]}
+        else:
+            out.pop(key, None)
     for k, v in list(out.items()):
-        if isinstance(v, str) and len(v) > 400:
-            out[k] = _clip(v, 400)
+        if isinstance(v, str) and len(v) > 320:
+            out[k] = _clip(v, 320)
     if _json_size(out) > soft_max:
         out = {
             "ok": out.get("ok", True),
-            "protocol": out.get("protocol", "session/v1"),
+            "protocol": out.get("protocol", "session/v1.1"),
             "session_id": out.get("session_id"),
             "mode": out.get("mode"),
+            "plan": out.get("plan", [])[:3] if isinstance(out.get("plan"), list) else [],
+            "host_script": out.get("host_script"),
+            "force_end": out.get("force_end"),
             "next_step": out.get("next_step"),
             "truncated": True,
         }
@@ -155,7 +200,6 @@ def resolve_gate(
     which=None,
     subprocess_runner=None,
 ) -> dict[str, Any]:
-    """Cheap gate: binary / auth presence / roots — no secrets."""
     import shutil
 
     which_fn = which or shutil.which
@@ -176,7 +220,11 @@ def resolve_gate(
     try:
         from .server import load_allowed_roots
 
-        loaded = load_allowed_roots(injected=allowed_roots) if allowed_roots is not None else load_allowed_roots()
+        loaded = (
+            load_allowed_roots(injected=allowed_roots)
+            if allowed_roots is not None
+            else load_allowed_roots()
+        )
         roots = [str(p) for p in loaded[:8]]
         roots_ok = bool(loaded)
     except Exception:
@@ -184,9 +232,8 @@ def resolve_gate(
         roots_ok = bool(env_roots)
         if env_roots:
             roots = [p.strip() for p in env_roots.split(os.pathsep) if p.strip()][:8]
-    ready = binary_ok and auth_present and roots_ok
     return {
-        "ready": ready,
+        "ready": binary_ok and auth_present and roots_ok,
         "cli": "grok",
         "binary_ok": binary_ok,
         "auth_ok": auth_present,
@@ -197,19 +244,116 @@ def resolve_gate(
     }
 
 
-def _auto_mode(gate: Mapping[str, Any], intent: str) -> str:
+def _auto_mode(gate: Mapping[str, Any], intent: str, goal: str) -> str:
     if not gate.get("binary_ok") or not gate.get("auth_ok"):
         return "install" if not gate.get("binary_ok") else "triage"
     if not gate.get("roots_ok"):
         return "triage"
     if intent in INTENTS and intent != "auto":
         return intent
+    g = goal.lower()
+    if any(w in g for w in ("fix", "implement", "build", "add ", "refactor", "write code")):
+        return "execute"
+    if any(w in g for w in ("review", "verify", "test", "check")):
+        return "verify"
+    if any(w in g for w in ("brainstorm", "design", "how should", "options")):
+        return "brainstorm"
+    if "install" in g or "setup" in g:
+        return "install"
     return "operate"
+
+
+def _step(i: int, tool: str, why: str, args_hint: dict[str, Any] | None = None) -> dict[str, Any]:
+    if tool not in _ALLOW:
+        raise ValueError(f"plan tool not allowlisted: {tool}")
+    return {
+        "i": i,
+        "tool": tool,
+        "why": _clip(why, _WHY_MAX),
+        "args_hint": args_hint or {},
+    }
+
+
+def compile_plan(mode: str, goal: str, gate_ready: bool) -> list[dict[str, Any]]:
+    """≤5 steps; tools from allowlist only."""
+    g = _clip(scrub_secrets(goal), 200) if goal else ""
+    steps: list[dict[str, Any]] = []
+    if mode == "install" or not gate_ready and mode not in {"triage", "update", "feedback"}:
+        return steps  # host_script drives install; no MCP tools yet
+    if mode == "update":
+        return steps
+    if mode == "feedback":
+        return steps
+    if mode == "triage":
+        steps.append(_step(1, "grok_agent_status", "Confirm gate/runtime"))
+        steps.append(_step(2, "grok_delegate_doctor", "Diagnose CLI/auth"))
+        steps.append(_step(3, "grok_agent_session_end", "Receipt + next"))
+        return steps[:5]
+    if mode == "brainstorm":
+        steps.append(_step(1, "grok_agent_consult", "Answer with tight goal", {"objective": g} if g else {}))
+        steps.append(_step(2, "grok_agent_session_end", "Short receipt"))
+        return steps
+    if mode == "execute":
+        steps.append(
+            _step(
+                1,
+                "grok_agent_execute",
+                "Implement only listed scope",
+                {"objective": g, "max_turns": ECONOMY_DEFAULT_MAX_TURNS} if g else {"max_turns": ECONOMY_DEFAULT_MAX_TURNS},
+            )
+        )
+        steps.append(_step(2, "grok_agent_session_tick", "Compact progress"))
+        steps.append(_step(3, "grok_agent_poll", "Job receipt fields only"))
+        steps.append(_step(4, "grok_agent_session_end", "Host receipt"))
+        return steps
+    if mode == "verify":
+        steps.append(_step(1, "grok_agent_poll", "Existing job status"))
+        steps.append(_step(2, "grok_agent_status", "Runtime check"))
+        steps.append(_step(3, "grok_agent_session_end", "Receipt"))
+        return steps
+    # operate
+    steps.append(_step(1, "grok_agent_status", "Once per session"))
+    steps.append(_step(2, "grok_agent_economy", "Playbook once"))
+    steps.append(_step(3, "grok_agent_session_end", "Or pick execute/brainstorm"))
+    return steps[:5]
+
+
+def _budget(host_budget: str, max_tool_calls: int | None) -> dict[str, Any]:
+    preset = dict(_BUDGET_PRESETS.get(host_budget, _BUDGET_PRESETS["small"]))
+    if max_tool_calls is not None:
+        try:
+            n = int(max_tool_calls)
+            if n >= 1:
+                preset["max_tool_calls"] = min(n, 32)
+        except (TypeError, ValueError):
+            pass
+    return preset
+
+
+def _host_script(mode: str, plan: list[dict[str, Any]], budget: Mapping[str, Any]) -> str:
+    if not plan:
+        if mode == "install":
+            return _clip(
+                "Gate not ready: run EASY install + grok login, set roots, then session_begin again.",
+                _SCRIPT_MAX,
+            )
+        if mode == "update":
+            return _clip("Run skills/grok-mcp/scripts/update_mcp.sh then session_begin.", _SCRIPT_MAX)
+        if mode == "feedback":
+            return _clip("Fill templates/issue.md; draft_issue.py; no secrets.", _SCRIPT_MAX)
+    tools = " → ".join(s["tool"].replace("grok_agent_", "") for s in plan[:5])
+    return _clip(
+        f"Follow plan only ({tools}). Max tools={budget.get('max_tool_calls')} polls={budget.get('max_polls')}. No tools outside plan/recommended. End via session_end.",
+        _SCRIPT_MAX,
+    )
 
 
 def session_begin(
     intent: str = "auto",
     *,
+    goal: str | None = None,
+    host_budget: str = "small",
+    max_tool_calls: int | None = None,
     allowed_roots: Sequence[Path | str] | None = None,
     which=None,
     subprocess_runner=None,
@@ -220,36 +364,65 @@ def session_begin(
             "ok": False,
             "error_code": "INTENT_INVALID",
             "error": f"intent must be one of: {', '.join(sorted(INTENTS))}",
-            "protocol": "session/v1",
+            "protocol": "session/v1.1",
         }
+    hb = (host_budget or "small").strip().lower()
+    if hb not in HOST_BUDGETS:
+        return {
+            "ok": False,
+            "error_code": "BUDGET_INVALID",
+            "error": f"host_budget must be one of: {', '.join(sorted(HOST_BUDGETS))}",
+            "protocol": "session/v1.1",
+        }
+    goal_s = scrub_secrets(_clip(goal or "", _GOAL_MAX))
     enable_session_economy()
     gate = resolve_gate(
         allowed_roots=allowed_roots, which=which, subprocess_runner=subprocess_runner
     )
-    mode = _auto_mode(gate, intent_n)
-    # If gate broken, force install/triage even when user asked execute
+    mode = _auto_mode(gate, intent_n, goal_s)
     if mode in {"execute", "brainstorm", "verify", "operate", "feedback"} and not gate.get("ready"):
         mode = "install" if not gate.get("binary_ok") else "triage"
     route = _ROUTES.get(mode, _ROUTES["operate"])
-    tools = list(route["tools"])
-    if gate.get("ready") and mode not in {"install", "update"}:
-        # always allow status first
-        if "grok_agent_status" not in tools:
+    tools = [t for t in route["tools"] if t in _ALLOW]
+    if gate.get("ready") and mode not in {"install", "update", "feedback"}:
+        if "grok_agent_status" not in tools and mode == "operate":
             tools = ["grok_agent_status", *tools]
-        if "grok_agent_economy" not in tools and mode == "operate":
-            tools = ["grok_agent_economy", *tools]
+    plan = compile_plan(mode, goal_s, bool(gate.get("ready")))
+    # recommended = unique plan tools + route tools
+    rec_tools: list[str] = []
+    for t in [s["tool"] for s in plan] + tools + ["grok_agent_session_tick", "grok_agent_session_end"]:
+        if t in _ALLOW and t not in rec_tools:
+            rec_tools.append(t)
+    bpreset = _budget(hb, max_tool_calls)
+    budget = {
+        "host_budget": hb,
+        "max_tool_calls": bpreset["max_tool_calls"],
+        "max_polls": bpreset["max_polls"],
+        "prefer": route.get("prefer", "consult"),
+        "stop_when": "plan done or budget exhausted or force_end",
+    }
+    deny = [t for t in _DENY_BY_MODE.get(mode, []) if t in _ALLOW]
+    # never deny session_end/tick
+    deny = [t for t in deny if t not in {"grok_agent_session_end", "grok_agent_session_tick"}]
     sid = uuid.uuid4().hex[:12]
-    rec = {
+    _sessions[sid] = {
         "session_id": sid,
         "intent": intent_n,
         "mode": mode,
+        "goal": goal_s,
         "job_id": None,
+        "plan": plan,
+        "plan_step": 0,
+        "budget": budget,
+        "deny_tools": deny,
+        "tool_calls_used": 0,
+        "polls_used": 0,
         "started": True,
     }
-    _sessions[sid] = rec
-    out = {
+    script = _host_script(mode, plan, budget)
+    out: dict[str, Any] = {
         "ok": True,
-        "protocol": "session/v1",
+        "protocol": "session/v1.1",
         "session_id": sid,
         "mode": mode,
         "gate_status": {
@@ -260,7 +433,11 @@ def session_begin(
             "cli": "grok",
             "server": gate["server"],
         },
-        "recommended_tools": tools,
+        "recommended_tools": rec_tools[:12],
+        "plan": plan,
+        "budget": budget,
+        "deny_tools": deny,
+        "host_script": script,
         "defaults": {
             "max_turns": ECONOMY_DEFAULT_MAX_TURNS,
             "timeout_seconds": ECONOMY_DEFAULT_TIMEOUT_SECONDS,
@@ -272,14 +449,13 @@ def session_begin(
             "verbose_default": False,
         },
         "skill_ref": route["skill_ref"],
-        "next_step": route["next"] if gate.get("ready") or mode in {"install", "triage", "update"} else "Fix gate (CLI+login+roots), then session_begin again.",
+        "next_step": route["next"],
         "disclaimer": "Unofficial community project — not xAI/Grok.",
     }
+    if goal_s:
+        out["goal_echo"] = goal_s
     if not gate.get("ready"):
-        out["next_step"] = (
-            "Gate failed: need grok on PATH, `grok login`, and GROK_DELEGATE_ALLOWED_ROOTS. "
-            "See skill_ref install/security."
-        )
+        out["next_step"] = "Gate failed: grok CLI + login + roots. See skill_ref."
     return _shrink(out)
 
 
@@ -288,6 +464,8 @@ def session_tick(
     session_id: str | None = None,
     job_id: str | None = None,
     verbose: bool = False,
+    tool_used: str | None = None,
+    step_done: bool = False,
 ) -> dict[str, Any]:
     enable_session_economy()
     jid = (job_id or "").strip() or None
@@ -295,13 +473,32 @@ def session_tick(
     sess = _sessions.get(sid) if sid else None
     if sess and not jid:
         jid = sess.get("job_id")
+
+    warns: list[str] = []
+    if sess is not None:
+        sess["polls_used"] = int(sess.get("polls_used") or 0) + 1
+        if tool_used:
+            tu = str(tool_used).strip()
+            deny = set(sess.get("deny_tools") or [])
+            if tu in deny:
+                warns.append(f"tool_denied:{tu}")
+            if tu and tu not in _ALLOW:
+                warns.append(f"tool_unknown:{tu}")
+            else:
+                sess["tool_calls_used"] = int(sess.get("tool_calls_used") or 0) + 1
+        if step_done:
+            sess["plan_step"] = min(
+                int(sess.get("plan_step") or 0) + 1,
+                len(sess.get("plan") or []),
+            )
+
     state = "idle"
     phase = "waiting"
     pct = 0
     changed = 0
     tests_summary = None
-    blockers: list[str] = []
-    suggested = "Call session_begin if new work; else execute/poll."
+    blockers: list[str] = list(warns)
+    suggested = "Follow plan step; session_end when done."
     host_message = "No active job."
     compact: dict[str, Any] | None = None
 
@@ -310,29 +507,23 @@ def session_tick(
         if record is None:
             state = "unknown_job"
             blockers.append("JOB_UNKNOWN")
-            suggested = "Check job_id or list via grok_agent_poll without id."
+            suggested = "session_end or fix job_id"
             host_message = f"Unknown job {jid}."
         else:
             if sid and sess is not None:
                 sess["job_id"] = jid
             compact = compact_job_record(record) if not verbose else dict(record)
             state = str(compact.get("state") or compact.get("status") or "running")
-            phase = state
             st = state.lower()
             if st in {"completed", "ok", "success", "done"}:
-                pct = 100
-                phase = "done"
-                suggested = "session_end for receipt."
+                pct, phase, suggested = 100, "done", "session_end"
             elif st in {"failed", "error", "cancelled", "canceled"}:
-                pct = 100
-                phase = "failed"
+                pct, phase = 100, "failed"
                 blockers.append(str(compact.get("blocked_reason") or compact.get("error") or st))
-                suggested = "session_end; maybe one tight re-execute."
+                suggested = "session_end"
             else:
-                pct = 50
-                phase = "running"
-                suggested = "Poll again or wait; avoid re-sending full objective."
-            cf = compact.get("changed_files") or compact.get("full_changed_files") or []
+                pct, phase, suggested = 50, "running", "tick/poll; no full dumps"
+            cf = compact.get("changed_files") or []
             if isinstance(cf, list):
                 changed = len(cf)
             tests = compact.get("tests")
@@ -341,25 +532,46 @@ def session_tick(
                 tests_summary = f"{passed}/{len(tests)} passed"
             host_message = _clip(
                 f"{state}: files={changed}"
-                + (f" tests={tests_summary}" if tests_summary else "")
-                + (f" block={blockers[0]}" if blockers else ""),
+                + (f" tests={tests_summary}" if tests_summary else ""),
                 _HOST_MSG_MAX,
             )
     else:
-        host_message = "Idle session — no job_id yet."
-        suggested = "Start work with recommended_tools from session_begin."
+        host_message = "Idle — execute plan tools or session_end."
+
+    plan = list((sess or {}).get("plan") or [])
+    step_i = int((sess or {}).get("plan_step") or 0)
+    steps_left = max(0, len(plan) - step_i)
+    budget = dict((sess or {}).get("budget") or _BUDGET_PRESETS["small"])
+    used_tools = int((sess or {}).get("tool_calls_used") or 0)
+    used_polls = int((sess or {}).get("polls_used") or 0)
+    max_t = int(budget.get("max_tool_calls") or 6)
+    max_p = int(budget.get("max_polls") or 4)
+    force_end = used_tools >= max_t or used_polls >= max_p or (bool(plan) and steps_left == 0 and state in {"idle", "done", "completed", "failed"})
+    if used_tools >= max_t:
+        blockers.append("BUDGET_TOOLS")
+    if used_polls >= max_p:
+        blockers.append("BUDGET_POLLS")
+    if force_end:
+        suggested = "session_end"
 
     out: dict[str, Any] = {
         "ok": True,
-        "protocol": "session/v1",
+        "protocol": "session/v1.1",
         "session_id": sid,
         "job_id": jid,
         "state": state,
         "phase": phase,
         "percent": pct,
+        "step": step_i,
+        "steps_left": steps_left,
+        "budget_remaining": {
+            "tool_calls": max(0, max_t - used_tools),
+            "polls": max(0, max_p - used_polls),
+        },
+        "force_end": force_end,
         "changed_files_count": changed,
         "tests_summary": tests_summary,
-        "blockers": blockers,
+        "blockers": blockers[:8],
         "suggested_host_action": suggested,
         "host_message": scrub_secrets(host_message)[:_HOST_MSG_MAX],
         "economy_compact": not verbose and session_compact_active(),
@@ -367,14 +579,13 @@ def session_tick(
     if verbose and compact is not None:
         out["job"] = compact
     elif compact is not None:
-        # ultra-compact job snapshot
         out["job"] = {
             k: compact.get(k)
             for k in ("job_id", "state", "status", "lane", "branch", "summary", "blocked_reason")
             if k in compact
         }
         if out["job"].get("summary"):
-            out["job"]["summary"] = _clip(str(out["job"]["summary"]), 240)
+            out["job"]["summary"] = _clip(str(out["job"]["summary"]), 160)
     return _shrink(out)
 
 
@@ -412,19 +623,16 @@ def session_end(
                 next_step = "Human reviews/merges grok/* if needed."
             elif st in {"failed", "error"}:
                 status = "blocked"
-                next_step = "Inspect blockers; one tight re-execute or human."
+                next_step = "One tight re-execute or human."
             elif st in {"cancelled", "canceled"}:
                 status = "need-human"
                 next_step = "Job cancelled."
             else:
                 status = "need-human"
-                next_step = "Job still running — poll or cancel first."
+                next_step = "Job still running — cancel or wait."
             cf = c.get("changed_files") or []
             if isinstance(cf, list) and cf:
                 changed = [str(x) for x in cf[:12]]
-            summary = c.get("summary")
-            if summary:
-                next_step = _clip(f"{next_step} {_clip(summary, 120)}", 200)
             tlist = c.get("tests")
             if isinstance(tlist, list) and tlist:
                 passed = sum(1 for t in tlist if isinstance(t, Mapping) and t.get("passed"))
@@ -432,8 +640,20 @@ def session_end(
             if c.get("blocked_reason"):
                 blockers.append(str(c.get("blocked_reason")))
     elif note:
-        next_step = _clip(note, 200)
+        next_step = _clip(scrub_secrets(note), 200)
 
+    used_tools = int((sess or {}).get("tool_calls_used") or 0)
+    used_polls = int((sess or {}).get("polls_used") or 0)
+    budget = dict((sess or {}).get("budget") or {})
+    max_t = int(budget.get("max_tool_calls") or 6)
+    max_p = int(budget.get("max_polls") or 4)
+    was_capped = used_tools >= max_t or used_polls >= max_p
+    lesson = _clip(
+        scrub_secrets(
+            f"mode={(sess or {}).get('mode')}; prefer plan tools; budget={'capped' if was_capped else 'ok'}"
+        ),
+        _LESSON_MAX,
+    )
     receipt = {
         "status": status,
         "job": job_label,
@@ -444,21 +664,26 @@ def session_end(
     }
     out: dict[str, Any] = {
         "ok": True,
-        "protocol": "session/v1",
+        "protocol": "session/v1.1",
         "session_id": sid,
         "receipt": receipt,
-        "host_message": _clip(
-            f"{status}: job={job_label} tests={tests}",
-            _HOST_MSG_MAX,
-        ),
+        "budget_report": {
+            "tool_calls_used": used_tools,
+            "polls_used": used_polls,
+            "max_tool_calls": max_t,
+            "max_polls": max_p,
+            "was_capped": was_capped,
+        },
+        "lesson": lesson,
+        "host_message": _clip(f"{status}: job={job_label} tests={tests}", _HOST_MSG_MAX),
         "disclaimer": "Unofficial — not xAI/Grok.",
     }
     if suggest_issue:
         draft = (
-            f"## Summary\nSession {sid or '-'} ended status={status}\n"
+            f"## Summary\nSession {sid or '-'} status={status}\n"
             f"## Job\n{job_label}\n"
             f"## Blockers\n{', '.join(blockers) or 'none'}\n"
-            f"## Env\nserver={SERVER_VERSION} (no secrets)\n"
+            f"## Env\nserver={SERVER_VERSION}\n"
             f"## Free-form\n{scrub_secrets(note or '')}\n"
         )
         out["suggest_issue"] = True

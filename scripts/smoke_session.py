@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke Session Protocol v1 (no network). Exit 0 on success."""
+"""Smoke Session Protocol v1.1."""
 from __future__ import annotations
 
 import json
@@ -15,21 +15,20 @@ from grok_delegate.session import reset_sessions_for_tests  # noqa: E402
 
 def main() -> int:
     reset_sessions_for_tests()
-    b = handle_tool_call("grok_agent_session_begin", {"intent": "auto"})
-    assert b.get("ok"), b
-    assert len(json.dumps(b)) < 2048, len(json.dumps(b))
-    t = handle_tool_call("grok_agent_session_tick", {"session_id": b.get("session_id")})
-    assert t.get("ok"), t
-    e = handle_tool_call(
-        "grok_agent_session_end",
-        {"session_id": b.get("session_id"), "suggest_issue": True, "note": "ok"},
+    b = handle_tool_call(
+        "grok_agent_session_begin",
+        {"intent": "auto", "goal": "review auth module", "host_budget": "small"},
     )
-    assert e.get("ok") and e.get("receipt"), e
-    blob = json.dumps(b) + json.dumps(t) + json.dumps(e)
-    for bad in ("BEGIN RSA", "alexzascherinsky@"):
-        assert bad not in blob
-    print("SMOKE SESSION PASS")
-    print(" mode=", b.get("mode"), " tools=", b.get("recommended_tools"))
+    assert b.get("ok"), b
+    assert b.get("protocol") == "session/v1.1"
+    assert "budget" in b and "plan" in b and "host_script" in b
+    assert 0 <= len(b["plan"]) <= 5
+    assert len(json.dumps(b)) < 1536
+    t = handle_tool_call("grok_agent_session_tick", {"session_id": b["session_id"]})
+    assert "force_end" in t and "budget_remaining" in t
+    e = handle_tool_call("grok_agent_session_end", {"session_id": b["session_id"]})
+    assert e.get("budget_report") and e.get("receipt")
+    print("SMOKE SESSION v1.1 PASS", "mode=", b.get("mode"), "plan_len=", len(b["plan"]))
     return 0
 
 

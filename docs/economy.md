@@ -1,3 +1,7 @@
+## Plan Compiler + Budget Guard
+
+`session_begin` returns a ≤5-step `plan` and hard `budget` (tool_calls/polls). Hosts save tokens by executing the plan only — no re-planning essays.
+
 ## Session Protocol (source of truth)
 
 Host agents should call `grok_agent_session_begin` first. It enables compact economy defaults and returns mode + tools + one `skill_ref`. Prefer that over re-reading this document.

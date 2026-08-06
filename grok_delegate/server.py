@@ -802,13 +802,21 @@ def handle_tool_call(
         return typed_return(economy_playbook())
 
     if name == TOOL_AGENT_SESSION_BEGIN:
-        unknown = sorted(set(args) - {"intent"})
+        unknown = sorted(set(args) - {"intent", "goal", "host_budget", "max_tool_calls"})
         if unknown:
             return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
         intent = str(args.get("intent") or "auto")
+        mtc = args.get("max_tool_calls")
+        try:
+            mtc_i = int(mtc) if mtc is not None and str(mtc) != "" else None
+        except (TypeError, ValueError):
+            return typed_return(structured_error("MAX_TOOL_CALLS_INVALID", "max_tool_calls must be int"))
         return typed_return(
             session_begin(
                 intent,
+                goal=str(args.get("goal") or "") or None,
+                host_budget=str(args.get("host_budget") or "small"),
+                max_tool_calls=mtc_i,
                 allowed_roots=allowed_roots,
                 which=which,
                 subprocess_runner=subprocess_runner,
@@ -816,7 +824,7 @@ def handle_tool_call(
         )
 
     if name == TOOL_AGENT_SESSION_TICK:
-        unknown = sorted(set(args) - {"session_id", "job_id", "verbose"})
+        unknown = sorted(set(args) - {"session_id", "job_id", "verbose", "tool_used", "step_done"})
         if unknown:
             return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
         return typed_return(
@@ -824,6 +832,8 @@ def handle_tool_call(
                 session_id=str(args.get("session_id") or "") or None,
                 job_id=str(args.get("job_id") or "") or None,
                 verbose=bool(args.get("verbose")),
+                tool_used=str(args.get("tool_used") or "") or None,
+                step_done=bool(args.get("step_done")),
             )
         )
 
@@ -1142,10 +1152,9 @@ def list_tools() -> list[dict[str, Any]]:
         {
             "name": TOOL_AGENT_SESSION_BEGIN,
             "description": (
-                "Session Protocol v1: start a compact host session. Pass intent "
-                "(brainstorm|execute|verify|install|update|triage|feedback|auto). "
-                "Returns mode, gate_status, recommended_tools, skill_ref, next_step. "
-                "Call first each MCP task. Enables economy compact mode."
+                "Session Protocol v1.1: begin session with plan compiler + budget guard. "
+                "Pass intent, optional goal (≤500), host_budget tiny|small|normal. "
+                "Returns mode, plan[≤5], budget, deny_tools, host_script, skill_ref. Call first."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1164,16 +1173,23 @@ def list_tools() -> list[dict[str, Any]]:
                             "auto",
                         ],
                         "default": "auto",
-                    }
+                    },
+                    "goal": {"type": "string", "description": "User goal ≤500 chars"},
+                    "host_budget": {
+                        "type": "string",
+                        "enum": ["tiny", "small", "normal"],
+                        "default": "small",
+                    },
+                    "max_tool_calls": {"type": "integer", "minimum": 1, "maximum": 32},
                 },
             },
         },
         {
             "name": TOOL_AGENT_SESSION_TICK,
             "description": (
-                "Session Protocol v1: compact progress for a job/session. "
-                "Returns state, percent, blockers, host_message (≤500). "
-                "verbose=true only when debugging."
+                "Session Protocol v1.1: compact progress + budget. "
+                "Returns step, steps_left, budget_remaining, force_end. "
+                "Pass tool_used/step_done to count budget. verbose default false."
             ),
             "inputSchema": {
                 "type": "object",
@@ -1182,6 +1198,8 @@ def list_tools() -> list[dict[str, Any]]:
                     "session_id": {"type": "string"},
                     "job_id": {"type": "string"},
                     "verbose": {"type": "boolean", "default": False},
+                    "tool_used": {"type": "string"},
+                    "step_done": {"type": "boolean", "default": False},
                 },
             },
         },
