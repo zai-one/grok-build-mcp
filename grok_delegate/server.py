@@ -43,10 +43,12 @@ try:
         HARD_CAP_MAX_TURNS,
         SERVER_VERSION as _guard_server_version,
         GuardError,
+        host_provided_roots,
         parse_allowed_roots_env,
         path_in_allowlist,
         paths_equal,
         structured_error,
+        trust_host_roots_enabled,
         validate_grok_bin,
         validate_json_schema,
         validate_model,
@@ -87,10 +89,12 @@ except ImportError:  # flat import when package dir is on sys.path
         HARD_CAP_MAX_TURNS,
         SERVER_VERSION as _guard_server_version,
         GuardError,
+        host_provided_roots,
         parse_allowed_roots_env,
         path_in_allowlist,
         paths_equal,
         structured_error,
+        trust_host_roots_enabled,
         validate_grok_bin,
         validate_json_schema,
         validate_model,
@@ -503,6 +507,17 @@ def load_allowed_roots(
                 roots.append(Path(single).expanduser().resolve())
             except OSError:
                 pass
+
+    # Host-reported project directory, added last so it widens the allowlist
+    # rather than replacing it, and so the single-pin fallback above keeps its
+    # meaning. Returns nothing unless the operator opted in.
+    for candidate in host_provided_roots(environ):
+        try:
+            host_root = Path(candidate).expanduser().resolve()
+        except OSError:
+            continue
+        if host_root not in roots:
+            roots.append(host_root)
     return roots
 
 

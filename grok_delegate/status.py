@@ -21,7 +21,9 @@ try:
         KNOWN_SANDBOX_PROFILES,
         SERVER_VERSION,
         GuardError,
+        host_provided_roots,
         structured_error,
+        trust_host_roots_enabled,
         validate_grok_bin,
     )
     from .runner import SubprocessRunner, WhichFn, run_readonly_cli
@@ -34,7 +36,9 @@ except ImportError:  # flat import
         KNOWN_SANDBOX_PROFILES,
         SERVER_VERSION,
         GuardError,
+        host_provided_roots,
         structured_error,
+        trust_host_roots_enabled,
         validate_grok_bin,
     )
     from runner import SubprocessRunner, WhichFn, run_readonly_cli  # type: ignore
@@ -322,8 +326,10 @@ def build_status_report(
     subprocess_runner: SubprocessRunner | None = None,
     which: WhichFn | None = None,
     git_runner: Callable[[Sequence[str], Path | None, float], dict[str, Any]] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Aggregate health JSON for ``grok_delegate_status`` (secret-free)."""
+    env_source = env if env is not None else os.environ
     which_fn = which or shutil.which
     bin_name: str
     try:
@@ -392,6 +398,10 @@ def build_status_report(
             "count": len(roots),
             "lanes_parent_by_root": lanes_map,
             "configured": len(roots) > 0,
+            # Without this an operator sees a root they never configured and has
+            # no way to tell where it came from.
+            "host_root_trusted": trust_host_roots_enabled(env_source),
+            "host_root": (host_provided_roots(env_source) or [None])[0],
         },
         "permissions": {
             "execute_mode": "dontAsk",

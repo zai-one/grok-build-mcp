@@ -70,6 +70,34 @@ Set them where the host will inherit them, then restart it. `grok_agent_status`
 reports what was actually granted under `roots.allowed`. A child of an
 allowlisted root is not implicitly trusted.
 
+### Letting the host grant the current project
+
+Maintaining that list by hand gets old once you work across several projects.
+The host already knows which directory you opened — Claude Code exports it to
+the server as `CLAUDE_PROJECT_DIR` — so the server can take the allowlist from
+there:
+
+```bash
+export GROK_DELEGATE_TRUST_HOST_ROOTS=1
+```
+
+With it set, the directory the session was launched in joins the allowlist and
+no longer needs to be listed. It **widens** the list rather than replacing it:
+anything in `GROK_DELEGATE_ALLOWED_ROOTS` stays granted, and exact-equality
+membership is unchanged — a sibling or a child of the session directory is still
+refused.
+
+Off by default, and deliberately. Granting a root because the host named it
+means the operator's explicit list is no longer the whole answer; that is a fair
+trade when the host is your own editor, but it is yours to make. `grok_agent_status`
+shows `roots.host_root_trusted` and `roots.host_root` so a root you never typed
+is traceable.
+
+Hosts that do not set `CLAUDE_PROJECT_DIR` are unaffected — the flag then grants
+nothing. Reading the host's roots over MCP `roots/list`, which would also cover
+`--add-dir` directories and non-Claude hosts, needs a bidirectional stdio loop
+this server does not have yet.
+
 **Skill (router):** `grok-mcp` — see [docs/SKILLS.md](docs/SKILLS.md)
 
 **Full easy guide:** [docs/EASY.md](docs/EASY.md)

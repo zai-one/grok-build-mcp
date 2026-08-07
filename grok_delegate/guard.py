@@ -876,6 +876,37 @@ def validate_grok_bin(value: str | None, *, from_client: bool = False) -> str:
     )
 
 
+# The MCP host knows which directory the user actually opened; Claude Code
+# exports it to the spawned server process. Other hosts may not set it, so it is
+# a hint, never a requirement.
+HOST_PROJECT_DIR_ENV = "CLAUDE_PROJECT_DIR"
+TRUST_HOST_ROOTS_ENV = "GROK_DELEGATE_TRUST_HOST_ROOTS"
+_TRUE_FLAGS = frozenset({"1", "true", "yes", "on"})
+
+
+def trust_host_roots_enabled(env: Mapping[str, str]) -> bool:
+    """Whether host-reported directories may join the allowlist. Off by default.
+
+    Opt-in on purpose. Granting a root because the host named it widens the
+    boundary this module exists to hold — the operator's explicit list stops
+    being the whole answer. That is a fair trade when the host is the operator's
+    own editor, but it is their call to make, not ours to assume for them.
+    """
+    return str(env.get(TRUST_HOST_ROOTS_ENV, "")).strip().lower() in _TRUE_FLAGS
+
+
+def host_provided_roots(env: Mapping[str, str]) -> list[str]:
+    """Directories the host reports, empty unless the operator opted in.
+
+    Returns raw strings; resolution and de-duplication belong to the caller that
+    owns the allowlist, so this stays pure and testable.
+    """
+    if not trust_host_roots_enabled(env):
+        return []
+    raw = str(env.get(HOST_PROJECT_DIR_ENV, "") or "").strip().strip('"').strip("'")
+    return [raw] if raw else []
+
+
 def parse_allowed_roots_env(raw: str | None) -> list[str]:
     """Split allowlist env string (``;`` or newline separated) into path strings."""
     if raw is None:

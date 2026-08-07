@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- `GROK_DELEGATE_TRUST_HOST_ROOTS=1` lets the host's project directory
+  (`CLAUDE_PROJECT_DIR`) join the allowlist, so the session's own project no
+  longer has to be listed by hand. Opt-in; widens the explicit list instead of
+  replacing it; exact-equality membership unchanged. `grok_agent_status` reports
+  `roots.host_root_trusted` and `roots.host_root`
 - `.mcp.json` wired a third-party `grok-cli-mcp` server instead of this one; its
   draft-04 schemas made hosts fail every request after loading a tool
 - Project-scoped entry now resolves the package via `CLAUDE_PROJECT_DIR` (no
