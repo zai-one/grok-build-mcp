@@ -12,6 +12,11 @@
   collapsed to the current navigator loop
 - README documents the allowlist the project-scoped path needs, since that path
   never runs the installer that would have written it
+- Verified against Grok Build CLI `1.0.0 (3cd0d0cbce) [stable]`: no bridge change
+  needed. Version/auth/doctor/models probes pass, `channel` parses from the new
+  `[stable]` suffix, all 21 flags `build_grok_argv` can emit still exist, and a
+  live plan-only delegate run returns `SMOKE PASS`. ACP transports were not
+  re-observed on 1.0.0 and stay pinned to the `0.2.118` baseline
 
 ## 0.8.0 — Session Protocol v1.2 Navigator
 - `*_session_next` returns one action card (host_cmd|mcp_tool|end)

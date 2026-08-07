@@ -20,6 +20,12 @@ For `0.2.118`, `rawInput` arrives in the preceding `tool_call` update while the
 permission request carries its `toolCallId`; the bridge joins those two frames
 before applying the deny-by-default policy.
 
+The ACP baseline has **not** been re-observed against Grok Build `1.0.0`. That
+release was verified on the `stdio` path only — probes, the full headless argv
+surface and a live delegate run. Since `auto` resolves to `stdio-only-no-fallback`,
+default operation is unaffected; treat the frame-joining detail above as pinned
+to `0.2.118` until someone captures fresh fixtures.
+
 On a WebSocket disconnect after session creation the client makes one bounded
 reconnect, negotiates ACP again and calls `session/load`. It does not replay an
 in-flight prompt because that could duplicate writes; the receipt returns
