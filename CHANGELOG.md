@@ -8,6 +8,10 @@
 - `tests/test_tool_schemas.py` guards draft 2020-12 conformance of every tool schema
 - `install.ps1` writes Claude/Cursor snippets, matching `install.sh`
 - Corrected stale server version and tool counts in README and Codex setup readback
+- `docs/EASY.md` stacked three contradictory session protocols (v0.8, v1.1, v1.2);
+  collapsed to the current navigator loop
+- README documents the allowlist the project-scoped path needs, since that path
+  never runs the installer that would have written it
 
 ## 0.8.0 — Session Protocol v1.2 Navigator
 - `*_session_next` returns one action card (host_cmd|mcp_tool|end)

@@ -56,6 +56,20 @@ interpreter:
 export GROK_MCP_PYTHON=python3
 ```
 
+This path skips the installer, so nothing writes the env file for you. Read-only
+tools such as `grok_agent_status` work immediately; anything that touches a
+repository fails closed until you grant an exact root, because the allowlist is
+empty by design:
+
+```bash
+export GROK_DELEGATE_ALLOWED_ROOTS=/path/to/project   # ';' separates several
+export GROK_DELEGATE_LANES_PARENT=/path/to/.grok-mcp-lanes
+```
+
+Set them where the host will inherit them, then restart it. `grok_agent_status`
+reports what was actually granted under `roots.allowed`. A child of an
+allowlisted root is not implicitly trusted.
+
 **Skill (router):** `grok-mcp` — see [docs/SKILLS.md](docs/SKILLS.md)
 
 **Full easy guide:** [docs/EASY.md](docs/EASY.md)

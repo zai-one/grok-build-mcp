@@ -54,22 +54,18 @@ No multi-step pip/venv manual install is supported in docs anymore — use the s
 
 Use router skill **`grok-mcp`** ([SKILLS.md](SKILLS.md)).
 
-## After install (Session Protocol)
+## After install — Navigator (Session Protocol v1.2)
 
 1. Wire host MCP (snippet from installer).
-2. In the host agent, call **`grok_agent_session_begin`** with `intent: "auto"`.
-3. Follow `recommended_tools` → work → **`grok_agent_session_end`**.
-4. Skill: `grok-mcp` (v0.8) — do not paste long docs into chat.
+2. **`grok_agent_session_begin`** once, with `goal` and `host_budget: "small"`.
+3. Loop **`grok_agent_session_next`** — do only what the returned `card` says
+   (`host_cmd` | `mcp_tool` | `end`). Do not re-plan in prose.
+4. Stop when `done=true`, calling **`grok_agent_session_end`** if the card says so.
 
-## Session Plan (v1.1)
+Skill `grok-mcp` v1.0.0 enforces this — do not paste long docs into chat.
 
-1. Call **`grok_agent_session_begin`** with `goal` and `host_budget: "small"`.
-2. Follow returned **`plan`** tools only (see `host_script`).
-3. **`session_tick`** until done/`force_end`, then **`session_end`**.
-4. Skill `grok-mcp` v0.9 — do not re-plan in prose.
-
-## Navigator (v1.2)
-
-1. `grok_agent_session_begin` with goal + host_budget=small  
-2. Loop **`grok_agent_session_next`** — do only what `card` says  
-3. Stop when `done=true`
+`session_tick` still exists for compact progress and budget, but the v1.1 loop
+built on it is superseded by `session_next` — `session_begin` returns a `plan`,
+a `budget` and a `host_script` that says to loop `session_next` until
+`done=true`. Check `gate_status` in that first reply: `ready` stays false while
+`roots_ok` is false, which means the allowlist is still empty.
