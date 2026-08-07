@@ -22,7 +22,13 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue) -and -not (Get-Comma
   Write-Host "Python 3.10+ not found. Install from https://www.python.org/downloads/ (check 'Add to PATH'), then re-run." -ForegroundColor Red
   exit 1
 }
-$py = if (Get-Command py -ErrorAction SilentlyContinue) { "py -3" } else { "python" }
+# Command and arguments must stay separate: `& "py -3"` makes PowerShell look for
+# an executable literally named "py -3" and the install dies before the venv.
+if (Get-Command py -ErrorAction SilentlyContinue) {
+  $py = "py"; $pyArgs = @("-3")
+} else {
+  $py = "python"; $pyArgs = @()
+}
 
 if (-not (Test-Path "$HomeDir\.git")) {
   New-Item -ItemType Directory -Force -Path (Split-Path $HomeDir) | Out-Null
@@ -32,7 +38,7 @@ if (-not (Test-Path "$HomeDir\.git")) {
 }
 
 Push-Location $HomeDir
-& $py -m venv .venv
+& $py @pyArgs -m venv .venv
 & .\.venv\Scripts\python.exe -m pip install -U pip
 & .\.venv\Scripts\python.exe -m pip install -e ".[test]"
 
