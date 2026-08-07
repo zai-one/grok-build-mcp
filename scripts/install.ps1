@@ -51,11 +51,25 @@ $envFile = Join-Path $cfg "env.ps1"
 
 # MCP client snippets — parity with install.sh, which writes the same two files.
 # docs/EASY.md tells operators to merge these, so both install paths must emit them.
+#
+# install.sh points its snippets at a wrapper that sources the env file first,
+# which is why "env": {} is enough there. Windows has no such wrapper, so the
+# snippets carry the environment themselves. Deliberately not an intermediate
+# .cmd: an extra process in an stdio MCP path buys nothing and complicates
+# shutdown, while MCP hosts support `env` natively. Without this the server
+# starts with an empty allowlist and every repo-touching tool fails closed.
 $mcpDir = Join-Path $cfg "mcp"
 New-Item -ItemType Directory -Force -Path $mcpDir | Out-Null
 $launcher = Join-Path $HomeDir ".venv\Scripts\grok-delegate.exe"
-# ConvertTo-Json escapes the backslashes in the Windows path for us.
+
+# ConvertTo-Json escapes backslashes and quotes in Windows paths for us.
 $launcherJson = $launcher | ConvertTo-Json
+$envJson = [ordered]@{
+    GROK_DELEGATE_ALLOWED_ROOTS         = $Project
+    GROK_DELEGATE_LANES_PARENT          = $lanes
+    GROK_DELEGATE_ECONOMY               = "1"
+    GROK_DELEGATE_ECONOMY_COMPACT_POLL  = "1"
+} | ConvertTo-Json
 
 @"
 {
@@ -63,7 +77,7 @@ $launcherJson = $launcher | ConvertTo-Json
     "grok-delegate": {
       "command": $launcherJson,
       "args": [],
-      "env": {}
+      "env": $envJson
     }
   }
 }
@@ -74,7 +88,8 @@ $launcherJson = $launcher | ConvertTo-Json
   "mcpServers": {
     "grok-delegate": {
       "command": $launcherJson,
-      "args": []
+      "args": [],
+      "env": $envJson
     }
   }
 }

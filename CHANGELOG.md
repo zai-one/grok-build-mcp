@@ -6,7 +6,11 @@
 - Project-scoped entry now resolves the package via `CLAUDE_PROJECT_DIR` (no
   working-directory assumption) and takes the interpreter from `${GROK_MCP_PYTHON:-py}`
 - `tests/test_tool_schemas.py` guards draft 2020-12 conformance of every tool schema
-- `install.ps1` writes Claude/Cursor snippets, matching `install.sh`
+- `install.ps1` writes Claude/Cursor snippets, matching `install.sh`, and carries
+  the environment inside them. `install.sh` points its snippets at a wrapper that
+  sources the env file first; Windows has no wrapper, so a snippet with `"env": {}`
+  produced a server with an empty allowlist and every repo-touching tool failed
+  closed
 - Corrected stale server version and tool counts in README and Codex setup readback
 - `docs/EASY.md` stacked three contradictory session protocols (v0.8, v1.1, v1.2);
   collapsed to the current navigator loop
