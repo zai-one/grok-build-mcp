@@ -14,7 +14,7 @@ Skill **`grok-mcp` v1.0** enforces this. No OAuth in MCP config — CLI login on
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.5.3-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.8.0-informational.svg)](pyproject.toml)
 
 **Claude / Cursor orchestrate → Grok CLI codes** (worktrees, receipts, token economy).
 
@@ -40,6 +40,21 @@ grok login
 ```
 
 Merge `~/.config/grok-mcp/mcp/claude_desktop.snippet.json` into Claude/Cursor → restart → `grok_agent_status`.
+
+### Claude Code, on this repository
+
+A project-scoped [`.mcp.json`](.mcp.json) ships in the repo, so opening it in Claude
+Code wires `grok-delegate` with no install step — the package has no runtime
+dependencies. The entry resolves the package from `CLAUDE_PROJECT_DIR`, which Claude
+Code sets in the server's environment, so it does not depend on the working directory
+the host happens to use.
+
+The command defaults to the Windows `py` launcher. Elsewhere, point it at your
+interpreter:
+
+```bash
+export GROK_MCP_PYTHON=python3
+```
 
 **Skill (router):** `grok-mcp` — see [docs/SKILLS.md](docs/SKILLS.md)
 

@@ -49,11 +49,44 @@ $envFile = Join-Path $cfg "env.ps1"
 `$env:GROK_DELEGATE_ECONOMY_COMPACT_POLL = '1'
 "@ | Set-Content -Path $envFile -Encoding UTF8
 
+# MCP client snippets — parity with install.sh, which writes the same two files.
+# docs/EASY.md tells operators to merge these, so both install paths must emit them.
+$mcpDir = Join-Path $cfg "mcp"
+New-Item -ItemType Directory -Force -Path $mcpDir | Out-Null
+$launcher = Join-Path $HomeDir ".venv\Scripts\grok-delegate.exe"
+# ConvertTo-Json escapes the backslashes in the Windows path for us.
+$launcherJson = $launcher | ConvertTo-Json
+
+@"
+{
+  "mcpServers": {
+    "grok-delegate": {
+      "command": $launcherJson,
+      "args": [],
+      "env": {}
+    }
+  }
+}
+"@ | Set-Content -Path (Join-Path $mcpDir "claude_desktop.snippet.json") -Encoding UTF8
+
+@"
+{
+  "mcpServers": {
+    "grok-delegate": {
+      "command": $launcherJson,
+      "args": []
+    }
+  }
+}
+"@ | Set-Content -Path (Join-Path $mcpDir "cursor.snippet.json") -Encoding UTF8
+
 Write-Host "Installed to $HomeDir" -ForegroundColor Green
 Write-Host "Env: $envFile"
+Write-Host "Client snippets: $mcpDir"
 Write-Host ""
 Write-Host "REQUIRED next steps:" -ForegroundColor Yellow
 Write-Host "  1) Install Grok CLI and run: grok login"
 Write-Host "  2) . $envFile; $HomeDir\.venv\Scripts\python.exe -m grok_delegate --self-test"
-Write-Host "  3) Point Claude/Cursor MCP command at: $HomeDir\.venv\Scripts\grok-delegate.exe"
+Write-Host "  3) Merge JSON from $mcpDir\claude_desktop.snippet.json into your MCP host,"
+Write-Host "     then restart it and call grok_agent_status"
 Pop-Location

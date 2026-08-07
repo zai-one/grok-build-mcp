@@ -1,8 +1,11 @@
 {
   "mcpServers": {
-    "grok": {
-      "command": "npx",
-      "args": ["-y", "grok-cli-mcp"]
+    "grok-delegate": {
+      "command": "${GROK_MCP_PYTHON:-py}",
+      "args": [
+        "-c",
+        "import os, sys; sys.path.insert(0, os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()); from grok_delegate.server import main; sys.exit(main(sys.argv[1:]))"
+      ]
     }
   }
 }
