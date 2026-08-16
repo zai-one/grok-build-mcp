@@ -1,3 +1,6 @@
 # grok-delegate
 
-Читай [AGENTS.md](AGENTS.md) и skill `grok-mcp`. Неофициальный MCP-мост к Grok CLI.
+Неофициальный MCP-мост к Grok CLI. Правила проекта живут в `AGENTS.md` — он импортируется
+ниже, отдельно открывать не нужно. Плюс skill `grok-mcp` как роутер по инструментам.
+
+@AGENTS.md
