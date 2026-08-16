@@ -8,11 +8,18 @@ schemas live under ``schemas/`` and contract tests keep the two surfaces aligned
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .guard import GuardError, path_in_allowlist
+from .guard import (
+    GuardError,
+    configured_max_turns,
+    configured_model,
+    configured_reasoning_effort,
+    path_in_allowlist,
+)
 from .economy import apply_task_economy_defaults
 
 TASK_SCHEMA_ID = "grok-task-packet.v1"
@@ -123,10 +130,18 @@ def validate_task_packet(
             f"role {role} requires permission_profile={expected_profile}",
         )
 
-    max_turns = _bounded_int(value.get("max_turns", 40), "max_turns", 1, 60)
+    # The operator's budget stands in for the contract default, so raising it does
+    # not depend on GROK_DELEGATE_ECONOMY also being on.
+    max_turns = _bounded_int(
+        value.get("max_turns", configured_max_turns(os.environ) or 40), "max_turns", 1, 60
+    )
     timeout = _bounded_int(value.get("timeout_seconds", 1800), "timeout_seconds", 1, 3600)
-    model = _optional_string(value.get("model"), "model", 128) or "grok-4.5"
-    effort = (_optional_string(value.get("reasoning_effort"), "reasoning_effort", 16) or "high").lower()
+    model = _optional_string(value.get("model"), "model", 128) or configured_model(os.environ)
+    effort = (
+        _optional_string(value.get("reasoning_effort"), "reasoning_effort", 16)
+        or configured_reasoning_effort(os.environ)
+        or "high"
+    ).lower()
     if effort not in REASONING_EFFORTS:
         raise GuardError(
             "REASONING_EFFORT_INVALID",

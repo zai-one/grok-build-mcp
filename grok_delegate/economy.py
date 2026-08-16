@@ -44,17 +44,42 @@ def compact_poll_enabled(env: Mapping[str, str] | None = None) -> bool:
     return economy_enabled(source)
 
 
+def default_reasoning_effort(env: Mapping[str, str] | None = None) -> str:
+    """Effort the bridge picks when the caller named none.
+
+    ``low`` suits the cheap-worker loop this module was written for, but it is a
+    default, not a policy: an operator paying for a strong model wants that model
+    thinking, and had no way to say so before.
+    """
+    from .guard import configured_reasoning_effort
+
+    source = env if env is not None else os.environ
+    return configured_reasoning_effort(source) or ECONOMY_DEFAULT_REASONING
+
+
+def default_max_turns(env: Mapping[str, str] | None = None) -> int:
+    """Turn budget the bridge picks when the caller named none.
+
+    Raising effort without raising this trades one ceiling for another: the model
+    reasons harder and still runs out of turns mid-task.
+    """
+    from .guard import configured_max_turns
+
+    source = env if env is not None else os.environ
+    return configured_max_turns(source) or ECONOMY_DEFAULT_MAX_TURNS
+
+
 def apply_task_economy_defaults(task: dict[str, Any]) -> dict[str, Any]:
     """Fill missing budget fields with economy defaults (never override client)."""
     if not economy_enabled():
         return task
     out = dict(task)
     if "max_turns" not in out:
-        out["max_turns"] = ECONOMY_DEFAULT_MAX_TURNS
+        out["max_turns"] = default_max_turns()
     if "timeout_seconds" not in out:
         out["timeout_seconds"] = ECONOMY_DEFAULT_TIMEOUT_SECONDS
     if "reasoning_effort" not in out:
-        out["reasoning_effort"] = ECONOMY_DEFAULT_REASONING
+        out["reasoning_effort"] = default_reasoning_effort()
     return out
 
 

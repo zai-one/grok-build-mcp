@@ -18,6 +18,8 @@ from .economy import (
     ECONOMY_DEFAULT_TIMEOUT_SECONDS,
     compact_job_record,
     compact_poll_enabled,
+    default_max_turns,
+    default_reasoning_effort,
 )
 from .guard import SERVER_VERSION
 from .status import probe_auth_presence, probe_grok_version
@@ -251,9 +253,9 @@ def _write_task_packet(sess: Mapping[str, Any]) -> dict[str, Any]:
         "correlation_id": _session_correlation_id(sess),
         "expected_artifacts": artifacts,
         "test_commands": tests,
-        "max_turns": ECONOMY_DEFAULT_MAX_TURNS,
+        "max_turns": default_max_turns(),
         "timeout_seconds": ECONOMY_DEFAULT_TIMEOUT_SECONDS,
-        "reasoning_effort": "low",
+        "reasoning_effort": default_reasoning_effort(),
     }
 
 
@@ -604,9 +606,9 @@ def session_begin(
         "deny_tools": deny,
         "host_script": script,
         "defaults": {
-            "max_turns": ECONOMY_DEFAULT_MAX_TURNS,
+            "max_turns": default_max_turns(),
             "timeout_seconds": ECONOMY_DEFAULT_TIMEOUT_SECONDS,
-            "reasoning_effort": "low",
+            "reasoning_effort": default_reasoning_effort(),
         },
         "economy_flags": {
             "economy": True,

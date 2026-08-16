@@ -907,6 +907,52 @@ def host_provided_roots(env: Mapping[str, str]) -> list[str]:
     return [raw] if raw else []
 
 
+MODEL_ENV = "GROK_DELEGATE_MODEL"
+REASONING_EFFORT_ENV = "GROK_DELEGATE_REASONING_EFFORT"
+
+
+def configured_model(env: Mapping[str, str]) -> str | None:
+    """Operator's model choice, or None to let the CLI pick its own default.
+
+    None is the honest answer to "which model", not a missing value. Naming a
+    default here would pin the bridge to whatever was current when this line was
+    written -- the same mistake as pinning ``agentVersion``, and it ages the same
+    way: the CLI ships a better default and the bridge quietly holds callers on
+    the old one.
+    """
+    return validate_model(str(env.get(MODEL_ENV, "") or "").strip() or None)
+
+
+def configured_reasoning_effort(env: Mapping[str, str]) -> str | None:
+    """Operator's reasoning-effort floor for bridge-chosen budgets, or None.
+
+    Only consulted where the bridge would otherwise invent a number: economy
+    defaults and navigator cards. An effort the caller passed explicitly always
+    wins over this.
+    """
+    return validate_reasoning_effort(str(env.get(REASONING_EFFORT_ENV, "") or "").strip() or None)
+
+
+MAX_TURNS_ENV = "GROK_DELEGATE_MAX_TURNS"
+
+
+def configured_max_turns(env: Mapping[str, str]) -> int | None:
+    """Operator's turn budget, or None when they expressed no preference.
+
+    Out-of-range and non-numeric values read as "no preference" rather than as
+    an error: a typo here would otherwise fail every job until someone noticed,
+    and the caller already has a defensible default to fall back on.
+    """
+    raw = str(env.get(MAX_TURNS_ENV, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if 1 <= value <= HARD_CAP_MAX_TURNS else None
+
+
 def parse_allowed_roots_env(raw: str | None) -> list[str]:
     """Split allowlist env string (``;`` or newline separated) into path strings."""
     if raw is None:

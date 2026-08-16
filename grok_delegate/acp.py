@@ -64,6 +64,17 @@ MAX_MALFORMED_FRAMES = 3
 MAX_WS_FRAME_BYTES = 2_000_000
 CANCEL_GRACE_SECONDS = 5.0
 
+def _model_argv(task: Mapping[str, Any]) -> list[str]:
+    """``--model <id>`` when the task names one, nothing when it does not.
+
+    An absent model is a deliberate deferral to the CLI's own default, so the
+    flag has to disappear from argv entirely; forwarding ``str(None)`` would ask
+    the CLI for a model literally called "None".
+    """
+    model = str(task.get("model") or "").strip()
+    return ["--model", model] if model else []
+
+
 EventSink = Callable[[dict[str, Any]], None]
 
 
@@ -119,8 +130,11 @@ class StdioACPTransport:
             "--disable-web-search",
             "agent",
             "--no-leader",
-            "--model",
-            str(task["model"]),
+        ]
+        # No model means "whatever the CLI defaults to", so say nothing rather
+        # than forwarding the string "None" as a model id.
+        argv += _model_argv(task)
+        argv += [
             "--reasoning-effort",
             str(task["reasoning_effort"]),
             "stdio",
@@ -903,7 +917,7 @@ def _managed_ws_argv(grok_bin: str, task: Mapping[str, Any], port: int) -> list[
         "--max-turns", str(task["max_turns"]),
         "--no-subagents", "--disable-web-search",
         "agent", "--no-leader",
-        "--model", str(task["model"]),
+        *_model_argv(task),
         "--reasoning-effort", str(task["reasoning_effort"]),
         "serve", "--bind", f"127.0.0.1:{port}",
     ]
