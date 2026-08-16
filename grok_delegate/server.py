@@ -159,6 +159,7 @@ TOOL_AGENT_REVIEW = "grok_agent_review"
 TOOL_AGENT_EXECUTE = "grok_agent_execute"
 TOOL_AGENT_FIX = "grok_agent_fix"
 TOOL_AGENT_ECONOMY = "grok_agent_economy"
+TOOL_AGENT_PROJECT = "grok_agent_project"
 TOOL_AGENT_SESSION_BEGIN = "grok_agent_session_begin"
 TOOL_AGENT_SESSION_TICK = "grok_agent_session_tick"
 TOOL_AGENT_SESSION_NEXT = "grok_agent_session_next"
@@ -790,6 +791,111 @@ def handle_status_tool(
     return structured_error("TOOL_UNKNOWN", f"unknown status tool: {name}")
 
 
+def _handle_project_tool(args: Mapping[str, Any]) -> dict[str, Any]:
+    """Report or set a project's preset.
+
+    Writing is confined to the config file inside an allowlisted root: the point
+    of the gate is that a project opts in deliberately, so this must not become a
+    way to opt arbitrary directories in.
+    """
+    from .project_config import (
+        CONFIG_FILENAME,
+        PRESET_DESCRIPTIONS,
+        config_path,
+        project_gate,
+        render_config,
+    )
+
+    raw_root = str(args.get("project_root") or "").strip()
+    if not raw_root:
+        return structured_error("PROJECT_ROOT_EMPTY", "project_root is required")
+    roots = load_allowed_roots()
+    if not roots:
+        return structured_error(
+            "ALLOWED_ROOTS_EMPTY",
+            "configure GROK_DELEGATE_ALLOWED_ROOTS or GROK_DELEGATE_REPO_ROOT",
+        )
+    try:
+        root = Path(raw_root).resolve()
+    except OSError as exc:
+        return structured_error("PROJECT_ROOT_INVALID", f"project_root cannot be resolved: {exc}")
+    if not path_in_allowlist(root, roots):
+        return structured_error(
+            "PROJECT_ROOT_NOT_ALLOWED",
+            "project_root is not an allowlisted root",
+            project_root=str(root),
+        )
+
+    preset = str(args.get("preset") or "").strip().lower()
+    if preset:
+        try:
+            body = render_config(preset, note=str(args.get("note") or "") or None)
+        except GuardError as exc:
+            return structured_error(exc.code, exc.message)
+        target = config_path(root)
+        try:
+            target.write_text(body, encoding="utf-8")
+        except OSError as exc:
+            return structured_error("PROJECT_CONFIG_UNWRITABLE", f"cannot write {CONFIG_FILENAME}: {exc}")
+
+    try:
+        gate = project_gate(root)
+    except GuardError as exc:
+        return structured_error(exc.code, exc.message, config_path=str(config_path(root)))
+    return {
+        "ok": True,
+        "project_root": str(root),
+        "written": bool(preset),
+        "presets": dict(PRESET_DESCRIPTIONS),
+        **gate,
+    }
+
+
+def _apply_project_gate(task: Mapping[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Refuse projects that never opted in; fill the budget for those that did.
+
+    Returns ``(error_or_None, task)``. The error carries the config path and the
+    preset menu, because "not configured" is only actionable if the caller is
+    told where the file goes and what may be written in it.
+    """
+    from .project_config import CONFIG_FILENAME, project_gate
+
+    out = dict(task)
+    root = str(out.get("project_root") or "").strip()
+    if not root:
+        # No root to look at yet; the task contract rejects this on its own and
+        # reports it better than a gate message could.
+        return None, out
+    try:
+        gate = project_gate(root)
+    except GuardError as exc:
+        return structured_error(exc.code, exc.message, config_path=str(Path(root) / CONFIG_FILENAME)), out
+    if not gate["enabled"]:
+        detail = {
+            "config_path": gate["config_path"],
+            "reason": gate["reason"],
+            "preset": gate["preset"],
+        }
+        if gate.get("presets"):
+            detail["presets"] = gate["presets"]
+        if gate["reason"] == "PROJECT_PRESET_OFF":
+            message = (
+                f"{CONFIG_FILENAME} sets preset 'off' for this project; "
+                "pick another preset to delegate here"
+            )
+        else:
+            message = (
+                f"this project has no {CONFIG_FILENAME}, so the bridge will not run a job in it; "
+                "write one naming a preset to opt in"
+            )
+        return structured_error("PROJECT_NOT_ENABLED", message, **detail), out
+
+    # Preset budget fills what the caller left unsaid; an explicit field wins.
+    for field, value in gate["budget"].items():
+        out.setdefault(field, value)
+    return None, out
+
+
 def handle_tool_call(
     name: str,
     arguments: Mapping[str, Any] | None,
@@ -836,6 +942,14 @@ def handle_tool_call(
                 structured_error("ARGUMENTS_UNKNOWN", "grok_agent_economy accepts no arguments")
             )
         return typed_return(economy_playbook())
+
+    if name == TOOL_AGENT_PROJECT:
+        unknown = sorted(set(args) - {"project_root", "preset", "note"})
+        if unknown:
+            return typed_return(
+                structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}")
+            )
+        return typed_return(_handle_project_tool(args))
 
     if name == TOOL_AGENT_SESSION_BEGIN:
         unknown = sorted(
@@ -983,6 +1097,9 @@ def handle_tool_call(
         except GuardError as exc:
             return typed_return(structured_error(exc.code, exc.message), args.get("task") if isinstance(args.get("task"), Mapping) else None)
         typed_task = args.get("task") if isinstance(args.get("task"), Mapping) else {}
+        gate_error, typed_task = _apply_project_gate(typed_task)
+        if gate_error is not None:
+            return typed_return(gate_error, typed_task)
         result = start_agent_job(
             typed_task,
             transport=str(args.get("transport") or "stdio"),
@@ -1226,6 +1343,25 @@ def list_tools() -> list[dict[str, Any]]:
                 "over re-planning. Read-only, no secrets."
             ),
             "inputSchema": _STATUS_SCHEMA,
+        },
+        {
+            "name": TOOL_AGENT_PROJECT,
+            "description": (
+                "Read or set this project's Grok preset (.grok-mcp.json). Without `preset` "
+                "it reports whether the project opted in and lists the presets: off, cheap, "
+                "standard, max. With `preset` it writes the file. Job tools refuse a project "
+                "that has no config, so call this first when they report PROJECT_NOT_ENABLED."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project_root": {"type": "string", "minLength": 1},
+                    "preset": {"enum": ["off", "cheap", "standard", "max"]},
+                    "note": {"type": "string", "maxLength": 500},
+                },
+                "required": ["project_root"],
+                "additionalProperties": False,
+            },
         },
         {
             "name": TOOL_AGENT_SESSION_BEGIN,

@@ -27,6 +27,12 @@
 
 Хост не скармливает весь репозиторий в контекст. Читает compact receipt: `changed_files`, `diffstat`, bounded `unified_diff`, `tests`, `worktree_path`.
 
+## Проект должен сам включить мост
+
+Без `.grok-mcp.json` в корне проекта job-инструменты **отказывают** (`PROJECT_NOT_ENABLED`) — это не баг, а opt-in. Пресеты: `off` / `cheap` (low, 12) / `standard` (high, 24) / `max` (xhigh, 40). Читать и писать — `grok_agent_project`; пишет только внутрь allowlisted root.
+
+Пресеты не задают модель — намеренно, иначе проект запиннится на устаревшую. Явные поля в конфиге бьют пресет, поле в task бьёт оба. Битый конфиг = ошибка, а не «выключено».
+
 ## Экономика и worktree
 
 - Один job за раз. Бюджет worker'а — решение оператора, не агента: `GROK_DELEGATE_REASONING_EFFORT` и `GROK_DELEGATE_MAX_TURNS`. Не занижать их «ради экономии» — экономия хоста и бюджет worker'а это разные вещи.

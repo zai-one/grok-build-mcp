@@ -98,6 +98,33 @@ nothing. Reading the host's roots over MCP `roots/list`, which would also cover
 `--add-dir` directories and non-Claude hosts, needs a bidirectional stdio loop
 this server does not have yet.
 
+### Turning the bridge on for a project
+
+The bridge is off in every project until that project says otherwise. A project
+opts in by carrying `.grok-mcp.json` in its root; job tools refuse one that does
+not, and say so with the path and the menu rather than failing vaguely:
+
+```json
+{ "preset": "max" }
+```
+
+| Preset | Worker budget | For |
+|---|---|---|
+| `off` | — | Grok is not used here |
+| `cheap` | `low`, 12 turns | mechanical edits |
+| `standard` | `high`, 24 turns | everyday work |
+| `max` | `xhigh`, 40 turns | hardest work on the worker, fewest host tokens |
+
+Ask the `grok_agent_project` tool to read or write it — `{project_root}` reports
+whether the project opted in, `{project_root, preset}` writes the file. It only
+writes inside an allowlisted root, so opting a project in cannot become a way to
+opt in arbitrary directories.
+
+No preset names a model, deliberately: that would pin the project to whatever was
+current when the preset was written. Individual fields may still override a
+preset (`reasoning_effort`, `max_turns`, `model`), and a value passed in the task
+itself beats both. A malformed config raises instead of quietly reading as "off".
+
 ### Choosing the model and the worker's budget
 
 The bridge names no model of its own. With nothing configured it omits `--model`

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from grok_delegate.project_config import CONFIG_FILENAME, render_config
 from grok_delegate.server import handle_tool_call, list_tools
 from grok_delegate.session import (
     bind_session_job,
@@ -89,6 +90,12 @@ def _ready_runner(argv, cwd, timeout):
         "stderr": "",
         "timedOut": False,
     }
+
+
+def _enable_project(tmp_path, preset="standard"):
+    """Job tools refuse a project that never opted in, so opt this one in."""
+    (tmp_path / CONFIG_FILENAME).write_text(render_config(preset), encoding="utf-8")
+    return tmp_path
 
 
 def _begin_execute(tmp_path, **extra):
@@ -193,6 +200,7 @@ def test_poll_without_job_id_is_skipped_not_injected(tmp_path):
 
 
 def test_execute_tool_result_binds_poll_job_id(tmp_path, monkeypatch):
+    _enable_project(tmp_path)
     begin = _begin_execute(tmp_path)
     sid = begin["session_id"]
     handle_tool_call("grok_agent_session_next", {"session_id": sid})
@@ -235,6 +243,7 @@ def test_cancel_card_compiles_job_id_only(tmp_path):
 
 
 def test_consult_does_not_bind_job_into_execute_session(tmp_path, monkeypatch):
+    _enable_project(tmp_path)
     begin = _begin_execute(tmp_path)
     sid = begin["session_id"]
     handle_tool_call("grok_agent_session_next", {"session_id": sid})
