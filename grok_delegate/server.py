@@ -991,8 +991,11 @@ def handle_tool_call(
             lane=str(args.get("lane") or "") or None,
             grok_bin=grok_bin,
         )
-        if result.get("job_id"):
-            bind_session_job(str(result["job_id"]))
+        if result.get("job_id") and name in {TOOL_AGENT_EXECUTE, TOOL_AGENT_FIX, TOOL_AGENT_START}:
+            bind_session_job(
+                str(result["job_id"]),
+                correlation_id=str(typed_task.get("correlation_id") or "") or None,
+            )
         return typed_return(result, typed_task)
 
     if name in STATUS_TOOLS:

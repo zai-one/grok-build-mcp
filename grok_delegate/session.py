@@ -183,25 +183,38 @@ def _str_list(value: Any, *, fallback: list[str] | None = None) -> list[str]:
     return list(fallback or [])
 
 
-def bind_session_job(job_id: str, *, session_id: str | None = None) -> str | None:
-    """Remember execute's job_id so the next poll card can be `{job_id}` only."""
+def bind_session_job(
+    job_id: str,
+    *,
+    session_id: str | None = None,
+    correlation_id: str | None = None,
+) -> str | None:
+    """Remember execute/fix job_id so the next poll/cancel card can be `{job_id}` only.
+
+    Never overwrite an unrelated live session. Consult/review jobs must not steal
+    the execute session's poll slot.
+    """
     jid = str(job_id or "").strip()
     if not jid:
         return None
     sid = str(session_id or "").strip() or None
+    cid = str(correlation_id or "").strip() or None
     if sid and sid in _sessions:
         _sessions[sid]["job_id"] = jid
         return sid
+    if cid:
+        for sess in reversed(list(_sessions.values())):
+            if sess.get("ended"):
+                continue
+            if str(sess.get("correlation_id") or "").strip() == cid:
+                sess["job_id"] = jid
+                return str(sess.get("session_id") or "") or None
     for sess in reversed(list(_sessions.values())):
         if sess.get("ended"):
             continue
         if sess.get("job_id"):
             continue
         if sess.get("mode") in {"execute", "verify", "operate", "fix"}:
-            sess["job_id"] = jid
-            return str(sess.get("session_id") or "") or None
-    for sess in reversed(list(_sessions.values())):
-        if not sess.get("ended"):
             sess["job_id"] = jid
             return str(sess.get("session_id") or "") or None
     return None
@@ -257,7 +270,7 @@ def _read_task_packet(sess: Mapping[str, Any], *, role: str) -> dict[str, Any]:
 def compile_card_args(tool: str, sess: Mapping[str, Any], step: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Build typed MCP arguments for a navigator card. Poll never gets session_id."""
     step = step or {}
-    if tool == "grok_agent_poll":
+    if tool in {"grok_agent_poll", "grok_agent_cancel"}:
         jid = str(sess.get("job_id") or "").strip()
         return {"job_id": jid} if jid else {}
     if tool in {"grok_agent_execute", "grok_agent_fix"}:
@@ -898,7 +911,7 @@ def session_next(
             if advance:
                 sess["plan_step"] = step_i
             continue
-        if peek == "grok_agent_poll" and not str(sess.get("job_id") or "").strip():
+        if peek in {"grok_agent_poll", "grok_agent_cancel"} and not str(sess.get("job_id") or "").strip():
             step_i += 1
             if advance:
                 sess["plan_step"] = step_i

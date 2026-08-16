@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 
 from grok_delegate.server import handle_tool_call, list_tools
-from grok_delegate.session import bind_session_job, reset_sessions_for_tests, scrub_secrets
+from grok_delegate.session import (
+    bind_session_job,
+    compile_card_args,
+    reset_sessions_for_tests,
+    scrub_secrets,
+)
 
 _PAYLOAD_CAP = 4096
 
@@ -214,6 +219,64 @@ def test_execute_tool_result_binds_poll_job_id(tmp_path, monkeypatch):
     assert nxt["card"]["tool"] == "grok_agent_poll"
     assert nxt["card"]["args"] == {"job_id": "job-from-execute"}
     assert_valid_against_schema(_tool_schema("grok_agent_poll"), nxt["card"]["args"])
+
+
+def test_cancel_card_compiles_job_id_only(tmp_path):
+    begin = _begin_execute(tmp_path)
+    sid = begin["session_id"]
+    sess = {"session_id": sid, "job_id": "job-cancel-1", "goal": "x",
+            "project_root": str(tmp_path), "correlation_id": "corr-session",
+            "expected_artifacts": ["tests/sample.py"], "test_commands": ["python -m pytest -q"]}
+    args = compile_card_args("grok_agent_cancel", sess)
+    assert args == {"job_id": "job-cancel-1"}
+    assert_valid_against_schema(_tool_schema("grok_agent_cancel"), args)
+    empty = compile_card_args("grok_agent_cancel", {**sess, "job_id": None})
+    assert empty == {}
+
+
+def test_consult_does_not_bind_job_into_execute_session(tmp_path, monkeypatch):
+    begin = _begin_execute(tmp_path)
+    sid = begin["session_id"]
+    handle_tool_call("grok_agent_session_next", {"session_id": sid})
+
+    def fake_start(*_args, **_kwargs):
+        return {"ok": True, "job_id": "job-from-consult", "state": "running"}
+
+    monkeypatch.setattr("grok_delegate.server.start_agent_job", fake_start)
+    consult = handle_tool_call(
+        "grok_agent_consult",
+        {
+            "task": {
+                "objective": "how should auth work",
+                "project_root": str(tmp_path),
+                "correlation_id": "other-corr",
+                "role": "consult",
+            }
+        },
+        allowed_roots=[tmp_path],
+    )
+    assert consult["job_id"] == "job-from-consult"
+    nxt = handle_tool_call("grok_agent_session_next", {"session_id": sid})
+    card = nxt.get("card") or {}
+    assert card.get("args", {}).get("job_id") != "job-from-consult"
+    assert card.get("tool") != "grok_agent_poll"
+
+
+def test_bind_matches_correlation_id_not_newest_session(tmp_path):
+    first = _begin_execute(tmp_path, correlation_id="corr-a", goal="change tests/a.py")
+    second = _begin_execute(tmp_path, correlation_id="corr-b", goal="change tests/b.py")
+    bound = bind_session_job("job-b-only", correlation_id="corr-b")
+    assert bound == second["session_id"]
+    nxt_a = handle_tool_call("grok_agent_session_next", {"session_id": first["session_id"]})
+    nxt_b = handle_tool_call("grok_agent_session_next", {"session_id": second["session_id"]})
+    # Consume execute cards, then poll should only appear on the bound session.
+    nxt_a2 = handle_tool_call("grok_agent_session_next", {"session_id": first["session_id"]})
+    nxt_b2 = handle_tool_call("grok_agent_session_next", {"session_id": second["session_id"]})
+    assert nxt_a["card"]["tool"] == "grok_agent_execute"
+    assert nxt_b["card"]["tool"] == "grok_agent_execute"
+    assert nxt_a2["card"].get("tool") != "grok_agent_poll"
+    assert nxt_b2["card"]["tool"] == "grok_agent_poll"
+    assert nxt_b2["card"]["args"] == {"job_id": "job-b-only"}
 
 
 def test_consult_card_matches_schema(tmp_path):

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Skeptic follow-up on `fix/orchestrator-loop`: `grok_agent_cancel` cards compile
+  `{job_id}` like poll; execute/fix bind by `correlation_id` and no longer let
+  consult/review steal the poll slot. Tag `v0.9.0` stays on `ed019df` (no retag).
+
 ## 0.9.0 — Unpin, typed session_next, evidence pack
 - Default Grok CLI `agentVersion` check is **off** (`any`). Opt-in pin:
   `GROK_DELEGATE_EXPECTED_AGENT_VERSION`. Mismatch is a warning event plus

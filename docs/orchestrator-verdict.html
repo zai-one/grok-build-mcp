@@ -119,7 +119,7 @@
 
     <section class="verdict">
       <p><strong>Вердикт.</strong> Grok — worker, хост — оркестратор/verifier. Цикл <code>session_next</code> теперь компилирует <strong>валидные typed-карточки</strong> (execute = полный <code>task</code>, poll = <code>{job_id}</code>). Pin CLI снят. Клиент grok.com / websocket xAI API — не строить.</p>
-      <p>Тесты: <code>py -3 -m pytest tests -q</code> → 460 passed, 1 skipped. Live ACP: только initialize (CLI 1.0.4 observed, не pin).</p>
+      <p>Независимый скептик (после тега): <a href="../Service/Handoffs/orchestrator-loop-v0.9.0-evidence.md">Service/Handoffs/orchestrator-loop-v0.9.0-evidence.md</a>. Тег <code>v0.9.0</code> = <code>ed019df</code>. Pytest до фикса карточек: 460 passed / 1 skipped (3 прогона). После фикса bind/cancel: 463 passed / 1 skipped. Live ACP: только initialize (CLI 1.0.4 observed, не pin).</p>
     </section>
 
     <div class="pin">
@@ -184,6 +184,7 @@
         <li><span class="chip check">open</span> WS handshake / cwd-stall на текущей CLI.</li>
         <li><span class="chip should">later</span> Двухфаза execute, opt-out <code>--no-subagents</code>, default model slug.</li>
         <li><span class="chip fact">ok</span> Skill врёт больше не должен: navigator — рабочий дешёвый цикл; typed — fallback.</li>
+        <li><span class="chip fact">ok</span> Скептик: cancel без <code>job_id</code> и bind consult→execute poll — пойманы после тега, починены на ветке (без retag <code>v0.9.0</code>).</li>
         <li><span class="chip nope">не делаем</span> grok.com web · xAI <code>wss://api.x.ai/v1/responses</code> · background updater.</li>
       </ul>
     </section>
