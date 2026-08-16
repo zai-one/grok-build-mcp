@@ -62,7 +62,7 @@ Use router skill **`grok-mcp`** ([SKILLS.md](SKILLS.md)).
    (`host_cmd` | `mcp_tool` | `end`). Do not re-plan in prose.
 4. Stop when `done=true`, calling **`grok_agent_session_end`** if the card says so.
 
-Skill `grok-mcp` v1.0.0 enforces this — do not paste long docs into chat.
+Skill `grok-mcp` v1.1.0 enforces this — do not paste long docs into chat.
 
 `session_tick` still exists for compact progress and budget, but the v1.1 loop
 built on it is superseded by `session_next` — `session_begin` returns a `plan`,

@@ -42,7 +42,8 @@ environment values that look like secrets.
 - Never accept API keys / OAuth tokens as MCP tool arguments or documented
   config keys.
 - Keep `SERVER_VERSION` in `grok_delegate/guard.py` and `__version__` in
-  `grok_delegate/__init__.py` in sync with `pyproject.toml`.
+  `grok_delegate/__init__.py` in sync with `pyproject.toml`. Tag `vX.Y.Z` only
+  on a green tree. Do not pin a Grok CLI version.
 - Prefer pure policy in `guard.py` and transport-thin code in `server.py`.
 - Redact secrets in logs, receipts, and errors.
 

@@ -1,0 +1,18 @@
+---
+description: Grok MCP orchestrator — cheap worker, unpin, typed session_next cards
+alwaysApply: true
+---
+
+# grok-delegate
+
+Grok = worker. Host = orchestrator/verifier. Unofficial; auth is `grok login` only.
+
+- Cheap loop: `session_begin` → `session_next` until `done` → `session_end`.
+- Execute card = full `task` (`objective`, `project_root`, `correlation_id`, `expected_artifacts`, `test_commands`). Poll card = `{job_id}` only. Never put `session_id` on poll.
+- Card/schema failure → typed consult → execute → poll → review.
+- Unpin is default (`GROK_DELEGATE_EXPECTED_AGENT_VERSION` opt-in). Mismatch warns; do not block.
+- Worktrees `grok/*` only. Never push/merge from the bridge. No secrets in receipts or commits.
+- If `bridge_version` is stale: `git pull`, `pip install -e .`, restart MCP.
+- Tests: `py -3 -m pytest tests -q`. No force-push, no `--no-verify`, no CLI version pin.
+
+Details: `AGENTS.md`.

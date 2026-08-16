@@ -8,13 +8,13 @@ Unofficial bridge. **Save host tokens:**
 2. Loop `grok_agent_session_next` → do only `card` (`host_cmd` | `mcp_tool` | `end`)  
 3. Stop when `done=true`
 
-Skill **`grok-mcp` v1.0** enforces this. No OAuth in MCP config — CLI login only.
+Skill **`grok-mcp` v1.1** enforces this. Execute cards are a full `task`; poll is `{job_id}` only. No OAuth in MCP config — CLI login only. CLI version is **unpinned** by default.
 
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.8.0-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.9.0-informational.svg)](pyproject.toml)
 
 **Claude / Cursor orchestrate → Grok CLI codes** (worktrees, receipts, token economy).
 

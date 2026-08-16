@@ -1,6 +1,23 @@
 # Changelog
 
 ## Unreleased
+
+## 0.9.0 — Unpin, typed session_next, evidence pack
+- Default Grok CLI `agentVersion` check is **off** (`any`). Opt-in pin:
+  `GROK_DELEGATE_EXPECTED_AGENT_VERSION`. Mismatch is a warning event plus
+  status/doctor `compatibility.warning`; the typed path is not blocked
+- `session_next` execute cards compile a full `task` packet; poll cards are
+  `{job_id}` only. The server binds `job_id` from execute. Contract tests
+  validate cards against the real tool schemas
+- Compact poll/receipt evidence: listed files, diffstat, optional **bounded**
+  unified diff (16KiB cap), bridge-verifier tests, `worktree_path`
+- `grok_agent_status` / doctor report `bridge_version`, `grok_delegate_version`,
+  detected CLI, ACP v1, unpin status, skill protocol, `update_hint`
+  (`git pull` / editable reinstall / restart MCP — no updater daemon)
+- AGENTS.md, Cursor rule, GitHub issue templates, skill v1.1 on
+  `.cursor` / `.claude` / `.codex` / `.agents`
+- Live ACP **initialize** captured on the installed CLI (observed `1.0.4`);
+  that string is not a pin. Permission/cancel/WebSocket frames remain to capture
 - `GROK_DELEGATE_TRUST_HOST_ROOTS=1` lets the host's project directory
   (`CLAUDE_PROJECT_DIR`) join the allowlist, so the session's own project no
   longer has to be listed by hand. Opt-in; widens the explicit list instead of
@@ -21,11 +38,6 @@
   collapsed to the current navigator loop
 - README documents the allowlist the project-scoped path needs, since that path
   never runs the installer that would have written it
-- Verified against Grok Build CLI `1.0.0 (3cd0d0cbce) [stable]`: no bridge change
-  needed. Version/auth/doctor/models probes pass, `channel` parses from the new
-  `[stable]` suffix, all 21 flags `build_grok_argv` can emit still exist, and a
-  live plan-only delegate run returns `SMOKE PASS`. ACP transports were not
-  re-observed on 1.0.0 and stay pinned to the `0.2.118` baseline
 
 ## 0.8.0 — Session Protocol v1.2 Navigator
 - `*_session_next` returns one action card (host_cmd|mcp_tool|end)

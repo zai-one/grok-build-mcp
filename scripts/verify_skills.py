@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = "grok-mcp"
-HOST_DIRS = [ROOT/"skills", ROOT/".claude"/"skills", ROOT/".codex"/"skills", ROOT/".agents"/"skills"]
+HOST_DIRS = [ROOT/"skills", ROOT/".claude"/"skills", ROOT/".codex"/"skills", ROOT/".agents"/"skills", ROOT/".cursor"/"skills"]
 REQUIRED_REL = ['SKILL.md', 'references/operate.md', 'references/install.md', 'references/update.md', 'references/execute.md', 'references/verify.md', 'references/brainstorm.md', 'references/feedback.md', 'references/security.md', 'references/tools.md', 'references/hosts.md', 'scripts/check_ready.sh', 'scripts/update_mcp.sh', 'scripts/draft_issue.py', 'templates/goal-brief.md', 'templates/receipt.md', 'templates/issue.md', 'assets/flow.md']
 FRONT = re.compile(r"^---\n(.*?)\n---\n", re.S)
 BANNED = ("sk-live", "sk-proj-", "BEGIN RSA", "alexzascherinsky@")
