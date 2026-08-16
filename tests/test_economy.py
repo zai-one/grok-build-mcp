@@ -51,6 +51,9 @@ def test_compact_job_record(monkeypatch: pytest.MonkeyPatch) -> None:
                 "output_preview": "x" * 999,
             }
         ],
+        "diffstat": "1 file changed",
+        "worktree_path": "/tmp/grok/lane",
+        "unified_diff": "diff --git a/f.py b/f.py\n" + ("+" * 40_000),
         "secret_field": "should-drop",
     }
     compact = compact_job_record(fat)
@@ -60,6 +63,10 @@ def test_compact_job_record(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(compact["events"]) == 4
     assert "output_preview" not in compact["tests"][0]
     assert "secret_field" not in compact
+    assert compact["worktree_path"] == "/tmp/grok/lane"
+    assert compact["diffstat"] == "1 file changed"
+    assert compact["unified_diff"].endswith("\n…(truncated)")
+    assert len(compact["unified_diff"].encode("utf-8")) <= 16_384 + 20
 
 
 def test_economy_tool_listed_and_callable() -> None:

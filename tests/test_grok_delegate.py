@@ -584,9 +584,37 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(out.get("ok"))
         self.assertIn("guard.py", " ".join(out["changed_files"]))
         self.assertIn("file changed", out["diffstat"])
+        self.assertIn("unified_diff", out)
+        self.assertLessEqual(len(out["unified_diff"].encode("utf-8")), 16_384)
         for c in git.calls:
             if "diff" in c:
-                self.assertTrue("--stat" in c or "--name-only" in c)
+                self.assertTrue(
+                    "--stat" in c or "--name-only" in c or "--unified=3" in c or "--unified" in c,
+                    msg=c,
+                )
+
+    def test_collect_diff_caps_unified_diff_bytes(self) -> None:
+        huge = "diff --git a/a.py b/a.py\n" + ("+" * 80_000)
+
+        def git(args, _cwd, _timeout):
+            argv = [str(a) for a in args]
+            if "--unified=3" in argv or "--unified" in argv:
+                stdout = huge
+            elif "--name-only" in argv:
+                stdout = "a.py\n"
+            elif "--stat" in argv:
+                stdout = " a.py | 1 +\n"
+            elif "--porcelain" in argv:
+                stdout = " M a.py\n"
+            else:
+                stdout = ""
+            return {"returncode": 0, "stdout": stdout, "stderr": "", "timedOut": False}
+
+        out = runner.collect_diff(Path("wt"), git_runner=git)
+        self.assertTrue(out.get("ok"))
+        self.assertTrue(out["changed_files"])
+        self.assertTrue(out["unified_diff"].endswith("\n…(truncated)"))
+        self.assertLessEqual(len(out["unified_diff"].encode("utf-8")), 16_384 + 20)
 
     def test_delegate_happy_path_mocked(self) -> None:
         git = MockGit()
@@ -1841,10 +1869,14 @@ class RoundSixDiffReportingTests(unittest.TestCase):
         self.assertIn("src/services/a.test.ts", out["changed_files"])
         self.assertEqual(out["commits"], ["abc1234 feat: lane work"])
         self.assertIn("2 files changed", out["diffstat"])
-        # Still no full unified patch payload.
+        self.assertIn("unified_diff", out)
+        self.assertLessEqual(len(out["unified_diff"].encode("utf-8")), 16_384)
         for call in git.calls:
             if "diff" in call:
-                self.assertTrue("--stat" in call or "--name-only" in call)
+                self.assertTrue(
+                    "--stat" in call or "--name-only" in call or "--unified=3" in call or "--unified" in call,
+                    msg=call,
+                )
 
     def test_delegate_reports_commits_for_a_committed_lane(self) -> None:
         sp = MockSubprocess(ok=True)

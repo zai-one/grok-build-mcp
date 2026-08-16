@@ -415,7 +415,7 @@ def _serialize_record(record: Mapping[str, Any]) -> str:
         keep = {
             "schema_version", "status", "ok", "job_id", "session_id", "transport",
             "objective_hash", "branch", "worktree_path", "changed_files", "full_changed_files", "commits",
-            "diffstat", "tests", "artifacts", "findings", "blocked_reason",
+            "diffstat", "unified_diff", "tests", "artifacts", "findings", "blocked_reason",
             "started_at", "finished_at", "stop_reason", "agent_version",
             "worker_alive_after_shutdown",
         }

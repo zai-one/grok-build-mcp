@@ -422,6 +422,7 @@ def run_task(
                     "full_changed_files": full_changed_files,
                     "commits": commits,
                     "diffstat": _fallback_diffstat(changed),
+                    "unified_diff": "",
                     "summary": redact_text(str(result.get("summary") or "")),
                     "tests": verified_tests,
                     "artifacts": _present_artifacts(cwd, task),
@@ -447,7 +448,7 @@ def run_task(
         },
     )
     diff = collect_diff(cwd, base_ref=str(task["base_ref"]), git_runner=git_runner) if write_role else {
-        "changed_files": [], "commits": [], "diffstat": ""
+        "changed_files": [], "commits": [], "diffstat": "", "unified_diff": ""
     }
     if write_role:
         if not diff.get("ok"):
@@ -499,6 +500,7 @@ def run_task(
             "full_changed_files": diff.get("full_changed_files") or [],
             "commits": diff.get("commits") or [],
             "diffstat": diff.get("diffstat") or _fallback_diffstat(diff.get("changed_files") or []),
+            "unified_diff": diff.get("unified_diff") or "",
             "tests": verified_tests,
             "artifacts": _present_artifacts(cwd, task),
             "summary": redact_text(str(result.get("summary") or "")),
@@ -742,6 +744,7 @@ def _base_receipt(
         "changed_files": [],
         "commits": [],
         "diffstat": "",
+        "unified_diff": "",
         "tests": [],
         "artifacts": [],
         "findings": [],

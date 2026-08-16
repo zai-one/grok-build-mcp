@@ -17,6 +17,7 @@
     "full_changed_files": {"type": "array", "items": {"type": "string"}},
     "commits": {"type": "array", "items": {"type": "string"}},
     "diffstat": {"type": "string"},
+    "unified_diff": {"type": "string"},
     "tests": {"type": "array", "items": {"type": "object"}},
     "artifacts": {"type": "array", "items": {"type": "string"}},
     "findings": {"type": "array"},

@@ -233,6 +233,7 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
     out.setdefault("full_changed_files", list(out["changed_files"]))
     out.setdefault("commits", [])
     out.setdefault("diffstat", "")
+    out.setdefault("unified_diff", "")
     out.setdefault("tests", [])
     out.setdefault("artifacts", [])
     out.setdefault("findings", [])

@@ -17,6 +17,7 @@ ECONOMY_DEFAULT_REASONING = "low"
 ECONOMY_MAX_SUMMARY = 1_500
 ECONOMY_MAX_EVENTS = 4
 ECONOMY_MAX_CHANGED_FILES = 24
+ECONOMY_MAX_UNIFIED_DIFF = 16_384
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
@@ -63,6 +64,15 @@ def _clip(value: Any, limit: int) -> Any:
     return value
 
 
+def _clip_bytes(value: Any, limit: int) -> str:
+    text = "" if value is None else str(value)
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) <= limit:
+        return text
+    clipped = encoded[: max(0, limit)].decode("utf-8", errors="replace")
+    return clipped + "\n…(truncated)"
+
+
 def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
     """Shrink a job/receipt for host-agent context windows."""
     if not compact_poll_enabled():
@@ -86,6 +96,7 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
         "artifacts",
         "tests",
         "diffstat",
+        "unified_diff",
         "started_at",
         "finished_at",
         "events",
@@ -117,6 +128,8 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
             out[key] = slim
         elif key == "diffstat":
             out[key] = _clip(value, 800)
+        elif key == "unified_diff":
+            out[key] = _clip_bytes(value, ECONOMY_MAX_UNIFIED_DIFF)
         else:
             out[key] = value
     out["economy_compact"] = True
@@ -143,7 +156,7 @@ def economy_playbook() -> dict[str, Any]:
             "For writes: one focused grok_agent_execute with a tight objective, "
             "expected_artifacts, and 1–3 cheap test_commands.",
             "Poll with grok_agent_poll using job_id; do not re-send the full goal.",
-            "Read only summary + changed_files + tests + blocked_reason.",
+            "Read summary + changed_files + diffstat + bounded unified_diff + tests + worktree_path.",
             "Never request full event transcripts or raw tool dumps unless debugging.",
             "Set max_turns low (8–16) and reasoning_effort low|medium unless stuck.",
             "One job at a time; cancel stale jobs instead of stacking.",

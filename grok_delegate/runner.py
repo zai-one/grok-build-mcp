@@ -31,6 +31,8 @@ try:
         validate_grok_bin,
     )
     from .anchors import validate_goal_anchors  # type: ignore[no-redef]
+    from .contracts import redact_text as _redact_text  # type: ignore[no-redef]
+    from .economy import ECONOMY_MAX_UNIFIED_DIFF  # type: ignore[no-redef]
     from .verdict import (  # type: ignore[no-redef]
         default_lane_json_schema,
         parse_lane_verdict,
@@ -52,6 +54,8 @@ except ImportError:  # flat import when package dir is on sys.path
         validate_grok_bin,
     )
     from anchors import validate_goal_anchors  # type: ignore
+    from contracts import redact_text as _redact_text  # type: ignore
+    from economy import ECONOMY_MAX_UNIFIED_DIFF  # type: ignore
     from verdict import (  # type: ignore
         default_lane_json_schema,
         parse_lane_verdict,
@@ -778,6 +782,15 @@ def prepare_worktree(
     }
 
 
+def _bounded_unified_diff(text: str, *, cap: int = ECONOMY_MAX_UNIFIED_DIFF) -> str:
+    raw = _redact_text(text or "")
+    encoded = raw.encode("utf-8", errors="replace")
+    if len(encoded) <= cap:
+        return raw
+    clipped = encoded[:cap].decode("utf-8", errors="replace")
+    return clipped + "\n…(truncated)"
+
+
 def collect_diff(
     worktree_path: Path | str,
     *,
@@ -785,12 +798,14 @@ def collect_diff(
     timeout: float = 60.0,
     base_ref: str | None = None,
 ) -> dict[str, Any]:
-    """Collect changed files + diffstat + lane commits. No full patch payload.
+    """Collect changed files, diffstat, commits, and a bounded unified diff.
 
     R6: when ``base_ref`` is given, work the executor already COMMITTED is included
     (diff/log against the base). Diffing HEAD alone reported ``changed_files: []``
     for a lane that did exactly what its rules asked — commit its work — which is
     indistinguishable from "the executor did nothing".
+    Unified diffs are optional evidence with a hard byte cap; they never fail
+    the snapshot and are never returned unbounded.
     """
     git = git_runner or default_git_runner
     wt = Path(worktree_path)
@@ -808,6 +823,7 @@ def collect_diff(
             "probe_missing": bool(result.get("missing")),
             "changed_files": [],
             "diffstat": "",
+            "unified_diff": "",
             "commits": [],
         }
 
@@ -907,10 +923,29 @@ def collect_diff(
             if len(diffstat) > 8000:
                 diffstat = diffstat[:8000] + "\n…(truncated)"
 
+    unified_chunks: list[str] = []
+    head_unified = git(
+        ["-C", str(wt), "diff", "--unified=3", "HEAD"],
+        None,
+        timeout,
+    )
+    if not probe_failed(head_unified):
+        unified_chunks.append(str(head_unified.get("stdout") or ""))
+    if base_ref:
+        base_unified = git(
+            ["-C", str(wt), "diff", "--unified=3", f"{base_ref}...HEAD"],
+            None,
+            timeout,
+        )
+        if not probe_failed(base_unified):
+            unified_chunks.append(str(base_unified.get("stdout") or ""))
+    unified_diff = _bounded_unified_diff("\n".join(chunk for chunk in unified_chunks if chunk.strip()))
+
     return {
         "ok": True,
         "changed_files": changed,
         "diffstat": diffstat,
+        "unified_diff": unified_diff,
         "commits": commits,
     }
 
@@ -1223,6 +1258,7 @@ def delegate(
             "summary": "",
             "changed_files": [],
             "diffstat": "",
+            "unified_diff": "",
             "commits": [],
             "missing_anchors": missing_anchors,
             "verdict": None,
@@ -1258,6 +1294,7 @@ def delegate(
             "summary": run_result.get("summary") or run_result.get("message") or "",
             "changed_files": diff.get("changed_files") or [],
             "diffstat": diff.get("diffstat") or "",
+            "unified_diff": diff.get("unified_diff") or "",
             "commits": diff.get("commits") or [],
             "missing_anchors": missing_anchors,
             "verdict": verdict_payload,
@@ -1277,6 +1314,7 @@ def delegate(
         "summary": run_result.get("summary") or "",
         "changed_files": diff.get("changed_files") or [],
         "diffstat": diff.get("diffstat") or "",
+        "unified_diff": diff.get("unified_diff") or "",
         "commits": diff.get("commits") or [],
         "missing_anchors": missing_anchors,
         "verdict": verdict_payload,
