@@ -51,6 +51,39 @@ INSPECT_TIMEOUT_SECONDS = 30.0
 
 DEFAULT_STATUS_TIMEOUT = STATUS_TIMEOUT_SECONDS
 
+UPDATE_HINT = (
+    "If bridge_version is older than the checkout, git pull, "
+    "reinstall editable (`pip install -e .`), and restart the MCP host."
+)
+
+
+def compatibility_report(*, detected_cli_version: Any = None) -> dict[str, Any]:
+    """Unpin-by-default compatibility block for status/doctor receipts."""
+    from .acp import expected_agent_version
+
+    expected = expected_agent_version()
+    detected = None if detected_cli_version in (None, "") else str(detected_cli_version)
+    mismatch = bool(expected and detected and expected != detected)
+    warning = None
+    if mismatch:
+        warning = (
+            f"CLI {detected} differs from GROK_DELEGATE_EXPECTED_AGENT_VERSION="
+            f"{expected}; typed path is not blocked (pin is opt-in, warn-only)."
+        )
+    return {
+        "bridge_version": SERVER_VERSION,
+        "grok_delegate_version": SERVER_VERSION,
+        "detected_cli_version": detected,
+        "protocol": "acp/v1",
+        "expected_agent_version": expected or "any",
+        "pin_enabled": expected is not None,
+        "mismatch": mismatch,
+        "mismatch_blocks_typed_path": False,
+        "skill_protocol": "session/v1.2",
+        "update_hint": UPDATE_HINT,
+        "warning": warning,
+    }
+
 
 def _parse_json_stdout(stdout: str) -> Any:
     text = (stdout or "").strip()
@@ -369,6 +402,7 @@ def build_status_report(
             lanes_map[r] = str(Path(r).resolve().parent / "pcp-lanes")
 
     env_sandbox = os.environ.get("GROK_SANDBOX") or os.environ.get("GROK_DELEGATE_SANDBOX")
+    compatibility = compatibility_report(detected_cli_version=version_info.get("version"))
 
     return {
         "ok": True,
@@ -377,6 +411,7 @@ def build_status_report(
             "version": SERVER_VERSION,
             "hard_cap_max_turns": HARD_CAP_MAX_TURNS,
         },
+        "compatibility": compatibility,
         "grok": {
             "binary": bin_name,
             "binary_found": bin_found,

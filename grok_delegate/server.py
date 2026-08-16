@@ -735,11 +735,19 @@ def handle_status_tool(
         return report
 
     if name == TOOL_DOCTOR:
-        return run_doctor_json(
+        from .status import compatibility_report
+
+        report = run_doctor_json(
             grok_bin=grok_bin,
             subprocess_runner=subprocess_runner,
             which=which,
         )
+        if isinstance(report, dict):
+            report = dict(report)
+            report["compatibility"] = compatibility_report()
+            if report["compatibility"].get("warning"):
+                report["warnings"] = [report["compatibility"]["warning"]]
+        return report
 
     if name == TOOL_MODELS:
         return run_models(

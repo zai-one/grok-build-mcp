@@ -1,4 +1,4 @@
-"""ACP v1 clients for Grok Build CLI 0.2.118.
+"""ACP v1 clients for the Grok Build CLI.
 
 The stdio implementation is deliberately small and fixture-driven: UTF-8
 newline-delimited JSON-RPC, one session per task, explicit permission decisions,
@@ -33,6 +33,32 @@ from .contracts import EVENT_SCHEMA_ID, MAX_EVENTS, bounded_event, build_prompt,
 from .guard import ALWAYS_APPROVE_FLAG, GuardError, SERVER_VERSION, validate_grok_bin
 
 ACP_PROTOCOL_VERSION = 1
+
+# Agent version this bridge *optionally* compares against.
+#
+# Default is unpinned: any installed Grok CLI that speaks ACP v1 is accepted.
+# A hardcoded pin silently kills the typed dispatch path the moment the CLI is
+# upgraded, while `grok doctor` stays green because it never opens an ACP session.
+# Operators who still want a pin set GROK_DELEGATE_EXPECTED_AGENT_VERSION; a
+# mismatch is a warning event, never a handshake failure.
+#
+# GROK_DELEGATE_EXPECTED_AGENT_VERSION="" / "any" / "*" / "off" also means unpinned.
+def expected_agent_version() -> str | None:
+    configured = os.environ.get("GROK_DELEGATE_EXPECTED_AGENT_VERSION")
+    if configured is None:
+        return DEFAULT_EXPECTED_AGENT_VERSION
+    configured = configured.strip()
+    if configured == "" or configured.lower() in {"any", "*", "off", "none"}:
+        return None
+    return configured
+
+
+DEFAULT_EXPECTED_AGENT_VERSION: str | None = None
+_expected_agent_version = expected_agent_version
+
+# Distinguishes "caller did not pass the argument" (resolve from env at construction time)
+# from an explicit `None` (caller deliberately disabled the check).
+_EXPECTED_SENTINEL: Any = object()
 DEFAULT_OUTPUT_BYTES = 1_000_000
 MAX_MALFORMED_FRAMES = 3
 MAX_WS_FRAME_BYTES = 2_000_000
@@ -69,12 +95,16 @@ class StdioACPTransport:
         *,
         grok_bin: str = "grok",
         popen_factory: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
-        expected_agent_version: str | None = "0.2.118",
+        expected_agent_version: Any = _EXPECTED_SENTINEL,
         output_byte_cap: int = DEFAULT_OUTPUT_BYTES,
     ) -> None:
         self.grok_bin = validate_grok_bin(grok_bin, from_client=False)
         self.popen_factory = popen_factory
-        self.expected_agent_version = expected_agent_version
+        self.expected_agent_version = (
+            _expected_agent_version()
+            if expected_agent_version is _EXPECTED_SENTINEL
+            else expected_agent_version
+        )
         self.output_byte_cap = max(16_384, min(int(output_byte_cap), 8_000_000))
 
     def build_argv(self, task: Mapping[str, Any]) -> list[str]:
@@ -314,9 +344,13 @@ class StdioACPTransport:
                 raise ACPError("ACP_VERSION_MISMATCH", "agent did not negotiate ACP protocol version 1")
             agent_version = ((init_result.get("_meta") or {}).get("agentVersion"))
             if self.expected_agent_version and agent_version != self.expected_agent_version:
-                raise ACPError(
-                    "GROK_VERSION_MISMATCH",
-                    f"expected agent {self.expected_agent_version}, got {agent_version or 'unknown'}",
+                emit(
+                    "version_mismatch",
+                    {
+                        "expected": self.expected_agent_version,
+                        "got": agent_version,
+                        "blocking": False,
+                    },
                 )
             emit("initialized", {"protocolVersion": 1, "agentVersion": agent_version})
 
@@ -406,14 +440,18 @@ class WebSocketACPTransport:
         grok_bin: str = "grok",
         endpoint: str | None = None,
         secret: str | None = None,
-        expected_agent_version: str | None = "0.2.118",
+        expected_agent_version: Any = _EXPECTED_SENTINEL,
         output_byte_cap: int = DEFAULT_OUTPUT_BYTES,
         popen_factory: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
     ) -> None:
         self.grok_bin = validate_grok_bin(grok_bin, from_client=False)
         self.endpoint = endpoint
         self.secret = secret
-        self.expected_agent_version = expected_agent_version
+        self.expected_agent_version = (
+            _expected_agent_version()
+            if expected_agent_version is _EXPECTED_SENTINEL
+            else expected_agent_version
+        )
         self.output_byte_cap = max(16_384, min(int(output_byte_cap), 8_000_000))
         self.popen_factory = popen_factory
 
@@ -704,9 +742,13 @@ class WebSocketACPTransport:
                 raise ACPError("ACP_VERSION_MISMATCH", "agent did not negotiate ACP protocol version 1")
             agent_version = ((init_result.get("_meta") or {}).get("agentVersion"))
             if self.expected_agent_version and agent_version != self.expected_agent_version:
-                raise ACPError(
-                    "GROK_VERSION_MISMATCH",
-                    f"expected agent {self.expected_agent_version}, got {agent_version or 'unknown'}",
+                emit(
+                    "version_mismatch",
+                    {
+                        "expected": self.expected_agent_version,
+                        "got": agent_version,
+                        "blocking": False,
+                    },
                 )
             emit("initialized", {"protocolVersion": 1, "agentVersion": agent_version})
             send({"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {
@@ -1450,10 +1492,12 @@ def _utc_now() -> str:
 __all__ = [
     "ACPError",
     "ACP_PROTOCOL_VERSION",
+    "DEFAULT_EXPECTED_AGENT_VERSION",
     "StdioACPTransport",
     "TransportAdapter",
     "WebSocketACPTransport",
     "assert_safe_acp_argv",
+    "expected_agent_version",
     "permission_decision",
     "validated_test_argv",
 ]

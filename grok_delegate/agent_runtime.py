@@ -803,12 +803,15 @@ def _job_id(task: Mapping[str, Any], transport: str, lane: str) -> str:
 
 
 def runtime_status() -> dict[str, Any]:
+    from .status import compatibility_report
+
     with _LOCK:
         cancellable = sorted(_CANCEL_EVENTS)
     return {
         "default_transport": "stdio",
         "auto_behavior": "stdio-only-no-fallback",
         "configured_transports": ["legacy", "stdio", "websocket"],
+        "compatibility": compatibility_report(),
         "websocket_mode": (
             "external-loopback-daemon"
             if (os.environ.get("GROK_DELEGATE_WS_ENDPOINT") or "").strip()

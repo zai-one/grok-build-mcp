@@ -15,16 +15,18 @@ cascades to WebSocket or legacy after an error.
 Both ACP adapters execute `initialize → session/new → session/prompt`. They
 handle `session/update`, answer `session/request_permission`, and send the
 `session/cancel` notification on cancellation or timeout. Protocol version is
-integer `1`; the version-pinned live baseline is Grok `0.2.118`.
-For `0.2.118`, `rawInput` arrives in the preceding `tool_call` update while the
-permission request carries its `toolCallId`; the bridge joins those two frames
-before applying the deny-by-default policy.
+integer `1`. The live contract is **ACP v1**, not a specific Grok CLI build:
+the bridge does not pin `agentVersion` by default. Set
+`GROK_DELEGATE_EXPECTED_AGENT_VERSION` only if an operator wants an opt-in
+comparison; a mismatch is a warning on status/doctor and a non-blocking
+`version_mismatch` ACP event — it does not fail the typed path.
 
-The ACP baseline has **not** been re-observed against Grok Build `1.0.0`. That
-release was verified on the `stdio` path only — probes, the full headless argv
-surface and a live delegate run. Since `auto` resolves to `stdio-only-no-fallback`,
-default operation is unaffected; treat the frame-joining detail above as pinned
-to `0.2.118` until someone captures fresh fixtures.
+Historical fixtures under `evidence/round8/acp-fixtures/` were captured on
+Grok `0.2.118`. On that build, `rawInput` arrives in the preceding `tool_call`
+update while the permission request carries its `toolCallId`; the bridge still
+joins those two frames before applying the deny-by-default policy. Treat that
+as observed behaviour, not a version gate. A live ACP rebaseline on the
+currently installed CLI is a remaining check — do not invent new fixtures.
 
 On a WebSocket disconnect after session creation the client makes one bounded
 reconnect, negotiates ACP again and calls `session/load`. It does not replay an

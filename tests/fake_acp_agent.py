@@ -16,6 +16,7 @@ def send(value: dict) -> None:
 
 cwd = Path.cwd()
 session_id = "fixture-session"
+agent_version = os.environ.get("GROK_FAKE_AGENT_VERSION", "0.2.118")
 for raw in sys.stdin:
     try:
         message = json.loads(raw)
@@ -31,7 +32,7 @@ for raw in sys.stdin:
                     "protocolVersion": 1,
                     "agentCapabilities": {},
                     "authMethods": [],
-                    "_meta": {"agentVersion": "0.2.118"},
+                    "_meta": {"agentVersion": agent_version},
                 },
             }
         )
