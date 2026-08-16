@@ -168,6 +168,7 @@ class StdioACPTransport:
         process_job = _WindowsKillJob(proc)
         inbound: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=32)
         reader_overflow = threading.Event()
+        reader_stop = threading.Event()
         reader_budget = {"remaining": self.output_byte_cap}
         reader_budget_lock = threading.Lock()
         threads = [
@@ -175,7 +176,7 @@ class StdioACPTransport:
                 target=_line_reader,
                 args=(
                     proc.stdout, "stdout", inbound, self.output_byte_cap,
-                    reader_overflow, reader_budget, reader_budget_lock,
+                    reader_overflow, reader_budget, reader_budget_lock, reader_stop,
                 ),
                 daemon=True,
             ),
@@ -183,7 +184,7 @@ class StdioACPTransport:
                 target=_line_reader,
                 args=(
                     proc.stderr, "stderr", inbound, min(self.output_byte_cap, 64_000),
-                    reader_overflow, reader_budget, reader_budget_lock,
+                    reader_overflow, reader_budget, reader_budget_lock, reader_stop,
                 ),
                 daemon=True,
             ),
@@ -417,6 +418,7 @@ class StdioACPTransport:
                 "stderr_preview": "\n".join(stderr_tail[-5:])[:2_000],
             }
         finally:
+            reader_stop.set()
             _graceful_stop(proc, process_job)
         result["worker_alive_after_shutdown"] = proc.poll() is None
         return result
@@ -1320,11 +1322,12 @@ def _line_reader(
     overflow: threading.Event | None = None,
     byte_budget: dict[str, int] | None = None,
     budget_lock: threading.Lock | None = None,
+    stop_event: threading.Event | None = None,
 ) -> None:
     if stream is None:
         return
     try:
-        while True:
+        while stop_event is None or not stop_event.is_set():
             line = stream.readline(max(2, int(line_cap)) + 1)
             if line == "":
                 break
@@ -1340,11 +1343,17 @@ def _line_reader(
                             overflow.set()
                         return
                     byte_budget["remaining"] = byte_budget.get("remaining", 0) - size
-            try:
-                target.put((channel, line.rstrip("\r\n")), timeout=0.1)
-            except queue.Full:
-                if overflow is not None:
-                    overflow.set()
+            payload = (channel, line.rstrip("\r\n"))
+            while stop_event is None or not stop_event.is_set():
+                try:
+                    # The aggregate byte budget already bounds memory.  Apply
+                    # backpressure during short Grok bursts instead of turning
+                    # a healthy but briefly full queue into ACP_OUTPUT_LIMIT.
+                    target.put(payload, timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+            else:
                 return
     except Exception:
         return

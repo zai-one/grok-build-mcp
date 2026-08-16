@@ -963,6 +963,37 @@ def test_stdio_reader_enforces_aggregate_budget_before_queueing() -> None:
     assert queued <= 100
 
 
+def test_stdio_reader_applies_backpressure_for_bounded_bursts() -> None:
+    target = __import__("queue").Queue(maxsize=1)
+    overflow = threading.Event()
+    stop = threading.Event()
+    lines = 48
+    reader = threading.Thread(
+        target=acp._line_reader,
+        args=(
+            io.StringIO("".join(f"frame-{index}\n" for index in range(lines))),
+            "stdout", target, 1_000, overflow, {"remaining": 10_000},
+            threading.Lock(), stop,
+        ),
+    )
+    reader.start()
+    # Longer than the old 100 ms Queue.put timeout: the old reader treated this
+    # normal producer burst as ACP_OUTPUT_LIMIT and discarded the remaining frames.
+    time.sleep(0.25)
+    received = []
+    deadline = time.time() + 5
+    while (reader.is_alive() or not target.empty()) and time.time() < deadline:
+        try:
+            received.append(target.get(timeout=0.1)[1])
+        except __import__("queue").Empty:
+            pass
+    reader.join(1)
+    stop.set()
+    assert not reader.is_alive()
+    assert overflow.is_set() is False
+    assert received == [f"frame-{index}" for index in range(lines)]
+
+
 def test_cancel_during_git_preflight_is_bounded(monkeypatch) -> None:
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
