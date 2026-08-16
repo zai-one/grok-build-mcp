@@ -72,7 +72,13 @@ try:
         shutdown_runtime,
         start_agent_job,
     )
-    from .session import session_begin, session_end, session_next, session_tick  # type: ignore[no-redef]
+    from .session import (  # type: ignore[no-redef]
+        bind_session_job,
+        session_begin,
+        session_end,
+        session_next,
+        session_tick,
+    )
     from .economy import (  # type: ignore[no-redef]
         compact_job_record,
         economy_enabled,
@@ -118,7 +124,13 @@ except ImportError:  # flat import when package dir is on sys.path
         shutdown_runtime,
         start_agent_job,
     )
-    from grok_delegate.session import session_begin, session_end, session_next, session_tick  # noqa: E402
+    from grok_delegate.session import (  # noqa: E402
+        bind_session_job,
+        session_begin,
+        session_end,
+        session_next,
+        session_tick,
+    )
     from grok_delegate.economy import (  # noqa: E402
         compact_job_record,
         economy_enabled,
@@ -826,7 +838,19 @@ def handle_tool_call(
         return typed_return(economy_playbook())
 
     if name == TOOL_AGENT_SESSION_BEGIN:
-        unknown = sorted(set(args) - {"intent", "goal", "host_budget", "max_tool_calls"})
+        unknown = sorted(
+            set(args)
+            - {
+                "intent",
+                "goal",
+                "host_budget",
+                "max_tool_calls",
+                "project_root",
+                "expected_artifacts",
+                "test_commands",
+                "correlation_id",
+            }
+        )
         if unknown:
             return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
         intent = str(args.get("intent") or "auto")
@@ -835,6 +859,12 @@ def handle_tool_call(
             mtc_i = int(mtc) if mtc is not None and str(mtc) != "" else None
         except (TypeError, ValueError):
             return typed_return(structured_error("MAX_TOOL_CALLS_INVALID", "max_tool_calls must be int"))
+        artifacts = args.get("expected_artifacts")
+        tests = args.get("test_commands")
+        if artifacts is not None and not isinstance(artifacts, (list, tuple, str)):
+            return typed_return(structured_error("EXPECTED_ARTIFACTS_INVALID", "expected_artifacts must be a string list"))
+        if tests is not None and not isinstance(tests, (list, tuple, str)):
+            return typed_return(structured_error("TEST_COMMANDS_INVALID", "test_commands must be a string list"))
         return typed_return(
             session_begin(
                 intent,
@@ -844,6 +874,10 @@ def handle_tool_call(
                 allowed_roots=allowed_roots,
                 which=which,
                 subprocess_runner=subprocess_runner,
+                project_root=str(args.get("project_root") or "") or None,
+                expected_artifacts=artifacts,
+                test_commands=tests,
+                correlation_id=str(args.get("correlation_id") or "") or None,
             )
         )
 
@@ -949,14 +983,17 @@ def handle_tool_call(
         except GuardError as exc:
             return typed_return(structured_error(exc.code, exc.message), args.get("task") if isinstance(args.get("task"), Mapping) else None)
         typed_task = args.get("task") if isinstance(args.get("task"), Mapping) else {}
-        return typed_return(start_agent_job(
+        result = start_agent_job(
             typed_task,
             transport=str(args.get("transport") or "stdio"),
             allowed_roots=roots,
             forced_role=AGENT_ROLE_TOOLS.get(name),
             lane=str(args.get("lane") or "") or None,
             grok_bin=grok_bin,
-        ), typed_task)
+        )
+        if result.get("job_id"):
+            bind_session_job(str(result["job_id"]))
+        return typed_return(result, typed_task)
 
     if name in STATUS_TOOLS:
         return handle_status_tool(
@@ -1219,6 +1256,18 @@ def list_tools() -> list[dict[str, Any]]:
                         "default": "small",
                     },
                     "max_tool_calls": {"type": "integer", "minimum": 1, "maximum": 32},
+                    "project_root": {"type": "string", "maxLength": 1024},
+                    "correlation_id": {"type": "string", "maxLength": 128},
+                    "expected_artifacts": {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {"type": "string", "maxLength": 2000},
+                    },
+                    "test_commands": {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {"type": "string", "maxLength": 2000},
+                    },
                 },
             },
         },

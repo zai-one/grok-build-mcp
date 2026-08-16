@@ -55,7 +55,7 @@ _ALLOW = frozenset(
 
 _HOST_MSG_MAX = 500
 _GOAL_MAX = 500
-_PAYLOAD_SOFT_MAX = 1536
+_PAYLOAD_SOFT_MAX = 4096
 _WHY_MAX = 60
 _SCRIPT_MAX = 240
 _LESSON_MAX = 120
@@ -167,8 +167,122 @@ def _json_size(obj: Any) -> int:
     return len(json.dumps(obj, ensure_ascii=False, default=str))
 
 
+def _str_list(value: Any, *, fallback: list[str] | None = None) -> list[str]:
+    items: list[str] = []
+    if isinstance(value, str) and value.strip():
+        items.append(value.strip()[:2_000])
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            text = str(item).strip()[:2_000]
+            if text:
+                items.append(text)
+            if len(items) >= 64:
+                break
+    if items:
+        return items
+    return list(fallback or [])
+
+
+def bind_session_job(job_id: str, *, session_id: str | None = None) -> str | None:
+    """Remember execute's job_id so the next poll card can be `{job_id}` only."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        return None
+    sid = str(session_id or "").strip() or None
+    if sid and sid in _sessions:
+        _sessions[sid]["job_id"] = jid
+        return sid
+    for sess in reversed(list(_sessions.values())):
+        if sess.get("ended"):
+            continue
+        if sess.get("job_id"):
+            continue
+        if sess.get("mode") in {"execute", "verify", "operate", "fix"}:
+            sess["job_id"] = jid
+            return str(sess.get("session_id") or "") or None
+    for sess in reversed(list(_sessions.values())):
+        if not sess.get("ended"):
+            sess["job_id"] = jid
+            return str(sess.get("session_id") or "") or None
+    return None
+
+
+def _session_project_root(sess: Mapping[str, Any]) -> str:
+    root = str(sess.get("project_root") or "").strip()
+    if root:
+        return root[:1_024]
+    for item in sess.get("roots") or []:
+        text = str(item).strip()
+        if text:
+            return text[:1_024]
+    return ""
+
+
+def _session_correlation_id(sess: Mapping[str, Any]) -> str:
+    cid = str(sess.get("correlation_id") or "").strip()
+    if cid:
+        return cid[:128]
+    return f"sess-{sess.get('session_id') or 'x'}"[:128]
+
+
+def _write_task_packet(sess: Mapping[str, Any]) -> dict[str, Any]:
+    from .anchors import extract_goal_anchors
+
+    goal = str(sess.get("goal") or "Implement only the listed scope")[:_GOAL_MAX]
+    anchors = [p for p in extract_goal_anchors(goal) if not p.startswith(("http://", "https://"))]
+    artifacts = _str_list(sess.get("expected_artifacts"), fallback=anchors[:8] or ["src"])
+    tests = _str_list(sess.get("test_commands"), fallback=["python -m pytest -q"])
+    return {
+        "objective": goal or "Implement only the listed scope",
+        "project_root": _session_project_root(sess),
+        "correlation_id": _session_correlation_id(sess),
+        "expected_artifacts": artifacts,
+        "test_commands": tests,
+        "max_turns": ECONOMY_DEFAULT_MAX_TURNS,
+        "timeout_seconds": ECONOMY_DEFAULT_TIMEOUT_SECONDS,
+        "reasoning_effort": "low",
+    }
+
+
+def _read_task_packet(sess: Mapping[str, Any], *, role: str) -> dict[str, Any]:
+    goal = str(sess.get("goal") or "Answer in bounded form")[:_GOAL_MAX]
+    return {
+        "objective": goal or "Answer in bounded form",
+        "project_root": _session_project_root(sess),
+        "correlation_id": _session_correlation_id(sess),
+        "role": role,
+    }
+
+
+def compile_card_args(tool: str, sess: Mapping[str, Any], step: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Build typed MCP arguments for a navigator card. Poll never gets session_id."""
+    step = step or {}
+    if tool == "grok_agent_poll":
+        jid = str(sess.get("job_id") or "").strip()
+        return {"job_id": jid} if jid else {}
+    if tool in {"grok_agent_execute", "grok_agent_fix"}:
+        return {"task": _write_task_packet(sess)}
+    if tool == "grok_agent_consult":
+        return {"task": _read_task_packet(sess, role="consult")}
+    if tool == "grok_agent_review":
+        return {"task": _read_task_packet(sess, role="skeptic")}
+    args = dict(step.get("args_hint") or {})
+    if tool == "grok_agent_session_tick":
+        args.setdefault("session_id", sess.get("session_id"))
+        if sess.get("job_id"):
+            args.setdefault("job_id", sess.get("job_id"))
+        return {k: v for k, v in args.items() if v is not None}
+    if tool == "grok_agent_session_end":
+        out = {"session_id": sess.get("session_id")}
+        if sess.get("job_id"):
+            out["job_id"] = sess.get("job_id")
+        return out
+    return args
+
+
 def _shrink(obj: dict[str, Any], soft_max: int = _PAYLOAD_SOFT_MAX) -> dict[str, Any]:
     out = dict(obj)
+    card = out.get("card")
     # drop heavy optional first
     for key in ("playbook_hint", "debug", "defaults_detail", "job"):
         if _json_size(out) <= soft_max:
@@ -178,6 +292,8 @@ def _shrink(obj: dict[str, Any], soft_max: int = _PAYLOAD_SOFT_MAX) -> dict[str,
         else:
             out.pop(key, None)
     for k, v in list(out.items()):
+        if k == "card":
+            continue
         if isinstance(v, str) and len(v) > 320:
             out[k] = _clip(v, 320)
     if _json_size(out) > soft_max:
@@ -186,10 +302,12 @@ def _shrink(obj: dict[str, Any], soft_max: int = _PAYLOAD_SOFT_MAX) -> dict[str,
             "protocol": out.get("protocol", "session/v1.2"),
             "session_id": out.get("session_id"),
             "mode": out.get("mode"),
-            "plan": out.get("plan", [])[:3] if isinstance(out.get("plan"), list) else [],
+            "done": out.get("done"),
+            "card": card,
             "host_script": out.get("host_script"),
             "force_end": out.get("force_end"),
             "next_step": out.get("next_step"),
+            "host_message": _clip(str(out.get("host_message") or ""), 200),
             "truncated": True,
         }
     return out
@@ -373,6 +491,10 @@ def session_begin(
     allowed_roots: Sequence[Path | str] | None = None,
     which=None,
     subprocess_runner=None,
+    project_root: str | None = None,
+    expected_artifacts: Sequence[str] | None = None,
+    test_commands: Sequence[str] | None = None,
+    correlation_id: str | None = None,
 ) -> dict[str, Any]:
     intent_n = (intent or "auto").strip().lower()
     if intent_n not in INTENTS:
@@ -426,6 +548,10 @@ def session_begin(
     # never deny session_end/tick
     deny = [t for t in deny if t not in {"grok_agent_session_end", "grok_agent_session_tick"}]
     sid = uuid.uuid4().hex[:12]
+    stored_root = str(project_root or "").strip()[:1_024]
+    if not stored_root and gate.get("roots"):
+        stored_root = str(gate["roots"][0])[:1_024]
+    stored_cid = str(correlation_id or "").strip()[:128] or f"sess-{sid}"
     _sessions[sid] = {
         "session_id": sid,
         "intent": intent_n,
@@ -439,6 +565,11 @@ def session_begin(
         "tool_calls_used": 0,
         "polls_used": 0,
         "started": True,
+        "project_root": stored_root,
+        "roots": list(gate.get("roots") or [])[:8],
+        "expected_artifacts": _str_list(expected_artifacts),
+        "test_commands": _str_list(test_commands),
+        "correlation_id": stored_cid,
     }
     script = _host_script(mode, plan, budget)
     out: dict[str, Any] = {
@@ -740,7 +871,7 @@ def session_next(
             }
         )
 
-    # Generic: emit current plan step as card
+    # Generic: emit current plan step as a typed card
     if step_i >= len(plan):
         return _shrink(
             {
@@ -760,11 +891,29 @@ def session_next(
             }
         )
 
-    # Skip navigator placeholders in plan (no recursion / no double budget)
-    while step_i < len(plan) and plan[step_i].get("tool") == "grok_agent_session_next":
-        step_i += 1
-        if advance:
-            sess["plan_step"] = step_i
+    while step_i < len(plan):
+        peek = plan[step_i].get("tool")
+        if peek == "grok_agent_session_next":
+            step_i += 1
+            if advance:
+                sess["plan_step"] = step_i
+            continue
+        if peek == "grok_agent_poll" and not str(sess.get("job_id") or "").strip():
+            step_i += 1
+            if advance:
+                sess["plan_step"] = step_i
+            continue
+        if peek in {
+            "grok_agent_execute",
+            "grok_agent_fix",
+            "grok_agent_consult",
+            "grok_agent_review",
+        } and not _session_project_root(sess):
+            step_i += 1
+            if advance:
+                sess["plan_step"] = step_i
+            continue
+        break
     if step_i >= len(plan):
         return _shrink(
             {
@@ -810,12 +959,9 @@ def session_next(
     card = {
         "kind": "mcp_tool",
         "tool": tool,
-        "args": dict(step.get("args_hint") or {}),
+        "args": compile_card_args(str(tool), sess, step),
         "why": step.get("why") or "",
     }
-    # inject session id into poll/tick if needed
-    if tool in {"grok_agent_session_tick", "grok_agent_poll"} and "session_id" not in card["args"]:
-        card["args"]["session_id"] = sid
     if advance:
         sess["plan_step"] = step_i + 1
     return _shrink(

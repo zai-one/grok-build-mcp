@@ -10,7 +10,7 @@ def main() -> int:
     reset_sessions_for_tests()
     b = handle_tool_call("grok_agent_session_begin", {"intent": "auto", "goal": "review auth", "host_budget": "small"})
     assert b["ok"] and b["protocol"] == "session/v1.2" and b.get("plan") is not None
-    assert len(json.dumps(b)) < 1536
+    assert len(json.dumps(b)) < 4096
     sid = b["session_id"]
     n = handle_tool_call("grok_agent_session_next", {"session_id": sid})
     assert n.get("card") and "kind" in n["card"]
