@@ -1,0 +1,117 @@
+diff --git a/grok_delegate/acp.py b/grok_delegate/acp.py
+index e14019b..a0067ae 100644
+--- a/grok_delegate/acp.py
++++ b/grok_delegate/acp.py
+@@ -138,6 +138,7 @@ class StdioACPTransport:
+         process_job = _WindowsKillJob(proc)
+         inbound: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=32)
+         reader_overflow = threading.Event()
++        reader_stop = threading.Event()
+         reader_budget = {"remaining": self.output_byte_cap}
+         reader_budget_lock = threading.Lock()
+         threads = [
+@@ -145,7 +146,7 @@ class StdioACPTransport:
+                 target=_line_reader,
+                 args=(
+                     proc.stdout, "stdout", inbound, self.output_byte_cap,
+-                    reader_overflow, reader_budget, reader_budget_lock,
++                    reader_overflow, reader_budget, reader_budget_lock, reader_stop,
+                 ),
+                 daemon=True,
+             ),
+@@ -153,7 +154,7 @@ class StdioACPTransport:
+                 target=_line_reader,
+                 args=(
+                     proc.stderr, "stderr", inbound, min(self.output_byte_cap, 64_000),
+-                    reader_overflow, reader_budget, reader_budget_lock,
++                    reader_overflow, reader_budget, reader_budget_lock, reader_stop,
+                 ),
+                 daemon=True,
+             ),
+@@ -383,6 +384,7 @@ class StdioACPTransport:
+                 "stderr_preview": "\n".join(stderr_tail[-5:])[:2_000],
+             }
+         finally:
++            reader_stop.set()
+             _graceful_stop(proc, process_job)
+         result["worker_alive_after_shutdown"] = proc.poll() is None
+         return result
+@@ -1277,11 +1279,12 @@ def _line_reader(
+     overflow: threading.Event | None = None,
+     byte_budget: dict[str, int] | None = None,
+     budget_lock: threading.Lock | None = None,
++    stop_event: threading.Event | None = None,
+ ) -> None:
+     if stream is None:
+         return
+     try:
+-        while True:
++        while stop_event is None or not stop_event.is_set():
+             line = stream.readline(max(2, int(line_cap)) + 1)
+             if line == "":
+                 break
+@@ -1297,11 +1300,17 @@ def _line_reader(
+                             overflow.set()
+                         return
+                     byte_budget["remaining"] = byte_budget.get("remaining", 0) - size
+-            try:
+-                target.put((channel, line.rstrip("\r\n")), timeout=0.1)
+-            except queue.Full:
+-                if overflow is not None:
+-                    overflow.set()
++            payload = (channel, line.rstrip("\r\n"))
++            while stop_event is None or not stop_event.is_set():
++                try:
++                    # The aggregate byte budget already bounds memory.  Apply
++                    # backpressure during short Grok bursts instead of turning
++                    # a healthy but briefly full queue into ACP_OUTPUT_LIMIT.
++                    target.put(payload, timeout=0.1)
++                    break
++                except queue.Full:
++                    continue
++            else:
+                 return
+     except Exception:
+         return
+diff --git a/tests/test_round8_bridge.py b/tests/test_round8_bridge.py
+index db12f4f..76b3409 100644
+--- a/tests/test_round8_bridge.py
++++ b/tests/test_round8_bridge.py
+@@ -955,6 +955,37 @@ def test_stdio_reader_enforces_aggregate_budget_before_queueing() -> None:
+     assert queued <= 100
+ 
+ 
++def test_stdio_reader_applies_backpressure_for_bounded_bursts() -> None:
++    target = __import__("queue").Queue(maxsize=1)
++    overflow = threading.Event()
++    stop = threading.Event()
++    lines = 48
++    reader = threading.Thread(
++        target=acp._line_reader,
++        args=(
++            io.StringIO("".join(f"frame-{index}\n" for index in range(lines))),
++            "stdout", target, 1_000, overflow, {"remaining": 10_000},
++            threading.Lock(), stop,
++        ),
++    )
++    reader.start()
++    # Longer than the old 100 ms Queue.put timeout: the old reader treated this
++    # normal producer burst as ACP_OUTPUT_LIMIT and discarded the remaining frames.
++    time.sleep(0.25)
++    received = []
++    deadline = time.time() + 5
++    while (reader.is_alive() or not target.empty()) and time.time() < deadline:
++        try:
++            received.append(target.get(timeout=0.1)[1])
++        except __import__("queue").Empty:
++            pass
++    reader.join(1)
++    stop.set()
++    assert not reader.is_alive()
++    assert overflow.is_set() is False
++    assert received == [f"frame-{index}" for index in range(lines)]
++
++
+ def test_cancel_during_git_preflight_is_bounded(monkeypatch) -> None:
+     with tempfile.TemporaryDirectory() as raw:
+         root = Path(raw)

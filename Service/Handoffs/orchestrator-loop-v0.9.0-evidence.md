@@ -58,6 +58,8 @@ Grok MCP в этой сессии Cursor **не был подключён**. Typ
 
 Число 460/463 — детерминированный счётчик тестов, не шумная метрика. Три прогона до фикса совпали по счёту.
 
+> **Поправка от 2026-08-16 (проход Claude, §11).** Для *пост-фиксного* прогона это утверждение не подтвердилось: записан был один прогон. Независимый повтор дал 462 passed / 1 **failed** / 1 skipped — `test_cancel_has_independent_grace_deadline` нестабилен под нагрузкой. Подробности и доказательства — §11.
+
 ---
 
 ## 4. Что НЕ запускалось и почему
@@ -254,3 +256,96 @@ Skill SKILL.md matches tools: navigator cheap loop, typed fallback, unpin defaul
 - файл промпта `.tasks/*`: не создавался этим проходом
 - worktree: не создавался; работа на `fix/orchestrator-loop`
 - GitHub Release: не создавался
+
+
+---
+
+## 11. Проход-верификация 2026-08-16 (Claude, после скептика)
+
+Что делалось: рецепт §6 без полного аудита дерева, затем консолидация веток по просьбе оператора.
+Grok MCP отвечал, `grok --version` = **1.0.4**. Итоговый SHA этого прохода: см. `git log --oneline -1`.
+
+### 11.1 Что подтвердилось
+
+| Проверка §6 | Результат |
+|---|---|
+| 5 коммитов v0.9.0 + 2 follow-up над `origin/main` | подтверждено |
+| `git rev-parse v0.9.0` = `ed019df…`, тег не двигали | подтверждено |
+| `DEFAULT_EXPECTED_AGENT_VERSION is None` (`acp.py:56`) | подтверждено |
+| `compile_card_args`: poll и cancel в одной ветке `{job_id}` (`session.py:273`), skip без `job_id` (`session.py:914`) | подтверждено |
+| bind по `correlation_id` только для execute/fix/start (`server.py:995`) | подтверждено |
+| `docs/orchestrator-verdict.html` ссылается на этот файл | подтверждено |
+| Логи pytest рядом соответствуют заявленным 460 / 463 | подтверждено |
+| [P2] doctor без `detected_cli_version` — всё ещё открыт | подтверждено, `server.py:759` |
+
+### 11.2 Опровергнуто: пост-фиксный suite нестабилен
+
+`tests/test_round8_bridge.py::test_cancel_has_independent_grace_deadline`
+
+| Прогон | Результат | Время |
+|---|---|---|
+| full suite #1 | **462 passed, 1 failed, 1 skipped** | 62.64 с |
+| full suite #2 | 463 passed, 1 skipped | 77.73 с |
+| изолированно ×3 | 3 × passed | ~0.8 с |
+
+Падение: `assert holder["result"]["blocked_reason"] == "ACP_CANCEL_TIMEOUT"` → фактически `ACP_CANCELLED`.
+
+Механизм: тест патчит `CANCEL_GRACE_SECONDS` в **0.2 с**, спит 0.3 с и ждёт, что фикстура
+`CANCEL_IGNORED_FIXTURE` проигнорирует cancel и мост упрётся в grace-дедлайн. Окно в 200 мс сравнимо
+с джиттером планировщика Windows под нагрузкой полного suite: процесс успевает закрыться раньше
+дедлайна, и мост честно рапортует чистый `ACP_CANCELLED`.
+
+Это **не регрессия ветки**: `git diff 723abf6 df833c2 -- grok_delegate/acp.py` не содержит ни одного
+изменения в cancel-пути, а единственная правка `tests/fake_acp_agent.py` — инъекция
+`GROK_FAKE_AGENT_VERSION` для unpin-тестов. Дефект преэкзистентный, не заводился как finding.
+
+**Следствие для следующего хоста:** один зелёный прогон suite ≠ зелёный suite. Счётчик тестов
+детерминирован, счётчик *проходов* — нет. Ориентир §6 «≥463 passed, 1 skipped» держать, но
+единичный fail этого теста трактовать как flake, а не как регрессию, пока не тронут cancel-путь.
+
+### 11.3 Опровергнуто: §6 п.4 нечем проверить
+
+`grok_agent_status` вернул `server.version` = **0.8.0** и **не содержит блока `compatibility` вообще**.
+Блок появляется только в v0.9.0 (`status.py: compatibility_report`). То есть запущенный в хосте MCP —
+сборка *до* этой ветки, и проверить `expected_agent_version == "any"` / `pin_enabled false` через неё
+нельзя. Проверка §6 п.4 остаётся **невыполненной** до `pip install -e .` + рестарт MCP.
+Код на ветке при этом верный — подтверждено чтением, а не вызовом.
+
+### 11.4 Найдено и починено: ACP output burst
+
+При консолидации веток в worktree `grok/safe-consult-acp-bridge` обнаружена **незакоммиченная** правка,
+которой нет ни в одной ветке. `_line_reader` клал кадры с `timeout=0.1` и на `queue.Full` ставил
+overflow и **выбрасывал весь остаток вывода агента**, помечая прогон как `ACP_OUTPUT_LIMIT`. Обычный
+backpressure потребителя дольше 100 мс — не превышение лимита. Правка снимает таймаут и добавляет
+явный stop-event ридерам.
+
+Патч лёг на `main` чисто, в комплекте регрессионный тест
+`test_stdio_reader_applies_backpressure_for_bounded_bursts`. Suite: **464 passed, 1 skipped**.
+Закоммичено в `main` по решению оператора. Исходный патч сохранён:
+`Service/Handoffs/archive/safe-consult-acp-bridge-uncommitted.patch`.
+
+### 11.5 Консолидация веток
+
+Продакшен-ветка ровно одна: **`main`**. `origin` содержит только `main` и тег `v0.9.0` (не двигали).
+
+| Ветка | Была | Судьба |
+|---|---|---|
+| `fix/orchestrator-loop` | df833c2 | fast-forward в `main`, удалена локально и на origin |
+| `fix/mcp-json-wiring-and-schema-guard` | f31ea63 | уже содержалась в `main`, удалена локально и на origin |
+| `github-main-v0.8.0` | 37bacb1 | предок `main`, worktree снят, удалена |
+| `grok/b2b-cro-plan-third-pass` | 37bacb1 | предок `main`, worktree снят, удалена |
+| `grok/safe-consult-acp-bridge` | a1ae467 | несвязанная история, worktree снят, удалена → тег `archive/safe-consult-acp-bridge` |
+| `master` | 6b02884 | несвязанная история, удалена → тег `archive/master-round8` |
+| `main-local-v0.4.0-backup` | ba5134e | несвязанная история, удалена → тег `archive/local-v0.4.0-backup` |
+
+Три последние **не мержились намеренно**: `git merge-base main master` пуст — общего предка нет, это
+до-GitHub'овская локальная линия. Ни одного файла, которого нет в `main`, они не содержат
+(`comm -13` по `ls-tree` пуст для всех трёх); их различия — старые версии `README.md`, `server.py`
+и прочего. Мерж не добавил бы работы, а вернул бы регрессию. Вместо мержа — локальные архивные теги,
+так что история достижима и удаление обратимо в этом клоне.
+
+`D:\ZAI\MCP\grok-lanes` пуст. Архивные теги локальные, на origin не пушились.
+
+### 11.6 Что по-прежнему не проверено
+
+Всё из §4 остаётся в силе. Дополнительно: §6 п.4 (см. 11.3) и symlink-escape (skip на этой машине).

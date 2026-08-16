@@ -1,0 +1,115 @@
+{
+  "schema_version": "round8-goal-power-e2e.v1",
+  "captured_at": "2026-08-05T12:10:52Z",
+  "source_head": "a1ae4679fc27aa72abd4fa46a3c1cdfa8bfe77fb",
+  "source_branch": "grok/safe-consult-acp-bridge",
+  "temporary_fixture_root": "C:\\Users\\codex\\AppData\\Local\\Temp\\grok-goal-power-e2e-hcon3hr7",
+  "mcp": {
+    "protocol": "2024-11-05",
+    "server": "grok-delegate 0.4.0",
+    "tools_list_count": 16,
+    "ping_after_each_job": true
+  },
+  "goal_contract": {
+    "objective": "multi-file deterministic goal engine",
+    "inputs": ["SPEC.md", "test_goal.py"],
+    "constraints_count": 4,
+    "acceptance_criteria_count": 6,
+    "expected_artifacts": ["goal_engine.py", "GOAL-RESULT.json"],
+    "test_command": "py -3 -m unittest test_goal -v",
+    "capabilities_proven": [
+      "reads a specification and executable acceptance contract",
+      "creates two coordinated artifacts",
+      "implements deterministic normalization and deduplication",
+      "materializes inspect implement verify goal steps",
+      "honors expected-only full diff gate",
+      "passes bridge verifier and independent external test"
+    ]
+  },
+  "initial_live_run": {
+    "legacy": {
+      "job_id": "job-a6abc2eca28927b9",
+      "status": "completed",
+      "ok": true,
+      "changed_files": ["GOAL-RESULT.json", "goal_engine.py"],
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "external_test_passed": true,
+      "artifact_contract_ok": true
+    },
+    "stdio": {
+      "job_id": "job-25a1454d05ac5c9a",
+      "status": "failed",
+      "ok": false,
+      "blocked_reason": "ACP_OUTPUT_LIMIT",
+      "changed_files": ["GOAL-RESULT.json", "goal_engine.py"],
+      "external_test_passed": true,
+      "artifact_contract_ok": true,
+      "promoted_to_success": false
+    },
+    "websocket": {
+      "job_id": "job-7bf5c13f3932dacc",
+      "status": "completed",
+      "ok": true,
+      "session_id_present": true,
+      "changed_files": ["GOAL-RESULT.json", "goal_engine.py"],
+      "test_source": "bridge-verifier",
+      "test_passed": true,
+      "external_test_passed": true,
+      "artifact_contract_ok": true,
+      "worker_alive_after_shutdown": false
+    }
+  },
+  "stdio_power_fix": {
+    "cause": "a healthy stdout burst filled the 32-slot queue for more than 100 ms and was misclassified as ACP_OUTPUT_LIMIT",
+    "change": "bounded queue backpressure with a shutdown stop event",
+    "safety_preserved": [
+      "aggregate byte cap remains 1000000",
+      "per-line cap remains bounded",
+      "queue remains bounded at 32 entries",
+      "worker shutdown remains bounded"
+    ],
+    "regression": "test_stdio_reader_applies_backpressure_for_bounded_bursts"
+  },
+  "stdio_retry": {
+    "job_id": "job-10f5480bd5c20d38",
+    "status": "completed",
+    "ok": true,
+    "session_id_present": true,
+    "changed_files": ["GOAL-RESULT.json", "goal_engine.py"],
+    "full_changed_files": ["GOAL-RESULT.json", "goal_engine.py"],
+    "independent_changed_files": ["GOAL-RESULT.json", "goal_engine.py"],
+    "test_source": "bridge-verifier",
+    "test_passed": true,
+    "external_test_passed": true,
+    "artifact_contract_ok": true,
+    "worker_alive_after_shutdown": false,
+    "stop_reason": "end_turn",
+    "mcp_ping_after_job": true
+  },
+  "verification": {
+    "focused": "3 passed, 50 deselected in 2.04s",
+    "round8": "52 passed, 1 skipped in 26.16s",
+    "full": "414 passed, 1 skipped, 43 subtests passed in 45.38s",
+    "self_test": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "implementation_hashes": {
+    "grok_delegate/acp.py": "756b55841c84c6f7e9d34e637348c2cc17b10ef18a7d690b6b07592ee41b14c8",
+    "tests/test_round8_bridge.py": "0ddd6c1c6bcc459641c184b3b88c23113046a9c7f816db42e97018f771ba95d4",
+    "grok_delegate/contracts.py": "f407464da4ad74de3a7fe1be797d363d32b7a59871f062c5be2becf77f83f42a",
+    "grok_delegate/agent_runtime.py": "4cae800445506f34ddd35d9e73c771ceb027bd3d1f1b066a6223ea18c7d6a365",
+    "grok_delegate/runner.py": "4558c79c0dc39e56233a015fbfc9378584fc014890c49ac7977ba9e2779ca8f2"
+  },
+  "transport_verdicts": {
+    "legacy": "GO",
+    "stdio": "GO",
+    "websocket": "GO"
+  },
+  "safety": {
+    "source_commit_created": false,
+    "merge_or_push": false,
+    "global_config_mutated": false,
+    "secrets_recorded": false
+  }
+}
