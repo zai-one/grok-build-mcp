@@ -4,3 +4,7 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+
+# Stray run artifacts from other tools sharing this checkout
+outputs/
+*.log
