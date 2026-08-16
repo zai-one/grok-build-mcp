@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grok MCP — что есть / что делать</title>
+  <style>
+    :root {
+      --bg: #14181f;
+      --card: #1c222c;
+      --card-2: #232a36;
+      --line: #334055;
+      --text: #e8edf4;
+      --muted: #9aa8bb;
+      --ok: #3dd68c;
+      --ok-bg: #163326;
+      --must: #ff6b6b;
+      --must-bg: #3a1a1c;
+      --should: #f0c14b;
+      --should-bg: #3a3014;
+      --info: #6cb6ff;
+      --info-bg: #1a2a3d;
+      --warn: #ff9f43;
+      --warn-bg: #3a2814;
+      --chip: #2a3342;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.45 system-ui, Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px 24px 32px;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; }
+    h1 { font-size: 1.45rem; margin: 0 0 8px; font-weight: 700; }
+    .meta { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+    .verdict {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--ok);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 14px;
+    }
+    .verdict p { margin: 0 0 8px; }
+    .verdict p:last-child { margin: 0; }
+    .pin {
+      background: var(--ok-bg);
+      border: 1px solid var(--ok);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-bottom: 16px;
+      font-weight: 600;
+    }
+    .pin span { font-weight: 400; color: var(--text); }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+    @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 1.05rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    ul { margin: 0; padding-left: 18px; }
+    li { margin: 0 0 7px; }
+    li:last-child { margin: 0; }
+    .must-list li { margin-bottom: 10px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+    .row .card { flex: 1 1 280px; }
+    .chip {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      padding: 1px 7px;
+      border-radius: 999px;
+      vertical-align: 1px;
+      white-space: nowrap;
+    }
+    .fact { background: var(--ok-bg); color: var(--ok); }
+    .check { background: var(--warn-bg); color: var(--warn); }
+    .must { background: var(--must-bg); color: var(--must); }
+    .should { background: var(--should-bg); color: var(--should); }
+    .nope { background: var(--chip); color: var(--muted); }
+    .ws { background: var(--info-bg); color: var(--info); }
+    code {
+      font: 12.5px/1.3 ui-monospace, Consolas, monospace;
+      background: var(--card-2);
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    .recipe { border-left: 4px solid var(--ok); }
+    .ws-card { border-left: 4px solid var(--info); }
+    .skip { border-left: 4px solid var(--muted); }
+    .must-card { border-left: 4px solid var(--must); }
+    .should-card { border-left: 4px solid var(--should); }
+    .ok-card { border-left: 4px solid var(--ok); }
+    .gap-card { border-left: 4px solid var(--warn); }
+    .foot { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Grok MCP — что есть / что делать</h1>
+    <div class="meta">D:\ZAI\MCP\Grok CLI · v0.9.0 · ветка <code>fix/orchestrator-loop</code> · pin версии не ставить</div>
+
+    <section class="verdict">
+      <p><strong>Вердикт.</strong> Grok — worker, хост — оркестратор/verifier. Цикл <code>session_next</code> теперь компилирует <strong>валидные typed-карточки</strong> (execute = полный <code>task</code>, poll = <code>{job_id}</code>). Pin CLI снят. Клиент grok.com / websocket xAI API — не строить.</p>
+      <p>Тесты: <code>py -3 -m pytest tests -q</code> → 460 passed, 1 skipped. Live ACP: только initialize (CLI 1.0.4 observed, не pin).</p>
+    </section>
+
+    <div class="pin">
+      Pin версии — снят, стандарт = any.
+      <span>Не хардкодить <code>0.2.118</code> / <code>1.0.0</code> / <code>1.0.4</code>. Opt-in: <code>GROK_DELEGATE_EXPECTED_AGENT_VERSION</code>. Doctor/mismatch — warning, typed-путь не блокируется. <code>compatibility.expected_agent_version: "any"</code>.</span>
+    </div>
+
+    <div class="grid">
+      <section class="card ok-card">
+        <h2>Сделано в этом цикле <span class="chip fact">факт</span></h2>
+        <ul>
+          <li>Unpin: default expected = <code>any</code>; mismatch → event <code>version_mismatch</code> <code>blocking:false</code>.</li>
+          <li><code>session_next</code> execute = полный пакет <code>task</code>; poll = <code>{job_id}</code>; bind job с execute. Контракт-тесты против реальных схем.</li>
+          <li>Evidence pack: files + diffstat + bounded unified diff (16KiB) + bridge tests + <code>worktree_path</code>.</li>
+          <li>Status/doctor: <code>bridge_version</code>, CLI, ACP v1, unpin, <code>update_hint</code> (git pull / editable / restart MCP).</li>
+          <li>AGENTS.md, Cursor rule, issue templates, skill v1.1 в <code>.cursor/.claude/.codex/.agents</code>.</li>
+          <li>Live initialize: protocol 1, без RPC <code>authenticate</code>. Не pin.</li>
+        </ul>
+      </section>
+
+      <section class="card must-card">
+        <h2>Ещё must <span class="chip must">must</span></h2>
+        <ul class="must-list">
+          <li>
+            Доснять live ACP: <code>session/new</code> cwd-stall, two-frame <code>rawInput</code>, cancel, WS serve/reconnect.
+            <span class="chip check">частично: только initialize</span>
+          </li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="row">
+      <section class="card should-card">
+        <h2>Should (открыто) <span class="chip should">should</span></h2>
+        <ul>
+          <li>Двухфазный execute: consult предлагает <code>expected_artifacts</code> → хост подтверждает.</li>
+          <li>Coding model к текущему grok-build slug; <code>--no-subagents</code> — opt-out, не вечный on.</li>
+          <li>Navigator in-memory (рестарт теряет session).</li>
+          <li><code>authenticate</code> RPC — initialize 1.0.4 его не требовал; держать в уме если CLI начнёт требовать.</li>
+        </ul>
+      </section>
+
+      <section class="card recipe">
+        <h2>Как пользоваться сейчас</h2>
+        <ol style="margin:0; padding-left:18px">
+          <li><code>session_begin</code> (лучше сразу artifacts/tests/root)</li>
+          <li>loop <code>session_next</code> — карточки typed</li>
+          <li>schema fail → consult → execute → poll → review</li>
+          <li>хост читает files / diffstat / bounded diff / tests</li>
+          <li>человек мержит <code>grok/*</code></li>
+        </ol>
+      </section>
+    </div>
+
+    <section class="card gap-card" style="margin-bottom:14px">
+      <h2>Чек ошибок / доработок</h2>
+      <ul>
+        <li><span class="chip fact">ok</span> Pin 1.0.0 в <code>acp.py</code> не мержить — default <code>None</code>.</li>
+        <li><span class="chip fact">ok</span> Poll больше не получает <code>session_id</code>.</li>
+        <li><span class="chip fact">ok</span> Unbounded diff в MCP не льём — cap 16KiB + redact.</li>
+        <li><span class="chip check">open</span> Permission <code>rawInput</code> на live 1.0.4 не переснят (логика join остаётся).</li>
+        <li><span class="chip check">open</span> WS handshake / cwd-stall на текущей CLI.</li>
+        <li><span class="chip should">later</span> Двухфаза execute, opt-out <code>--no-subagents</code>, default model slug.</li>
+        <li><span class="chip fact">ok</span> Skill врёт больше не должен: navigator — рабочий дешёвый цикл; typed — fallback.</li>
+        <li><span class="chip nope">не делаем</span> grok.com web · xAI <code>wss://api.x.ai/v1/responses</code> · background updater.</li>
+      </ul>
+    </section>
+
+    <div class="row">
+      <section class="card ws-card">
+        <h2>Три websocket — не путать</h2>
+        <ul>
+          <li><span class="chip nope">не этот проект</span> grok.com web</li>
+          <li><span class="chip ws">этот проект</span> Grok Build ACP WS <code>ws://127.0.0.1</code></li>
+          <li><span class="chip nope">не этот проект</span> xAI API <code>wss://api.x.ai/v1/responses</code></li>
+        </ul>
+      </section>
+      <section class="card skip">
+        <h2>Не делаем</h2>
+        <ul>
+          <li>клиент grok.com</li>
+          <li>websocket xAI API</li>
+          <li>добивать pin любой CLI-версии</li>
+        </ul>
+      </section>
+    </div>
+
+    <p class="foot">Чипы: <span class="chip fact">факт</span> в коде · <span class="chip check">open / live CLI</span> · <span class="chip must">must</span> сильнее <span class="chip should">should</span></p>
+  </div>
+</body>
+</html>
