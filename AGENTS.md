@@ -29,10 +29,11 @@
 
 ## Экономика и worktree
 
-- Один job за раз. `max_turns` 8–16, `reasoning_effort` low|medium.
+- Один job за раз. Бюджет worker'а — решение оператора, не агента: `GROK_DELEGATE_REASONING_EFFORT` и `GROK_DELEGATE_MAX_TURNS`. Не занижать их «ради экономии» — экономия хоста и бюджет worker'а это разные вещи.
 - Worktree / ветка только `grok/*`. **Никогда** `git push` / `merge` из моста — человек ревьюит и мержит.
 - Секреты не в receipts, не в MCP config, не в issue. Auth = локальный `grok login`.
 - Pin версии CLI **выключен**. Любая установленная CLI с ACP v1. Opt-in: `GROK_DELEGATE_EXPECTED_AGENT_VERSION`. Mismatch = warning, typed-путь не блокируется.
+- Модель тоже **не пинится**. Пусто = дефолт CLI (сейчас `grok-4.6`), `--model` в argv не идёт. Задать: `GROK_DELEGATE_MODEL`. Не хардкодить id модели в коде — устареет так же, как устарел `grok-4.5`.
 
 ## Как вызывать
 

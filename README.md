@@ -98,6 +98,28 @@ nothing. Reading the host's roots over MCP `roots/list`, which would also cover
 `--add-dir` directories and non-Claude hosts, needs a bidirectional stdio loop
 this server does not have yet.
 
+### Choosing the model and the worker's budget
+
+The bridge names no model of its own. With nothing configured it omits `--model`
+entirely and the Grok CLI uses whatever it defaults to, so a CLI upgrade that
+ships a better model reaches you without a bridge release. Name one only when you
+want to override that:
+
+```bash
+export GROK_DELEGATE_MODEL=grok-4.6
+export GROK_DELEGATE_REASONING_EFFORT=xhigh   # low|medium|high|xhigh|max
+export GROK_DELEGATE_MAX_TURNS=40             # 1..60
+```
+
+These set the budget the bridge picks when a caller names none; a `model`,
+`reasoning_effort` or `max_turns` passed in the task always wins. An unparsable
+or out-of-range value reads as "no preference" rather than failing every job.
+
+They are independent of `GROK_DELEGATE_ECONOMY`. Economy keeps the *host's*
+context small — compact receipts, bounded diffs — which is a different question
+from how hard the worker should think. Turning economy on to save your own
+context no longer forces the worker down to `low`.
+
 **Skill (router):** `grok-mcp` — see [docs/SKILLS.md](docs/SKILLS.md)
 
 **Full easy guide:** [docs/EASY.md](docs/EASY.md)
