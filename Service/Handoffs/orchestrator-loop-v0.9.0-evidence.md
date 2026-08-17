@@ -276,7 +276,7 @@ Grok MCP отвечал, `grok --version` = **1.0.4**. Итоговый SHA эт
 | bind по `correlation_id` только для execute/fix/start (`server.py:995`) | подтверждено |
 | `docs/orchestrator-verdict.html` ссылается на этот файл | подтверждено |
 | Логи pytest рядом соответствуют заявленным 460 / 463 | подтверждено |
-| [P2] doctor без `detected_cli_version` — всё ещё открыт | подтверждено, `server.py:759` |
+| [P2] doctor без `detected_cli_version` | подтверждено на `server.py:759`; **закрыто 2026-08-17** — doctor зовёт тот же `probe_grok_version`, что и status (правка сделана worker'ом Grok) |
 
 ### 11.2 Опровергнуто: пост-фиксный suite нестабилен
 

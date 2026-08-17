@@ -157,8 +157,9 @@ def test_status_and_doctor_report_unpin(monkeypatch, tmp_path) -> None:
         which=lambda n: n,
     )
     assert doctor["compatibility"]["expected_agent_version"] == "any"
-    assert len(doctor_sp.calls) == 1
-    assert "fix" not in [a.lower() for a in doctor_sp.calls[0]]
+    assert doctor["compatibility"]["detected_cli_version"] == "9.9.9"
+    assert any("doctor" in call for call in doctor_sp.calls)
+    assert not any("fix" in a.lower() for call in doctor_sp.calls for a in call)
 
 
 def test_compatibility_report_warns_when_pin_mismatches(monkeypatch) -> None:

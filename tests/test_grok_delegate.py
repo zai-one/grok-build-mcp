@@ -1318,10 +1318,11 @@ class StatusToolsTests(unittest.TestCase):
         )
         self.assertTrue(result.get("ok"), result)
         self.assertIn("doctor", result)
-        self.assertEqual(len(sp.calls), 1)
-        self.assertIn("doctor", sp.calls[0])
-        self.assertIn("--json", sp.calls[0])
-        self.assertNotIn("fix", [a.lower() for a in sp.calls[0]])
+        doctor_calls = [c for c in sp.calls if "doctor" in [a.lower() for a in c]]
+        self.assertEqual(len(doctor_calls), 1)
+        self.assertIn("--json", doctor_calls[0])
+        for call in sp.calls:
+            self.assertNotIn("fix", [a.lower() for a in call])
 
     def test_models_tool(self) -> None:
         sp = self._mock_cli(

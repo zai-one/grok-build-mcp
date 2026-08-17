@@ -749,16 +749,32 @@ def handle_status_tool(
         return report
 
     if name == TOOL_DOCTOR:
-        from .status import compatibility_report
+        from .status import compatibility_report, probe_grok_version
 
         report = run_doctor_json(
             grok_bin=grok_bin,
             subprocess_runner=subprocess_runner,
             which=which,
         )
+        # Same probe as TOOL_STATUS. A failed probe must not take doctor down:
+        # without a version the pin mismatch is invisible, which is the old
+        # behaviour, but the rest of the report is still usable.
+        detected = None
+        try:
+            version_info = probe_grok_version(
+                grok_bin=grok_bin,
+                subprocess_runner=subprocess_runner,
+                which=which,
+            )
+            if isinstance(version_info, Mapping):
+                detected = version_info.get("version")
+        except Exception:
+            detected = None
         if isinstance(report, dict):
             report = dict(report)
-            report["compatibility"] = compatibility_report()
+            report["compatibility"] = compatibility_report(
+                detected_cli_version=detected
+            )
             if report["compatibility"].get("warning"):
                 report["warnings"] = [report["compatibility"]["warning"]]
         return report
