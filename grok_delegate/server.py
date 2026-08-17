@@ -975,6 +975,12 @@ def _apply_project_gate(task: Mapping[str, Any]) -> tuple[dict[str, Any] | None,
                 f"this project has no {CONFIG_FILENAME}, so the bridge will not run a job in it; "
                 "write one naming a preset to opt in"
             )
+        # The way out belongs in the refusal. A host that reads only this error
+        # had to guess the tool name from a description it never sees.
+        detail["fix_with"] = {
+            "tool": TOOL_AGENT_PROJECT,
+            "args": {"project_root": root, "preset": "standard"},
+        }
         return structured_error("PROJECT_NOT_ENABLED", message, **detail), out
 
     # Preset budget fills what the caller left unsaid; an explicit field wins.
@@ -1058,6 +1064,7 @@ def handle_tool_call(
                 "expected_artifacts",
                 "test_commands",
                 "correlation_id",
+                "job_id",
             }
         )
         if unknown:
@@ -1087,6 +1094,7 @@ def handle_tool_call(
                 expected_artifacts=artifacts,
                 test_commands=tests,
                 correlation_id=str(args.get("correlation_id") or "") or None,
+                job_id=str(args.get("job_id") or "") or None,
             )
         )
 

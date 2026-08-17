@@ -53,6 +53,10 @@ _ALLOW = frozenset(
         "grok_agent_start",
         "grok_delegate_doctor",
         "grok_delegate_status",
+        # Both exist and both are legitimate plan steps: the update route hands
+        # back a tool card, and PROJECT_NOT_ENABLED points at the project tool.
+        "grok_agent_update",
+        "grok_agent_project",
     }
 )
 
@@ -88,7 +92,7 @@ _ROUTES: dict[str, dict[str, Any]] = {
         "skill_ref": "references/update.md",
         "tools": [],
         "prefer": "update",
-        "next": "Run update_mcp.sh then session_begin.",
+        "next": "grok_agent_update to preview, confirm=true to apply, then restart the MCP host.",
     },
     "triage": {
         "mode": "triage",
@@ -221,6 +225,21 @@ def bind_session_job(
             sess["job_id"] = jid
             return str(sess.get("session_id") or "") or None
     return None
+
+
+def _job_still_running(sess: Mapping[str, Any]) -> bool:
+    """Is the session's bound job in a state the host should wait on?
+
+    Unknown reads as "not running": a job the registry cannot find will never
+    become terminal, and holding the plan on it forever is worse than moving on.
+    """
+    jid = str((sess or {}).get("job_id") or "").strip()
+    if not jid:
+        return False
+    record = jobs_mod.get_job(jid)
+    if not isinstance(record, Mapping):
+        return False
+    return str(record.get("state") or "").lower() == jobs_mod.STATE_RUNNING
 
 
 def _session_budget(sess: Mapping[str, Any]) -> dict[str, Any]:
@@ -577,7 +596,10 @@ def _host_script(mode: str, plan: list[dict[str, Any]], budget: Mapping[str, Any
                 _SCRIPT_MAX,
             )
         if mode == "update":
-            return _clip("Run skills/grok-mcp/scripts/update_mcp.sh then session_begin.", _SCRIPT_MAX)
+            return _clip(
+                "grok_agent_update (preview), then confirm=true, then restart the MCP host.",
+                _SCRIPT_MAX,
+            )
         if mode == "feedback":
             return _clip("Fill templates/issue.md; draft_issue.py; no secrets.", _SCRIPT_MAX)
     return _clip(
@@ -599,6 +621,7 @@ def session_begin(
     expected_artifacts: Sequence[str] | None = None,
     test_commands: Sequence[str] | None = None,
     correlation_id: str | None = None,
+    job_id: str | None = None,
 ) -> dict[str, Any]:
     intent_n = (intent or "auto").strip().lower()
     if intent_n not in INTENTS:
@@ -664,7 +687,10 @@ def session_begin(
         "intent": intent_n,
         "mode": mode,
         "goal": goal_s,
-        "job_id": None,
+        # A verify session exists to look at a job that already ran, and until
+        # now there was nowhere to say which one -- the plan's poll card was
+        # skipped for want of an id the host had no way to supply.
+        "job_id": str(job_id or "").strip()[:128] or None,
         "plan": plan,
         "plan_step": 0,
         "budget": budget,
@@ -1073,7 +1099,13 @@ def session_next(
         "args": compile_card_args(str(tool), sess, step),
         "why": step.get("why") or "",
     }
-    if advance:
+    # A job runs in the background for as long as it takes -- the live one this
+    # cycle measured took 32 seconds. The plan offered exactly one poll and then
+    # said done, so a host that executes only cards closed the session on a
+    # running job. Hold on the poll step until the job is terminal; max_polls
+    # still bounds it, and the message says what is being waited for.
+    waiting = tool == "grok_agent_poll" and _job_still_running(sess)
+    if advance and not waiting:
         sess["plan_step"] = step_i + 1
     return _shrink(
         {
@@ -1084,7 +1116,12 @@ def session_next(
             "step": step_i,
             "steps_left": max(0, len(plan) - step_i - 1),
             "card": card,
-            "host_message": _clip(f"Call {tool} with provided args, then session_next.", 200),
+            "host_message": _clip(
+                f"Job still running — call {tool} again, then session_next."
+                if waiting
+                else f"Call {tool} with provided args, then session_next.",
+                200,
+            ),
             "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
             "disclaimer": "Unofficial — not xAI/Grok.",
         }
