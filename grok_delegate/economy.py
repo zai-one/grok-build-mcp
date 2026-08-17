@@ -126,6 +126,18 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
         "finished_at",
         "events",
     )
+    # A finished job keeps its verdict inside `result`, while the envelope only
+    # carries state. Compacting the envelope alone produced the worst possible
+    # receipt -- state "error" next to error null -- so lift the fields that say
+    # *why* before shrinking, without letting them overwrite an envelope value.
+    record = dict(record)
+    nested = record.get("result")
+    if isinstance(nested, Mapping):
+        for key in ("status", "blocked_reason", "summary", "worktree_path", "branch",
+                    "changed_files", "artifacts", "tests", "diffstat", "unified_diff"):
+            if record.get(key) in (None, "", [], {}) and nested.get(key) not in (None, "", [], {}):
+                record[key] = nested[key]
+
     out: dict[str, Any] = {}
     for key in keep_keys:
         if key not in record:

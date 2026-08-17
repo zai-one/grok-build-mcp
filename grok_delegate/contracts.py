@@ -147,7 +147,11 @@ def validate_task_packet(
             "REASONING_EFFORT_INVALID",
             f"reasoning_effort must be one of {sorted(REASONING_EFFORTS)}",
         )
-    base_ref = _optional_string(value.get("base_ref"), "base_ref", 256) or "master"
+    # HEAD, not a branch name: "master" was wrong the moment a repo renamed its
+    # default branch, and the job then failed preflight with BASE_UNREACHABLE for
+    # a reason that had nothing to do with the task. Branching from whatever the
+    # checkout is actually on is both correct and always reachable.
+    base_ref = _optional_string(value.get("base_ref"), "base_ref", 256) or "HEAD"
     correlation = _bounded_string(value.get("correlation_id"), "correlation_id", MAX_CORRELATION)
     if not _CORRELATION_RE.fullmatch(correlation):
         raise GuardError(

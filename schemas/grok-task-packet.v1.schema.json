@@ -9,7 +9,7 @@
     "objective": {"type": "string", "minLength": 1, "maxLength": 12000},
     "role": {"enum": ["consult", "execute", "skeptic", "fix"]},
     "project_root": {"type": "string", "minLength": 1, "maxLength": 1024},
-    "base_ref": {"type": "string", "minLength": 1, "maxLength": 256, "default": "master"},
+    "base_ref": {"type": "string", "minLength": 1, "maxLength": 256, "default": "HEAD"},
     "model": {"type": ["string", "null"], "minLength": 1, "maxLength": 128, "description": "Model id, or null to let the Grok CLI use its own default"},
     "reasoning_effort": {"enum": ["low", "medium", "high", "xhigh", "max"], "default": "high"},
     "permission_profile": {"enum": ["read-only", "workspace"]},
