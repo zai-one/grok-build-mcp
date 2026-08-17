@@ -14,6 +14,12 @@ import pytest
 from grok_delegate.contracts import redact_text
 
 
+#: Every sample below is written as two adjacent literals. They are one string
+#: at runtime -- which is what redact_text is handed -- and no string at all on
+#: disk, so a credential scanner reading the file finds nothing to block. The
+#: values are invented; the shapes are real, which is the whole point, and is
+#: also why a scanner would otherwise refuse the push. `session.py` splits its
+#: own patterns for the same reason.
 @pytest.mark.parametrize(
     ("label", "text"),
     [
