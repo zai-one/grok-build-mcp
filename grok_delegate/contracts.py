@@ -233,12 +233,27 @@ def build_prompt(task: Mapping[str, Any]) -> str:
             lines.append("")
             lines.append(label + ":")
             lines.extend(f"- {value}" for value in values)
+    if task.get("test_commands"):
+        lines.extend(
+            [
+                "",
+                # Live capture: asked to "report the exit code", the agent ran
+                # `python -m pytest -q; echo EXIT_CODE=$LASTEXITCODE`. Permission
+                # is an exact match against the list above, so the decorated
+                # command was denied and the turns spent on it were wasted.
+                "Run each test command exactly as written above, with nothing appended.",
+                "The permission gate matches the text literally and denies anything else.",
+            ]
+        )
     if task["role"] in {"execute", "fix"}:
         lines.extend(
             [
                 "",
                 "Make the requested file change now. Run the relevant bounded test before finishing.",
                 "A summary without a real filesystem diff and acceptance evidence is not success.",
+                # The bridge commits whatever is left in the lane once the job
+                # ends, so stopping early costs review time, never the work.
+                "Leave the work on disk; the bridge commits the lane branch when the job ends.",
             ]
         )
     return "\n".join(lines)
@@ -254,6 +269,7 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
     out.setdefault("diffstat", "")
     out.setdefault("unified_diff", "")
     out.setdefault("tests", [])
+    out.setdefault("tests_skipped_reason", None)
     out.setdefault("artifacts", [])
     out.setdefault("findings", [])
     out.setdefault("summary", "")

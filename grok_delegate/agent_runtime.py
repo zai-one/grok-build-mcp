@@ -26,7 +26,7 @@ from .acp import (
 )
 from .contracts import build_prompt, finalize_receipt, redact_text, validate_task_packet, validate_transport
 from .guard import GuardError, normalize_lane, structured_error, validate_grok_bin
-from .runner import collect_diff, delegate, prepare_worktree
+from .runner import GitRunner, collect_diff, commit_lane_work, delegate, prepare_worktree
 
 _CONCURRENCY = max(1, min(int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "1") or "1"), 2))
 _MAX_QUEUED = max(1, min(int(os.environ.get("GROK_DELEGATE_MAX_QUEUED", "8") or "8"), 32))
@@ -264,6 +264,7 @@ def run_task(
     before_states: dict[str, tuple[Any, ...]] = {}
     before_commits: set[str] = set()
     branch: str | None = None
+    base_ref = str(task["base_ref"])
     cwd = root
 
     def diff_snapshot_failure(
@@ -346,7 +347,12 @@ def run_task(
             )
         cwd = Path(str(prep["worktree_path"])).resolve()
         branch = str(prep["branch"])
-        before = collect_diff(cwd, base_ref=str(task["base_ref"]), git_runner=git_runner)
+        # Pin the base to a commit now. `base_ref` may be a moving name -- HEAD
+        # is the default -- and every later diff is taken against it. Once
+        # anything commits on the lane, "HEAD" means the new commit and the
+        # diff collapses to empty, reporting a finished job as no_changes.
+        base_ref = _resolve_base_sha(cwd, str(task["base_ref"]), git_runner, timeout=30.0)
+        before = collect_diff(cwd, base_ref=base_ref, git_runner=git_runner)
         if not before.get("ok"):
             return diff_snapshot_failure(before)
         before_states = {
@@ -365,7 +371,7 @@ def run_task(
                 goal=build_prompt(task),
                 lane=lane,
                 repo_root=root,
-                base_ref=str(task["base_ref"]),
+                base_ref=base_ref,
                 max_turns=int(task["max_turns"]),
                 model=str(task["model"]),
                 reasoning_effort=str(task["reasoning_effort"]),
@@ -380,17 +386,21 @@ def run_task(
                     argv, Path(process_cwd or root), float(timeout), cancel_event
                 ),
             )
-            post = collect_diff(cwd, base_ref=str(task["base_ref"]), git_runner=git_runner)
+            post = collect_diff(cwd, base_ref=base_ref, git_runner=git_runner)
             if not post.get("ok"):
                 return diff_snapshot_failure(post, result)
             changed_before_tests = _changes_since(cwd, post.get("changed_files") or [], before_states)
-            verified_tests = _run_bridge_tests(
-                cwd, task, cancel_event
-            ) if result.get("ok") and changed_before_tests else []
+            verified_tests, tests_skipped = _verify_or_explain(
+                cwd,
+                task,
+                cancel_event,
+                write_role=write_role,
+                changed=changed_before_tests,
+            )
             # Verifier commands are code too: re-read git only after they have
             # finished so a passing test cannot revert the artifact, introduce
             # an unexpected file, or otherwise leave a stale receipt.
-            post = collect_diff(cwd, base_ref=str(task["base_ref"]), git_runner=git_runner)
+            post = collect_diff(cwd, base_ref=base_ref, git_runner=git_runner)
             if not post.get("ok"):
                 return diff_snapshot_failure(post, result)
             full_changed_files = [
@@ -425,6 +435,7 @@ def run_task(
                     "unified_diff": "",
                     "summary": redact_text(str(result.get("summary") or "")),
                     "tests": verified_tests,
+                    "tests_skipped_reason": tests_skipped,
                     "artifacts": _present_artifacts(cwd, task),
                 }
             )
@@ -447,7 +458,7 @@ def run_task(
             "phase": "collect",
         },
     )
-    diff = collect_diff(cwd, base_ref=str(task["base_ref"]), git_runner=git_runner) if write_role else {
+    diff = collect_diff(cwd, base_ref=base_ref, git_runner=git_runner) if write_role else {
         "changed_files": [], "commits": [], "diffstat": "", "unified_diff": ""
     }
     if write_role:
@@ -464,13 +475,17 @@ def run_task(
             if str(value) not in before_commits
         ]
         diff["diffstat"] = _fallback_diffstat(diff["changed_files"])
-    verified_tests = _run_bridge_tests(cwd, task, cancel_event) if (
-        write_role and result.get("status") == "completed" and diff.get("changed_files")
-    ) else []
+    verified_tests, tests_skipped = _verify_or_explain(
+        cwd,
+        task,
+        cancel_event,
+        write_role=write_role,
+        changed=diff.get("changed_files") or [],
+    )
     if write_role:
         # Acceptance is based on the filesystem after the independent verifier,
         # never on the state that existed before tests ran.
-        diff = collect_diff(cwd, base_ref=str(task["base_ref"]), git_runner=git_runner)
+        diff = collect_diff(cwd, base_ref=base_ref, git_runner=git_runner)
         if not diff.get("ok"):
             return diff_snapshot_failure(diff, result)
         diff["full_changed_files"] = [
@@ -484,6 +499,24 @@ def run_task(
             if str(value) not in before_commits
         ]
         diff["diffstat"] = _fallback_diffstat(diff["changed_files"])
+    # Last, deliberately. Acceptance is read from the filesystem the verifier
+    # left behind, so committing earlier would let a test that reverts the
+    # artifact still look like delivered work. Committing after keeps that
+    # check honest and still leaves the lane with the work in `git log`.
+    lane_commit = (
+        commit_lane_work(
+            cwd,
+            branch=str(branch or ""),
+            correlation_id=str(task.get("correlation_id") or jid),
+            git_runner=git_runner,
+            timeout=min(float(task["timeout_seconds"]), 60.0),
+        )
+        if write_role and not cancel_event.is_set()
+        else {"ok": True, "committed": False, "reason": "NOT_A_WRITE_ROLE", "sha": None}
+    )
+    commits = list(diff.get("commits") or [])
+    if lane_commit.get("sha"):
+        commits.append(str(lane_commit["sha"]))
     receipt = _base_receipt(
         jid,
         transport,
@@ -498,10 +531,12 @@ def run_task(
             "worktree_path": str(cwd),
             "changed_files": diff.get("changed_files") or [],
             "full_changed_files": diff.get("full_changed_files") or [],
-            "commits": diff.get("commits") or [],
+            "commits": commits,
             "diffstat": diff.get("diffstat") or _fallback_diffstat(diff.get("changed_files") or []),
             "unified_diff": diff.get("unified_diff") or "",
             "tests": verified_tests,
+            "tests_skipped_reason": tests_skipped,
+            "lane_commit": lane_commit,
             "artifacts": _present_artifacts(cwd, task),
             "summary": redact_text(str(result.get("summary") or "")),
             "events": result.get("events") or [],
@@ -567,6 +602,38 @@ def _run_legacy_readonly(
     return receipt
 
 
+def _verify_or_explain(
+    cwd: Path,
+    task: Mapping[str, Any],
+    cancel_event: threading.Event,
+    *,
+    write_role: bool,
+    changed: Sequence[Any],
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Run the verifier, or say in one word why the receipt has no test result.
+
+    The verifier used to be gated on the agent reaching ``completed``. That
+    threw away the answer exactly when the host needed it most: a worker that
+    exhausts its turns mid-review stops at ``ACP_STOP_cancelled`` with real
+    edits on disk, and an empty ``tests`` list next to those edits is
+    indistinguishable from "the tests were not written yet". Whether the agent
+    finished its turn and whether its code passes are two different questions,
+    and the receipt is supposed to answer the second one.
+
+    An operator cancel is the one case that still skips: the worktree is being
+    torn down and spending minutes on pytest would only delay it.
+    """
+    if not write_role:
+        return [], "NOT_A_WRITE_ROLE"
+    if cancel_event.is_set():
+        return [], "CANCELLED"
+    if not changed:
+        return [], "NO_CHANGES"
+    if not list(task.get("test_commands") or []):
+        return [], "NO_TEST_COMMANDS"
+    return _run_bridge_tests(cwd, task, cancel_event), None
+
+
 def _run_bridge_tests(
     cwd: Path,
     task: Mapping[str, Any],
@@ -620,6 +687,33 @@ def _path_state(cwd: Path, relative: str) -> tuple[Any, ...]:
         return ("file", stat.st_size, digest.hexdigest())
     except OSError as exc:
         return ("error", type(exc).__name__)
+
+
+def _resolve_base_sha(
+    cwd: Path,
+    base_ref: str,
+    git_runner: GitRunner,
+    *,
+    timeout: float = 30.0,
+) -> str:
+    """Turn a possibly-moving ref into the commit it points at right now.
+
+    `HEAD` is the default base, and it moves the moment anything commits on the
+    lane -- after which every diff "against the base" is a diff against the
+    work itself, and a finished job reports no_changes. Resolving once, before
+    the worker starts, is what makes "since the lane started" mean that.
+
+    Falls back to the literal ref if git cannot answer, which is the behaviour
+    that existed before pinning: no new failure mode for a probe this cheap.
+    """
+    try:
+        result = git_runner(["-C", str(cwd), "rev-parse", "--verify", f"{base_ref}^{{commit}}"], None, timeout)
+    except Exception:  # noqa: BLE001 - a failed probe must not fail the job
+        return base_ref
+    sha = str(result.get("stdout") or "").strip()
+    if result.get("returncode") == 0 and re.fullmatch(r"[0-9a-f]{7,40}", sha):
+        return sha
+    return base_ref
 
 
 def _changes_since(

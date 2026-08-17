@@ -791,6 +791,79 @@ def _bounded_unified_diff(text: str, *, cap: int = ECONOMY_MAX_UNIFIED_DIFF) -> 
     return clipped + "\n…(truncated)"
 
 
+#: Identity for a commit the bridge makes on the worker's behalf. Passed with
+#: ``-c`` per invocation, never written to config, and deliberately not the
+#: operator: the log should say which of the two actually made the commit.
+_BRIDGE_COMMIT_IDENTITY = (
+    "-c", "user.name=grok-delegate",
+    "-c", "user.email=grok-delegate@localhost",
+)
+
+
+def commit_lane_work(
+    worktree_path: Path | str,
+    *,
+    branch: str,
+    correlation_id: str,
+    git_runner: GitRunner | None = None,
+    timeout: float = 60.0,
+) -> dict[str, Any]:
+    """Commit whatever the worker left uncommitted, on its own lane branch.
+
+    Asking the worker to commit was already the rule, and the rule was observed
+    to lose: a job that exhausts ``max_turns`` mid-review stops wherever it
+    stands, leaving real edits in the worktree and nothing in ``git log``. An
+    instruction that only holds while the worker has turns left is not a
+    mechanism. This runs after the adapter returns, so it holds whatever the
+    reason for stopping was.
+
+    Refuses on anything that is not a ``grok/*`` lane. The bridge committing to
+    a branch a human might merge is the one outcome worse than losing the work,
+    and pushing remains impossible here -- ``_reject_forbidden_git_args`` has no
+    exception for this path.
+    """
+    git = git_runner or default_git_runner
+    wt = Path(worktree_path)
+    lane = str(branch or "")
+    if not lane.startswith("grok/"):
+        return {"ok": True, "committed": False, "reason": "NOT_A_LANE_BRANCH", "sha": None}
+
+    status = git(["-C", str(wt), "status", "--porcelain"], None, timeout)
+    if status.get("returncode") != 0 or status.get("timedOut"):
+        return {"ok": False, "committed": False, "reason": "STATUS_FAILED", "sha": None}
+    if not str(status.get("stdout") or "").strip():
+        return {"ok": True, "committed": False, "reason": "NOTHING_TO_COMMIT", "sha": None}
+
+    # Confirm from git, not from the caller, that this worktree really is on the
+    # lane: a stale `branch` argument must not be enough to commit anywhere.
+    head = git(["-C", str(wt), "rev-parse", "--abbrev-ref", "HEAD"], None, timeout)
+    if head.get("returncode") != 0 or str(head.get("stdout") or "").strip() != lane:
+        return {"ok": False, "committed": False, "reason": "BRANCH_MISMATCH", "sha": None}
+
+    staged = git(["-C", str(wt), "add", "-A"], None, timeout)
+    if staged.get("returncode") != 0 or staged.get("timedOut"):
+        return {"ok": False, "committed": False, "reason": "ADD_FAILED", "sha": None}
+
+    message = f"grok(lane): worker output for {str(correlation_id)[:120]}"
+    done = git(
+        ["-C", str(wt), *_BRIDGE_COMMIT_IDENTITY, "commit", "-m", message],
+        None,
+        timeout,
+    )
+    if done.get("returncode") != 0 or done.get("timedOut"):
+        # A hook may legitimately reject this. Say so; never retry with
+        # --no-verify, which would make the bridge the thing that bypasses it.
+        return {"ok": False, "committed": False, "reason": "COMMIT_FAILED", "sha": None}
+
+    sha = git(["-C", str(wt), "rev-parse", "HEAD"], None, timeout)
+    return {
+        "ok": True,
+        "committed": True,
+        "reason": None,
+        "sha": str(sha.get("stdout") or "").strip() or None,
+    }
+
+
 def collect_diff(
     worktree_path: Path | str,
     *,
