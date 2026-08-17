@@ -48,7 +48,7 @@ allowlisted root is not implicitly trusted.
 
 ## First readback
 
-1. MCP `initialize` must return protocol `2024-11-05` and server `0.9.0`.
+1. MCP `initialize` must return protocol `2024-11-05` and server `0.10.0`.
 2. `tools/list` must include all 13 `grok_agent_*` tools and all 8
    `grok_delegate*` compatibility tools — 21 in total.
 3. Call `grok_agent_status`; default transport must be `stdio`, and auto
