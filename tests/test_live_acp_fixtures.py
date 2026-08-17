@@ -28,7 +28,10 @@ from grok_delegate.acp import (
 )
 
 FIXTURES = Path(__file__).resolve().parent.parent / "evidence" / "live-acp"
-SCENARIOS = ("permission-cancel", "consult", "command")
+#: `websocket` drives the same protocol over a different socket, so the
+#: transport-agnostic checks take all four; the frame-shape checks name the
+#: stdio scenario that exercises the tool they are about.
+SCENARIOS = ("permission-cancel", "consult", "command", "websocket")
 
 
 def load(scenario: str) -> list[dict[str, Any]]:
@@ -246,6 +249,60 @@ def test_cancel_is_acknowledged_with_a_cancelled_stop_reason() -> None:
     assert observed("consult")["stop_reason"] == "end_turn"
 
 
+# --- the WebSocket transport ---------------------------------------------------
+
+
+def test_the_managed_daemon_speaks_the_same_protocol() -> None:
+    """A second transport is a second thing that can drift; it is checked too."""
+    seen = observed("websocket")
+    assert seen["transport"] == "websocket"
+    assert seen["protocol_version"] == 1
+    assert seen["stop_reason"] == "end_turn"
+    assert seen["notes"] == [], f"capture reported problems: {seen['notes']}"
+
+
+def test_reconnect_can_resume_the_session_the_bridge_left_behind() -> None:
+    """The reconnect path assumes `loadSession` means session/load will work.
+
+    It reconnects, re-initializes and loads, and then refuses to replay the
+    prompt -- so if load did not actually work, the bridge would be failing
+    closed on a capability it never verified.
+    """
+    seen = observed("websocket")
+    assert seen["load_session_advertised"] is True
+    assert seen["reconnected"] is True
+    assert seen["session_load_ok"] is True
+
+
+def test_the_capture_leaves_no_daemon_running() -> None:
+    assert observed("websocket")["daemon_alive_after_kill"] is False
+
+
+def test_session_load_is_answered_with_a_result_not_an_error() -> None:
+    frames = load("websocket")
+    assert any(
+        frame.get("dir") == "->" and frame.get("method") == "session/load" for frame in frames
+    )
+    loaded = response(frames, 10_001)
+    assert "error" not in loaded
+
+
+def test_a_private_method_one_character_from_the_real_one_is_not_the_real_one() -> None:
+    """Over WS the agent also sends `_x.ai/session/update`.
+
+    The dispatch compares the method exactly, so the private near-miss lands in
+    the notification bucket. A prefix or substring match here would feed
+    arbitrary private payloads to the session-update parser.
+    """
+    assert "_x.ai/session/update" in observed("websocket")["unknown_methods"]
+    assert "_x.ai/session/update" != "session/update"
+    private = [
+        frame for frame in load("websocket") if frame.get("method") == "_x.ai/session/update"
+    ]
+    for frame in private:
+        assert frame.get("method") != "session/update"
+
+
 def test_private_notifications_are_present_and_are_not_answers() -> None:
     """`_x.ai/session/prompt_complete` looks like a turn result and is not one.
 
@@ -268,5 +325,5 @@ def test_private_notifications_are_present_and_are_not_answers() -> None:
 def test_fixtures_carry_no_absolute_paths_or_secrets(scenario: str) -> None:
     body = (FIXTURES / f"session-{scenario}.jsonl").read_text(encoding="utf-8")
     assert "C:\\\\Users" not in body and "C:/Users" not in body
-    for marker in ("xai-", "sk-", "Bearer "):
+    for marker in ("xai-", "sk-", "Bearer ", "GROK_AGENT_SECRET", "capture-1", "capture-2"):
         assert marker not in body, f"{marker} must not reach a committed fixture"

@@ -20,6 +20,7 @@ is checked against traffic instead of against comments.
 | `session-permission-cancel.jsonl` | read + write tools, permission denied, then `session/cancel` | `cancelled` |
 | `session-consult.jsonl` | read-only turn that finishes normally | `end_turn` |
 | `session-command.jsonl` | shell tool running the declared test command | `end_turn` |
+| `session-websocket.jsonl` | managed `grok agent serve`, then a real reconnect + `session/load` | `end_turn` |
 
 Every capture denies anything the scenario did not ask for, so a capture can
 never become a way to run arbitrary tools. Paths, hostnames and auth locations
@@ -46,11 +47,24 @@ are redacted; `toolCallId` is kept because the permission join is keyed on it.
   `_x.ai/*` methods on 1.0.4, including `_x.ai/session/prompt_complete`, which
   looks like a turn result and is not one.
 
+## WebSocket
+
+The reconnect path assumes `loadSession: true` in the handshake means
+`session/load` will actually resume the session -- it reconnects, re-initializes,
+loads, and then refuses to replay the prompt, because replaying an in-flight
+write would duplicate it. That assumption is now observed rather than trusted:
+`load_session_advertised: true`, `reconnected: true`, `session_load_ok: true`.
+
+Over WS the agent also sends **`_x.ai/session/update`** — a private method one
+character away from the spec'd `session/update`. Dispatch compares the method
+exactly, so it lands in the notification bucket; a prefix match here would feed
+private payloads to the session-update parser.
+
 ## Still not re-observed on this CLI
 
-- WebSocket `grok agent serve` handshake, reconnect, and `session/load`.
-  The stdio path is the default and the one under test; the WS path keeps its
-  own fixtures in `evidence/round8/acp-fixtures/websocket.jsonl`.
+- Nothing from the task list. `evidence/round8/acp-fixtures/websocket.jsonl`
+  remains as the older hand-built WS fixture and is no longer the only WS
+  evidence.
 
 ## Re-capturing after a CLI upgrade
 
@@ -58,6 +72,7 @@ are redacted; `toolCallId` is kept because the permission join is keyed on it.
 py -3 scripts/capture_acp_live.py --scenario permission-cancel
 py -3 scripts/capture_acp_live.py --scenario consult
 py -3 scripts/capture_acp_live.py --scenario command
+py -3 scripts/capture_acp_live.py --scenario websocket
 py -3 -m pytest tests/test_live_acp_fixtures.py -q
 ```
 

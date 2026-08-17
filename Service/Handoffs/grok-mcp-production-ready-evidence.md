@@ -2,7 +2,7 @@
 
 **Дата:** 2026-08-17 · **База:** `56210ea` → `3338959` · **Ветка:** `main`
 **Задача:** `.tasks/2026-08-17-grok-mcp-production-ready.md` (удалён после приёмки)
-**Тесты:** 597 passed, 1 skipped, 79 subtests (было 543/1). Собирается 598.
+**Тесты:** 605 passed, 1 skipped, 79 subtests (было 543/1).
 
 Главный тезис задачи: мост держался не на номере версии Grok CLI, а на догадках
 о протоколе, снятых с **0.2.118**, при установленной **1.0.4**. Pin тут ничего
@@ -16,20 +16,21 @@ capture, и почти все правки ниже — это то, что capt
 `scripts/capture_acp_live.py` гоняет ту же последовательность, что и мост
 (`initialize` → `session/new` → `session/prompt` → `request_permission` →
 `session/cancel`), против **той CLI, которая стоит**, и кладёт redacted-фикстуры
-в `evidence/live-acp/`. Три сценария, каждый запускается отдельно:
+в `evidence/live-acp/`. Четыре сценария, каждый запускается отдельно:
 
 | Фикстура | Что снято | `stopReason` |
 |---|---|---|
 | `session-permission-cancel.jsonl` | read + write tool, permission отклонён, затем cancel | `cancelled` |
 | `session-consult.jsonl` | read-only ход, доходит до конца | `end_turn` |
 | `session-command.jsonl` | shell-tool с объявленной тестовой командой | `end_turn` |
+| `session-websocket.jsonl` | managed `grok agent serve`, затем реальный reconnect + `session/load` | `end_turn` |
 
 Capture враждебен сам к себе: всё, чего сценарий не просил, **отклоняется**, так
 что снять фикстуру нельзя превратить в способ запустить произвольный инструмент.
 
-`tests/test_live_acp_fixtures.py` (25 тестов) проигрывает фикстуры через реальные
+`tests/test_live_acp_fixtures.py` (33 теста) проигрывает фикстуры через реальные
 парсеры моста. Старый `scripts/capture_acp_initialize.py` удалён — он снимал
-только handshake, и его сценарий целиком входит в каждый из трёх новых.
+только handshake, и его сценарий целиком входит в каждый из четырёх новых.
 
 **Никакого пина.** `DEFAULT_EXPECTED_AGENT_VERSION` = `None`; фикстуры пишут
 наблюдённую версию как evidence, и отдельный тест проверяет, что запись версии
@@ -44,6 +45,20 @@ Capture враждебен сам к себе: всё, чего сценарий
 | `exit_code` цепочки принадлежит последней команде | живьём: `pytest -q; echo EXIT_CODE=$LASTEXITCODE` → pytest упал, `exit_code: 0` — **зелёный отчёт о красном тесте** | `_agent_reported_pass` даёт `None` на цепочке; все такие записи помечены `source: "agent-reported"` |
 | агент дописывает к команде свой суффикс, если его об этом провоцирует ТЗ | permission сверяет строку точно → отказ → потраченные ходы | `build_prompt` просит запускать команды дословно. Гейт **не** ослаблен: с нейтральным промптом команда приходит чистой |
 | 11 приватных `_x.ai/*` нотификаций, включая `_x.ai/session/prompt_complete` | выглядит как результат хода и им не является | подтверждено тестом, что успех определяется только ответом на `session/prompt` |
+| по WS добавляется 12-я: `_x.ai/session/update` | на один символ отличается от спецификационного `session/update` | dispatch сверяет метод точно; тест фиксирует, что prefix-матч сюда не приедет |
+
+## 2a. WebSocket переснят живьём
+
+Reconnect-путь исходит из того, что `loadSession: true` в handshake означает,
+что `session/load` действительно поднимет сессию: мост переподключается,
+делает initialize, load — и **отказывается** повторять prompt, потому что
+повтор незавершённой записи продублировал бы её. Это допущение теперь
+наблюдение, а не вера: `load_session_advertised: true`, `reconnected: true`,
+`session_load_ok: true`, демон мёртв после kill.
+
+Сценарий `--scenario websocket` поднимает managed `grok agent serve` тем же
+`_managed_ws_argv`, что и мост, роняет сокет и проходит ровно ту ветку
+восстановления, что в `acp.py`.
 
 ## 3. Receipt отвечает на два вопроса, ради которых хост открывал репозиторий
 
@@ -96,8 +111,8 @@ receipt.
 
 | Критерий | Как проверен |
 |---|---|
-| Тесты зелёные, число выросло | 597 passed / 1 skipped (было 543/1) |
-| Свежие live-фикстуры, код на них опирается | `evidence/live-acp/*`, 25 тестов в `test_live_acp_fixtures.py` |
+| Тесты зелёные, число выросло | 605 passed / 1 skipped (было 543/1) |
+| Свежие live-фикстуры, код на них опирается | `evidence/live-acp/*` (4 сценария, включая WS), 33 теста в `test_live_acp_fixtures.py` |
 | Job на пресете `max`: доходит, коммитит, `tests` настоящие | ниже |
 | `expected_agent_version: "any"`, `pin_enabled: false`, `mismatch_blocks_typed_path: false` | `compatibility_report()` после всех правок |
 | Пин на несовпадающую версию = warning, typed-путь не блокируется | `test_opt_in_pin_mismatch_warns_and_continues` |
@@ -129,10 +144,6 @@ worktree status     (clean)
 
 ## 7. Что осталось открытым
 
-- **WebSocket-путь не переснят живьём.** `grok agent serve` handshake, reconnect
-  и `session/load` живут на фикстурах round8. Stdio — транспорт по умолчанию и
-  тот, что покрыт; WS остаётся на старых данных. Кто возьмётся: добавить
-  сценарий `websocket` в `capture_acp_live.py`.
 - **`--no-subagents` остаётся жёстко включённым — по решению, не по недосмотру.**
   Все permission-решения моста принимаются по кадрам
   `session/request_permission`, и нет ни одного capture, показывающего, что
