@@ -149,6 +149,12 @@ class StdioACPTransport:
             "default",
             "--max-turns",
             str(task["max_turns"]),
+            # Not configurable, and deliberately so. Every permission decision
+            # this bridge makes is taken on a session/request_permission frame
+            # it receives; nothing has been captured showing a subagent's tool
+            # calls arriving on that channel. Until a live capture proves they
+            # do, allowing subagents would put work outside the only gate the
+            # bridge has.
             "--no-subagents",
             "--disable-web-search",
             "agent",
@@ -354,8 +360,11 @@ class StdioACPTransport:
                         emit("session_update", compact)
                     continue
                 if isinstance(method, str):
-                    # Grok 0.2.118 emits private notifications. Preserve only
-                    # bounded/redacted event metadata; never treat them as success.
+                    # Grok emits private `_x.ai/*` notifications alongside the
+                    # spec'd ones -- eleven distinct methods on 1.0.4, including
+                    # `_x.ai/session/prompt_complete`, which looks like an answer
+                    # and is not one. Preserve bounded metadata; the only signal
+                    # that a turn finished is the session/prompt response.
                     emit("notification", {"method": method})
                     continue
                 if message.get("id") == wanted:
@@ -467,9 +476,11 @@ class WebSocketACPTransport:
     """ACP v1 over RFC 6455, with an optional managed loopback daemon.
 
     With no configured endpoint a short-lived ``grok agent serve`` process is
-    started in the task cwd.  This is intentional: Grok 0.2.118 can stall
-    ``session/new`` when the daemon cwd and requested cwd differ.  A permanent
-    daemon may instead be selected with ``GROK_DELEGATE_WS_ENDPOINT`` plus
+    started in the task cwd.  This is intentional: Grok has been observed to
+    stall ``session/new`` when the daemon cwd and the requested cwd differ, and
+    starting the daemon where the work happens removes the difference rather
+    than betting on a given build having fixed it.  A permanent daemon may
+    instead be selected with ``GROK_DELEGATE_WS_ENDPOINT`` plus
     ``GROK_AGENT_SECRET``; neither value is included in receipts or errors.
     """
 
@@ -1136,11 +1147,14 @@ def _permission_params_with_tool_state(
     params: Mapping[str, Any],
     tool_state: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Join ACP's real two-frame tool call before evaluating permission.
+    """Join ACP's two-frame tool call before evaluating permission.
 
-    Grok 0.2.118 sends rawInput in an earlier session/update tool_call and only
-    the kind/title/id in session/request_permission.  Permission decisions must
-    use both frames; absence from both remains a deny-by-default decision.
+    Some builds send rawInput only in the earlier session/update tool_call and
+    leave session/request_permission carrying just kind/title/id.  Grok 1.0.4
+    sends it in both (evidence/live-acp/session-permission-cancel.jsonl), so
+    this join is a no-op there -- which is the point: the decision must not
+    depend on which of the two frames a given build chose to fill.  Absence from
+    both remains a deny-by-default decision.
     """
     merged = dict(params)
     tool = dict(params.get("toolCall") or {})
@@ -1244,8 +1258,16 @@ def validated_test_argv(command: str, cwd: Path) -> list[str]:
     return argv
 
 
+#: Keys a Grok tool has been observed to name a path with. `target_file` is the
+#: one the 1.0.4 read tool uses (evidence/live-acp/session-permission-cancel.jsonl);
+#: without it a legitimate read is denied for having no recognisable path at all.
+#: Add keys here as captures reveal them -- an unknown key must keep failing
+#: closed, so the list stays a list rather than becoming a heuristic.
+_PATH_KEYS = ("file_path", "path", "target", "destination", "target_file", "notebook_path")
+
+
 def _paths_confined(raw: Mapping[str, Any], cwd: Path) -> bool:
-    candidates = [raw.get(key) for key in ("file_path", "path", "target", "destination") if raw.get(key)]
+    candidates = [raw.get(key) for key in _PATH_KEYS if raw.get(key)]
     if not candidates:
         return False
     for value in candidates:
@@ -1293,9 +1315,12 @@ def _consume_update(
         tests.append(
             {
                 "command": command[:1_000],
-                "passed": exit_code == 0 and not bool(raw_output.get("timed_out")),
+                "passed": _agent_reported_pass(command, raw_output),
                 "returncode": exit_code,
                 "output_preview": _redact_text(str(raw_output.get("output_for_prompt") or ""))[:2_000],
+                # Never "bridge-verifier": acceptance reads that string and this
+                # number came from the agent, not from a process the bridge owns.
+                "source": "agent-reported",
             }
         )
 
@@ -1355,6 +1380,22 @@ def _compact_session_update(update: Mapping[str, Any]) -> dict[str, Any] | None:
 
 def _looks_like_test(command: str) -> bool:
     return bool(re.search(r"(?i)(pytest|unittest|npm\s+test|cargo\s+test|go\s+test|dotnet\s+test)", command))
+
+
+#: A shell chain reports the status of its LAST statement. Observed live: the
+#: agent ran `python -m pytest -q; echo EXIT_CODE=$LASTEXITCODE`, pytest failed,
+#: and rawOutput.exit_code was 0 because the echo succeeded
+#: (evidence/live-acp/NOTES.md). A green read from that is worse than no read.
+_CHAINED_COMMAND = re.compile(r"(?:;|&&|\|\||\|)")
+
+
+def _agent_reported_pass(command: str, raw_output: Mapping[str, Any]) -> bool | None:
+    """What the agent's own exit code is worth -- None when it is worth nothing."""
+    if _CHAINED_COMMAND.search(command):
+        return None
+    if raw_output.get("exit_code") is None:
+        return None
+    return raw_output.get("exit_code") == 0 and not bool(raw_output.get("timed_out"))
 
 
 def _line_reader(

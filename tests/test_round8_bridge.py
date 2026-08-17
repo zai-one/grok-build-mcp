@@ -220,6 +220,9 @@ def test_fake_stdio_execute_permission_diff_and_test_evidence() -> None:
                 "passed": True,
                 "returncode": 0,
                 "output_preview": "1 passed",
+                # Harvested from the agent's own frames, so it is labelled as
+                # such: acceptance only counts "bridge-verifier" entries.
+                "source": "agent-reported",
             }
         ]
 
@@ -241,24 +244,39 @@ def test_fake_stdio_cancel_returns_cancelled_and_process_dies() -> None:
 
 
 def test_cancel_has_independent_grace_deadline(monkeypatch) -> None:
-    monkeypatch.setattr(acp, "CANCEL_GRACE_SECONDS", 0.2)
+    """An agent that ignores session/cancel is killed on the grace deadline.
+
+    Cancelling on a wall-clock sleep made this test flaky: under load the fake
+    agent had not answered session/new yet, so the run took the "cancelled
+    before a session existed" path and reported ACP_CANCELLED. Wait for the
+    session_created event instead -- it is the condition the code branches on,
+    so waiting for it tests the grace deadline rather than the scheduler.
+    """
+    monkeypatch.setattr(acp, "CANCEL_GRACE_SECONDS", 0.5)
     with tempfile.TemporaryDirectory() as raw:
         root = Path(raw)
         task = validate_task_packet(
-            packet(root, objective="CANCEL_IGNORED_FIXTURE", timeout_seconds=10),
+            packet(root, objective="CANCEL_IGNORED_FIXTURE", timeout_seconds=30),
             allowed_roots=[root],
         )
         cancel = threading.Event()
+        session_live = threading.Event()
         holder = {}
+
+        def sink(event):
+            if event.get("kind") == "session_created":
+                session_live.set()
+
         thread = threading.Thread(
             target=lambda: holder.setdefault(
-                "result", fake_transport().run(task, cwd=root, cancel_event=cancel)
+                "result",
+                fake_transport().run(task, cwd=root, cancel_event=cancel, event_sink=sink),
             )
         )
         thread.start()
-        time.sleep(0.3)
+        assert session_live.wait(20), "fake agent never created a session"
         cancel.set()
-        thread.join(3)
+        thread.join(30)
         assert not thread.is_alive()
         assert holder["result"]["status"] == "cancelled"
         assert holder["result"]["blocked_reason"] == "ACP_CANCEL_TIMEOUT"

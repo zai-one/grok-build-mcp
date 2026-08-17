@@ -1,0 +1,43 @@
+{
+  "agent_version": "1.0.4",
+  "cancel_sent": false,
+  "captured_by": "scripts/capture_acp_live.py",
+  "cli": "grok 1.0.4 (d846eb93d9)",
+  "frame_count": 58,
+  "notes": [],
+  "permission_requests": 1,
+  "permission_tool_kinds": [
+    "execute"
+  ],
+  "permission_without_rawinput": 0,
+  "pin_policy": "evidence for the installed CLI; the bridge stays unpinned",
+  "protocol_version": 1,
+  "scenario": "command",
+  "session_update_kinds": {
+    "agent_message_chunk": 59,
+    "agent_thought_chunk": 46,
+    "available_commands_update": 4,
+    "session_info_update": 1,
+    "tool_call": 1,
+    "tool_call_update": 4,
+    "user_message_chunk": 1
+  },
+  "stderr_tail": [],
+  "stop_reason": "end_turn",
+  "tool_call_ids_with_rawinput": [
+    "call-98131932-0a74-4e5e-9e75-46e87fa60351-0"
+  ],
+  "unknown_methods": [
+    "_x.ai/mcp/servers_updated",
+    "_x.ai/models/update",
+    "_x.ai/settings/update",
+    "_x.ai/announcements/update",
+    "_x.ai/mcp/init_progress",
+    "_x.ai/sessions/changed",
+    "_x.ai/queue/changed",
+    "_x.ai/mcp/server_status",
+    "_x.ai/mcp_initialized",
+    "_x.ai/session_notification",
+    "_x.ai/session/prompt_complete"
+  ]
+}
