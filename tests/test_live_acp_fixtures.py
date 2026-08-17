@@ -34,19 +34,32 @@ FIXTURES = Path(__file__).resolve().parent.parent / "evidence" / "live-acp"
 SCENARIOS = ("permission-cancel", "consult", "command", "websocket")
 
 
+def _require(path: Path) -> Path:
+    """Fail, do not skip. These fixtures ARE the protection.
+
+    Skipping on a missing capture meant the guard against a CLI upgrade could
+    disappear without turning anything red -- the same silent-pass shape this
+    file exists to remove from the bridge. The captures are committed, so their
+    absence is a broken checkout or a deletion, and both deserve a failure.
+    """
+    if not path.exists():
+        raise AssertionError(
+            f"{path.name} is missing. It is committed evidence, not an optional "
+            f"artifact; re-capture with scripts/capture_acp_live.py --scenario "
+            f"{path.stem.removeprefix('session-').removesuffix('.observed')}"
+        )
+    return path
+
+
 def load(scenario: str) -> list[dict[str, Any]]:
-    path = FIXTURES / f"session-{scenario}.jsonl"
-    if not path.exists():  # pragma: no cover - the captures are committed
-        pytest.skip(f"missing live fixture {path.name}; run scripts/capture_acp_live.py")
+    path = _require(FIXTURES / f"session-{scenario}.jsonl")
     return [
         json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
 
 
 def observed(scenario: str) -> dict[str, Any]:
-    path = FIXTURES / f"session-{scenario}.observed.json"
-    if not path.exists():  # pragma: no cover
-        pytest.skip(f"missing {path.name}")
+    path = _require(FIXTURES / f"session-{scenario}.observed.json")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -327,3 +340,21 @@ def test_fixtures_carry_no_absolute_paths_or_secrets(scenario: str) -> None:
     assert "C:\\\\Users" not in body and "C:/Users" not in body
     for marker in ("xai-", "sk-", "Bearer ", "GROK_AGENT_SECRET", "capture-1", "capture-2"):
         assert marker not in body, f"{marker} must not reach a committed fixture"
+
+
+def test_a_missing_fixture_is_a_failure_and_not_a_skip() -> None:
+    """The guard has to be louder than the thing it guards against.
+
+    Skipping on a missing capture would let the protection against a CLI upgrade
+    vanish while the suite still reported green -- which is the silent-pass shape
+    this whole file exists to remove.
+    """
+    with pytest.raises(AssertionError) as missing:
+        _require(FIXTURES / "session-does-not-exist.jsonl")
+    assert "capture_acp_live.py" in str(missing.value)
+
+
+def test_every_scenario_this_module_names_is_actually_committed() -> None:
+    for scenario in SCENARIOS:
+        assert (FIXTURES / f"session-{scenario}.jsonl").exists()
+        assert (FIXTURES / f"session-{scenario}.observed.json").exists()
