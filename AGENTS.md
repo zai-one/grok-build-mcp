@@ -27,6 +27,12 @@
 
 Хост не скармливает весь репозиторий в контекст. Читает compact receipt: `changed_files`, `diffstat`, bounded `unified_diff`, `tests`, `worktree_path`.
 
+В `tests` попадает только прогон, который сделал сам мост (`source: "bridge-verifier"`). То, что о своих тестах сказал агент, помечено `agent-reported` и доказательством не считается: живой capture показал `exit_code: 0` при упавшем pytest, потому что в цепочке `a; b` код возврата принадлежит последней команде. Verifier запускается независимо от того, доработал агент свой ход или упёрся в `max_turns`. Если `tests` пуст — `tests_skipped_reason` говорит почему (`NO_CHANGES` / `NO_TEST_COMMANDS` / `CANCELLED` / `NOT_A_WRITE_ROLE`), и пустой список больше не путается с «тесты не прогонялись».
+
+`changed_files` и `unified_diff` — **разные срезы** и 1:1 не совпадают: первый отфильтрован «что изменилось за этот запуск», второй берётся от base. Это описано в `schemas/grok-work-receipt.v1.schema.json`.
+
+Тестовые команды worker должен запускать **дословно**: permission-гейт сверяет строку точно, и `python -m pytest -q; echo EXIT_CODE=$LASTEXITCODE` будет отклонён. `build_prompt` говорит об этом worker'у.
+
 ## Проект должен сам включить мост
 
 Без `.grok-mcp.json` в корне проекта job-инструменты **отказывают** (`PROJECT_NOT_ENABLED`) — это не баг, а opt-in. Пресеты: `off` / `cheap` (low, 12) / `standard` (high, 24) / `max` (xhigh, 40). Читать и писать — `grok_agent_project`; пишет только внутрь allowlisted root.
@@ -45,9 +51,11 @@
 | Grok (worker) | пишет код и тесты по ТЗ | **только** своя lane-ветка `grok/*` |
 | Claude / хост (оркестратор) | верификация, финальные правки, приёмка | `main` |
 
-Grok не трогает `main`, не мержит, не пушит. Хост не принимает работу по `summary` агента — только по прогону тестов у себя. Мост это уже закладывает: receipt собирает `changed_files` относительно `base_ref`, поэтому закоммиченная в lane работа видна как коммиты, а не как «грязь».
+Grok не трогает `main`, не мержит, не пушит. Хост не принимает работу по `summary` агента — только по прогону тестов у себя.
 
-**Просить коммит рано, а не в конце.** В ТЗ ставить `git commit` сразу после того, как правка сделана и целевой тест зелёный. Если отложить на самый конец, worker упирается в `max_turns` посреди разбора и останавливается (`ACP_STOP_cancelled`) — работа на диске остаётся, но незакоммиченной, и приёмка усложняется.
+**Коммит в lane делает мост, а не worker.** Просить коммит в ТЗ больше не нужно: после того как job закончился (в том числе по `ACP_STOP_cancelled` из-за `max_turns`), мост сам коммитит незакоммиченное в `grok/*`. Инструкция, которая работает только пока у worker'а остались ходы, — это не механизм. Коммит идёт **после** verifier'а: иначе тест, который откатил артефакт, всё равно выглядел бы как сделанная работа. Ветка не `grok/*` → мост отказывается коммитить.
+
+`base_ref` фиксируется в SHA **до** запуска worker'а. Дефолт — `HEAD`, а `HEAD` уезжает на первом же коммите в lane, и тогда любой последующий diff «относительно базы» схлопывается в пустоту, а законченный job репортится как `no_changes`.
 - Секреты не в receipts, не в MCP config, не в issue. Auth = локальный `grok login`.
 - Pin версии CLI **выключен**. Любая установленная CLI с ACP v1. Opt-in: `GROK_DELEGATE_EXPECTED_AGENT_VERSION`. Mismatch = warning, typed-путь не блокируется.
 - Модель тоже **не пинится**. Пусто = дефолт CLI (сейчас `grok-4.6`), `--model` в argv не идёт. Задать: `GROK_DELEGATE_MODEL`. Не хардкодить id модели в коде — устареет так же, как устарел `grok-4.5`.
@@ -68,7 +76,7 @@ Grok не трогает `main`, не мержит, не пушит. Хост н
 |---|---|
 | CLI missing | Поставить Grok CLI, `grok login`, снова `grok_agent_status`. |
 | auth absent | Тот же OS-user: `grok login`. Мост не читает `auth.json`. |
-| ACP handshake / timeout | `grok_delegate_doctor` (без `fix`). Stdio по умолчанию. Не пиннить CLI. Live initialize на текущей CLI — `scripts/capture_acp_initialize.py`. |
+| ACP handshake / timeout | `grok_delegate_doctor` (без `fix`). Stdio по умолчанию. Не пиннить CLI. Live capture на текущей CLI — `scripts/capture_acp_live.py --scenario {permission-cancel,consult,command}`, затем `py -3 -m pytest tests/test_live_acp_fixtures.py -q`. |
 | tests red | Не пушить. Чинить, `py -3 -m pytest tests -q`. |
 | `session_next` schema / `additionalProperties` | Execute должен нести `task` (`objective`, `project_root`, `correlation_id`, `expected_artifacts`, `test_commands`). Poll — только `job_id`, **без** `session_id`. Fallback: typed tools. |
 | Cursor vs Claude vs Codex | Один skill `grok-mcp` в `.cursor`, `.claude`, `.codex`, `.agents`. Источник: `skills/grok-mcp`. После правки: `py -3 scripts/sync_skills.py`. |
