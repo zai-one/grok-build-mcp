@@ -1,11 +1,92 @@
 # Changelog
 
-## Unreleased
+## 0.11.0 — What the audits found
 
-- `jsonschema` is declared in the `test` extra. `tests/test_tool_schemas.py`
-  validates every tool schema against the real 2020-12 metaschema only when it
-  is importable, and skipped silently otherwise -- so on a runtime install the
-  guard was present and doing nothing. Tag `v0.10.0` stays on `556c9aa`.
+Six independent read-only audits ran in parallel over the 0.10.0 tree: security,
+receipt truthfulness, concurrency, host contract, test quality (by mutation), and
+platform/docs. Every blocker and major finding below was re-verified against the
+code before it was acted on. Triage of all of them, including the five that were
+rejected or downgraded, is in `Service/Audits/2026-08-17-triage.md`.
+
+Tests: **710 passed, 1 skipped** (was 605).
+
+Also carried in from after the 0.10.0 tag: `jsonschema` is declared in the `test`
+extra, so `tests/test_tool_schemas.py` validates the tool schemas against the real
+2020-12 metaschema instead of skipping in silence on a runtime install.
+
+### Receipts could still lie
+
+- **A rejected job could seed the lane it was rejected on.** `no_changes`
+  returned before the unexpected-files check ran, so a run that changed nothing
+  while sitting on someone else's file reported only that nothing happened -- and
+  the bridge committed that file to the branch anyway.
+- **And the next job hid it.** `base_ref` defaults to `HEAD` and was resolved
+  inside the worktree, where on a reused lane `HEAD` is the previous job's
+  commit. Everything an earlier job left dropped out of the next diff, so the
+  second receipt came back clean with the refused file still on the branch. The
+  base is now resolved in the main repository, which is where `prepare_worktree`
+  already resolved it to create the lane.
+- **The verifier could certify itself.** Acceptance is read after the tests so a
+  test that reverts the artifact fails -- which also meant a test that *creates*
+  it looked like delivered work. The tree is snapshotted before the tests too;
+  new field `verifier_touched_files`, new reason `ARTIFACT_WRITTEN_BY_VERIFIER`.
+
+### Correct work was being refused
+
+- `git status --porcelain` collapses an untracked tree to `?? src/`, so a worker
+  asked for `src/app.py` delivered exactly that and the receipt reported a change
+  to `src` -- a path nobody expected. `-uall` lists the files instead, which also
+  stops one collapsed entry from hiding a second, unexpected file beside it.
+- Paths were compared as strings on a filesystem that folds case, so
+  `EXPECTED.TXT` and `expected.txt` arrived as one missing artifact plus one
+  foreign change: the same file blocking the job twice.
+- `git diff` cannot show an untracked file, so "create this file" -- the most
+  ordinary execute there is -- produced an empty `unified_diff` beside a
+  non-empty `changed_files`. The rendering is refreshed from the lane commit.
+
+### Security
+
+- **The HTTP transport now requires a token wherever it binds, loopback
+  included** (breaking). With no token every request was authorized, and that
+  endpoint reaches the job tools. A POST that is not `application/json` is
+  refused, so a cross-origin simple request cannot reach the handler.
+- **The command allowlist held nothing on its own.** Tested directly it let
+  through an interpreter the worker could have written (`argv[0]` was never
+  confined, and Windows searches the working directory for a bare name),
+  `Get-Content .env`, and `git show HEAD:.env`. `argv[0]` is now the one operand
+  whose rule is inverted, and is resolved before exec.
+- **Redaction knew two prefixes.** GitHub, GitLab, AWS, Slack, Google, JWT and
+  npm credentials, and passwords inside URLs, went through untouched. A
+  credential wrapped onto the next line leaked too -- stdio redacted stderr line
+  by line, so whether a key escaped depended on the terminal width.
+
+### The navigator could not finish a write job
+
+- The execute plan offered one poll for a job measured at 32 seconds, then said
+  done. The poll step repeats while the bound job runs; `max_polls` still bounds
+  it, an unknown job releases it, and the turn that sees a terminal job still
+  hands back the poll, because that call fetches the finished receipt.
+- `session_begin` accepts `job_id`, so verify mode can be aimed at a job.
+- `PROJECT_NOT_ENABLED` carries `fix_with`: the tool and arguments that fix it.
+- The update route pointed at a shell script from before `grok_agent_update`.
+
+### Tests that could not fail
+
+Four acceptance gates had no test at all -- a mutation audit deleted each in turn
+and the suite stayed green every time. The command allowlist had no direct test,
+because every existing case reached it through a command the task never declared.
+Both are covered now. A missing live-ACP fixture used to skip, which meant the
+protection against a CLI upgrade could vanish while the suite reported green.
+
+### Docs the audits proved wrong
+
+`ACP-TRANSPORTS` still promised fail-closed version negotiation, which would send
+a reader off to pin the CLI. The documented Windows one-liner could not pass
+`-Project` and defaulted to the whole user profile. `install.ps1` wrote its MCP
+snippets with a BOM under Windows PowerShell 5.1, which strict JSON parsers
+refuse. The tool count said 21 where `list_tools` returns 23. The token-economy
+claim is now stated with the measurement behind it -- 61-88% smaller than a full
+job record, and *larger* than reading the diff alone until the diff passes 16 KiB.
 
 ## 0.10.0 — Live protocol evidence, and a receipt you can accept work from
 
