@@ -1,7 +1,10 @@
 """Bearer-protected Streamable-ish JSON-RPC HTTP for VPS / remote MCP hosts.
 
-This is intentionally stdlib-only. Non-loopback binds require
-``GROK_DELEGATE_HTTP_TOKEN`` or ``GROK_DELEGATE_HTTP_TOKEN_FILE``.
+This is intentionally stdlib-only. **Every** bind requires
+``GROK_DELEGATE_HTTP_TOKEN`` or ``GROK_DELEGATE_HTTP_TOKEN_FILE``, loopback
+included: loopback is shared with every other process on the machine and with
+the browser, and the tools behind this endpoint create worktrees and run
+commands. ``/healthz`` is the only unauthenticated route, and it answers nothing.
 Never place Grok OAuth tokens in the HTTP bearer field.
 """
 
@@ -79,8 +82,12 @@ class DelegateHTTPRequestHandler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         token = self.server.token
         if token is None:
-            # loopback-only may run without token; non-loopback is rejected at bind.
-            return True
+            # Unreachable via create_http_server, which refuses to bind without
+            # a token. Kept as a deny so a directly-constructed server cannot
+            # inherit the old behaviour, where "loopback may run without a
+            # token" meant every local process -- and every web page, since a
+            # text/plain POST needs no preflight -- could call grok_agent_execute.
+            return False
         header = self.headers.get("Authorization", "")
         prefix = "Bearer "
         if not header.startswith(prefix):
@@ -126,6 +133,13 @@ class DelegateHTTPRequestHandler(BaseHTTPRequestHandler):
         if not self._authorized():
             self._unauthorized()
             return
+        # A browser can send text/plain without a preflight. Requiring JSON means
+        # a cross-origin page cannot reach this handler at all, independently of
+        # whether it somehow obtained the token.
+        content_type = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type and content_type != "application/json":
+            self._write(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "content_type_must_be_json"})
+            return
         length = int(self.headers.get("Content-Length") or "0")
         if length < 0 or length > MAX_BODY:
             self._write(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "body_too_large"})
@@ -166,8 +180,14 @@ def create_http_server(
     if port < 0 or port > 65_535:
         raise ValueError("HTTP port must be between 0 and 65535")
     configured = _configured_token(token)
-    if host.lower() not in LOOPBACK_HOSTS and not configured:
-        raise ValueError("non-loopback HTTP bind requires GROK_DELEGATE_HTTP_TOKEN")
+    if not configured:
+        # Loopback used to be exempt. It is not a boundary: every process on the
+        # machine shares it, and a page in the browser can POST to it. The tools
+        # behind this endpoint create worktrees and run commands, so the rule is
+        # now the same wherever it binds.
+        raise ValueError(
+            "HTTP transport requires GROK_DELEGATE_HTTP_TOKEN, including on loopback"
+        )
     return DelegateHTTPServer((host, port), token=configured)
 
 
