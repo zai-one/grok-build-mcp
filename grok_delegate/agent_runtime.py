@@ -351,7 +351,14 @@ def run_task(
         # is the default -- and every later diff is taken against it. Once
         # anything commits on the lane, "HEAD" means the new commit and the
         # diff collapses to empty, reporting a finished job as no_changes.
-        base_ref = _resolve_base_sha(cwd, str(task["base_ref"]), git_runner, timeout=30.0)
+        #
+        # Resolved in the main repository, not in the worktree, which is where
+        # prepare_worktree already resolved it to create the branch. In a reused
+        # lane the worktree's HEAD is the previous job's commit, so resolving
+        # here made the base move forward with the lane and hid everything an
+        # earlier job had left on the branch -- including files a receipt had
+        # already refused.
+        base_ref = _resolve_base_sha(root, str(task["base_ref"]), git_runner, timeout=30.0)
         before = collect_diff(cwd, base_ref=base_ref, git_runner=git_runner)
         if not before.get("ok"):
             return diff_snapshot_failure(before)
@@ -475,6 +482,14 @@ def run_task(
             if str(value) not in before_commits
         ]
         diff["diffstat"] = _fallback_diffstat(diff["changed_files"])
+    # What the tree looked like when the worker stopped and before any test ran.
+    # Acceptance is still judged after the verifier -- a test that reverts the
+    # artifact must not pass -- but the two snapshots together also say which
+    # side wrote each file, which one snapshot cannot.
+    pre_test_states = _states_of(
+        cwd,
+        list(diff.get("full_changed_files") or []) + list(task.get("expected_artifacts") or []),
+    )
     verified_tests, tests_skipped = _verify_or_explain(
         cwd,
         task,
@@ -499,6 +514,11 @@ def run_task(
             if str(value) not in before_commits
         ]
         diff["diffstat"] = _fallback_diffstat(diff["changed_files"])
+    verifier_touched = _changes_since(
+        cwd,
+        list(diff.get("full_changed_files") or []) + list(task.get("expected_artifacts") or []),
+        pre_test_states,
+    ) if write_role else []
     # Last, deliberately. Acceptance is read from the filesystem the verifier
     # left behind, so committing earlier would let a test that reverts the
     # artifact still look like delivered work. Committing after keeps that
@@ -536,6 +556,7 @@ def run_task(
             "unified_diff": diff.get("unified_diff") or "",
             "tests": verified_tests,
             "tests_skipped_reason": tests_skipped,
+            "verifier_touched_files": verifier_touched,
             "lane_commit": lane_commit,
             "artifacts": _present_artifacts(cwd, task),
             "summary": redact_text(str(result.get("summary") or "")),
@@ -714,6 +735,14 @@ def _resolve_base_sha(
     if result.get("returncode") == 0 and re.fullmatch(r"[0-9a-f]{7,40}", sha):
         return sha
     return base_ref
+
+
+def _states_of(cwd: Path, paths: Sequence[Any]) -> dict[str, tuple[Any, ...]]:
+    """Bounded content identity for a set of paths, at one moment in time."""
+    return {
+        str(path).replace("\\", "/"): _path_state(cwd, str(path))
+        for path in paths
+    }
 
 
 def _changes_since(

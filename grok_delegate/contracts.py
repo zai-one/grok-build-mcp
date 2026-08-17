@@ -270,6 +270,7 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
     out.setdefault("unified_diff", "")
     out.setdefault("tests", [])
     out.setdefault("tests_skipped_reason", None)
+    out.setdefault("verifier_touched_files", [])
     out.setdefault("artifacts", [])
     out.setdefault("findings", [])
     out.setdefault("summary", "")
@@ -282,9 +283,29 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
         out["error_code"] = "WORKER_STILL_ALIVE_AFTER_SHUTDOWN"
         out["error"] = "WORKER_STILL_ALIVE_AFTER_SHUTDOWN"
     if task["role"] in {"execute", "fix"} and status == "completed":
+        expected_set = {
+            str(path).replace("\\", "/").rstrip("/")
+            for path in task.get("expected_artifacts", [])
+        }
+        # Judged on its own, before anything short-circuits. `full_changed_files`
+        # answers "what is in this lane", which is a different question from
+        # "what did this run do" -- and it is the one that decides whether the
+        # branch is safe to merge.
+        unexpected_changes = [
+            str(path).replace("\\", "/").rstrip("/")
+            for path in out["full_changed_files"]
+            if str(path).replace("\\", "/").rstrip("/") not in expected_set
+        ]
         if not out["changed_files"]:
             status = "no_changes"
             out["blocked_reason"] = "EXECUTE_NO_CHANGES"
+            # A run that changed nothing can still be sitting on files nobody
+            # asked for. Reporting only "nothing happened" let the bridge commit
+            # them to the lane anyway, and the next run -- whose base is that
+            # commit -- returned a clean receipt with them still on the branch.
+            if unexpected_changes:
+                status = "blocked"
+                out["blocked_reason"] = "UNEXPECTED_CHANGED_FILES: " + ", ".join(unexpected_changes)
         else:
             missing = [p for p in task.get("expected_artifacts", []) if p not in out["artifacts"]]
             if missing:
@@ -297,18 +318,22 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
             if unchanged_artifacts:
                 status = "blocked"
                 out["blocked_reason"] = "EXPECTED_ARTIFACT_NOT_CHANGED: " + ", ".join(unchanged_artifacts)
-            expected_set = {
-                str(path).replace("\\", "/").rstrip("/")
-                for path in task.get("expected_artifacts", [])
-            }
-            unexpected_changes = [
-                str(path).replace("\\", "/").rstrip("/")
-                for path in out["full_changed_files"]
-                if str(path).replace("\\", "/").rstrip("/") not in expected_set
-            ]
             if unexpected_changes:
                 status = "blocked"
                 out["blocked_reason"] = "UNEXPECTED_CHANGED_FILES: " + ", ".join(unexpected_changes)
+            # The verifier runs after the worker and its writes land in the same
+            # tree, so an artifact a test created reads exactly like delivered
+            # work. Accepting that would let the test suite certify itself.
+            self_written = sorted(
+                expected_set
+                & {
+                    str(path).replace("\\", "/").rstrip("/")
+                    for path in out["verifier_touched_files"]
+                }
+            )
+            if self_written:
+                status = "blocked"
+                out["blocked_reason"] = "ARTIFACT_WRITTEN_BY_VERIFIER: " + ", ".join(self_written)
             expected_tests = list(task.get("test_commands", []))
             valid_tests = [
                 test for test in out["tests"]
