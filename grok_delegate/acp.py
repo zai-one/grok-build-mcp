@@ -312,7 +312,11 @@ class StdioACPTransport:
                     raise ACPError("ACP_OUTPUT_LIMIT", "agent output exceeded configured cap")
                 if channel == "stderr":
                     if raw:
-                        stderr_tail.append(_redact_text(raw)[:500])
+                        # Kept raw here and redacted once as a joined stream
+                        # below: a credential wrapped onto the next line has its
+                        # prefix in one string and its body in another, and
+                        # neither half looks like a secret on its own.
+                        stderr_tail.append(raw[:500])
                         del stderr_tail[:-20]
                     continue
                 try:
@@ -463,7 +467,7 @@ class StdioACPTransport:
                 "blocked_reason": exc.code,
                 "error": _redact_text(exc.message),
                 "timed_out": timed_out,
-                "stderr_preview": "\n".join(stderr_tail[-5:])[:2_000],
+                "stderr_preview": _redact_text("\n".join(stderr_tail[-5:]))[:2_000],
             }
         finally:
             reader_stop.set()

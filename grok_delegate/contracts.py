@@ -411,8 +411,39 @@ _SECRET_TEXT_PATTERNS = (
     re.compile(r"(?i)([\"'](?:password|passwd|accessToken|refreshToken|clientSecret|cookie)[\"']\s*:\s*[\"'])([^\"']+)"),
 )
 
+#: Credentials that carry their own prefix, so no `key=` context is needed to
+#: recognise them. Only xai- and sk- were listed, which meant the bridge could
+#: quote a GitHub token or a database URL from a file the worker was allowed to
+#: read -- a docker-compose.yml is not a secret file, and the password in it is.
 _BARE_CREDENTIAL_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9])(?:xai|sk)-[A-Za-z0-9._-]{12,}",
+    r"(?<![A-Za-z0-9])(?:"
+    r"(?:xai|sk)-[A-Za-z0-9._-]{12,}"
+    r"|gh[pousr]_[A-Za-z0-9]{16,}"
+    r"|github_pat_[A-Za-z0-9_]{20,}"
+    r"|xox[abprs]-[A-Za-z0-9-]{10,}"
+    r"|(?:AKIA|ASIA|AIDA|AROA)[A-Z0-9]{12,}"
+    r"|AIza[A-Za-z0-9_-]{30,}"
+    r"|ya29\.[A-Za-z0-9._-]{20,}"
+    r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
+    r"|glpat-[A-Za-z0-9._-]{16,}"
+    r"|npm_[A-Za-z0-9]{30,}"
+    r")",
+    re.IGNORECASE | re.ASCII,
+)
+
+#: A password living in a URL rather than beside an `=`. The scheme and user are
+#: kept, because a receipt that says only <REDACTED> is harder to act on than one
+#: that says which service leaked.
+_URL_USERINFO_PATTERN = re.compile(
+    r"(?i)\b([a-z][a-z0-9+.-]{1,31}://)([^\s:/@]{1,128}):([^\s/@]{1,256})@",
+)
+
+#: The same prefixes, wrapped onto the next line. A terminal breaking a long key
+#: put the prefix and the body in different strings, and both halves then read as
+#: ordinary text -- the joined form was redacted, the wrapped one was not.
+_WRAPPED_CREDENTIAL_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(?:xai|sk|gh[pousr]|glpat|npm)[-_][ \t]*\r?\n[ \t]*[A-Za-z0-9._-]{12,}",
     re.IGNORECASE | re.ASCII,
 )
 _PEM_PRIVATE_BLOCK_PATTERN = re.compile(
@@ -435,7 +466,9 @@ def redact_text(value: str) -> str:
     out = _PEM_PRIVATE_BLOCK_PATTERN.sub("<REDACTED_PEM_PRIVATE_KEY>", out)
     out = _PEM_UNTERMINATED_PRIVATE_BLOCK_PATTERN.sub("<REDACTED_PEM_PRIVATE_KEY>", out)
     out = _PEM_PRIVATE_MARKER_PATTERN.sub("<REDACTED_PEM_MARKER>", out)
+    out = _WRAPPED_CREDENTIAL_PATTERN.sub("<REDACTED>", out)
     out = _BARE_CREDENTIAL_PATTERN.sub("<REDACTED>", out)
+    out = _URL_USERINFO_PATTERN.sub(r"\1\2:<REDACTED>@", out)
     for pattern in _SECRET_TEXT_PATTERNS:
         out = pattern.sub(r"\1<REDACTED>", out)
     return out

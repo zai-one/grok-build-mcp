@@ -939,7 +939,12 @@ def test_durable_record_is_versioned_redacted_and_below_reload_cap() -> None:
 
 
 def test_owned_legacy_process_obeys_cancel() -> None:
-    with tempfile.TemporaryDirectory() as raw:
+    # Cleanup errors ignored on purpose: the child is killed while this
+    # directory is its cwd, and Windows releases the handle a moment after the
+    # process is gone. Under load that lost the race and failed the run with a
+    # PermissionError from shutil -- a teardown detail, not the behaviour under
+    # test, which is that cancellation is obeyed at all.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw:
         cancel = threading.Event()
         holder = {}
         thread = threading.Thread(target=lambda: holder.setdefault(
