@@ -537,6 +537,16 @@ def run_task(
     commits = list(diff.get("commits") or [])
     if lane_commit.get("sha"):
         commits.append(str(lane_commit["sha"]))
+        # `git diff` cannot show an untracked file, so the evidence for the most
+        # ordinary execute there is -- "create this file" -- was an empty diff
+        # next to a non-empty changed_files. Once the lane commit exists the same
+        # content is reachable, so the rendering is refreshed from it. Acceptance
+        # is NOT re-read here: it stays on the snapshot the verifier left, or a
+        # test that reverted the artifact would be certified by the commit.
+        after_commit = collect_diff(cwd, base_ref=base_ref, git_runner=git_runner)
+        if after_commit.get("ok"):
+            diff["unified_diff"] = after_commit.get("unified_diff") or diff.get("unified_diff") or ""
+            diff["diffstat"] = after_commit.get("diffstat") or diff.get("diffstat") or ""
     receipt = _base_receipt(
         jid,
         transport,

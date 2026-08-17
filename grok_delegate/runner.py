@@ -912,10 +912,13 @@ def collect_diff(
         None,
         timeout,
     )
-    # Also include untracked? For delegation, staged+unstaged vs HEAD is enough;
-    # include working tree changes with status porcelain for untracked names.
+    # `-uall`, not the default. Plain porcelain collapses a new directory to a
+    # single `?? src/` entry, so a worker asked for `src/app.py` delivered it and
+    # the receipt reported `src` -- a path nobody expected -- and blocked the job.
+    # The collapsed form also hides a second, unexpected file inside the same new
+    # directory, which is the more dangerous half of the same shortcut.
     porcelain = git(
-        ["-C", str(wt), "status", "--porcelain"],
+        ["-C", str(wt), "status", "--porcelain", "-uall"],
         None,
         timeout,
     )

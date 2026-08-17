@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -259,6 +260,18 @@ def build_prompt(task: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+#: Windows and macOS resolve `Expected.txt` and `expected.txt` to one file, so a
+#: receipt that compares the two as strings reports a single file under two names
+#: -- once as a missing artifact and once as somebody else's change. Comparison
+#: folds case where the filesystem does; the reasons still quote what was written.
+_FOLD_CASE = os.name == "nt" or sys.platform == "darwin"
+
+
+def _fold_path(value: Any) -> str:
+    text = str(value).replace("\\", "/").rstrip("/")
+    return text.casefold() if _FOLD_CASE else text
+
+
 def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dict[str, Any]:
     out = dict(receipt)
     out["schema_version"] = RECEIPT_SCHEMA_ID
@@ -283,10 +296,7 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
         out["error_code"] = "WORKER_STILL_ALIVE_AFTER_SHUTDOWN"
         out["error"] = "WORKER_STILL_ALIVE_AFTER_SHUTDOWN"
     if task["role"] in {"execute", "fix"} and status == "completed":
-        expected_set = {
-            str(path).replace("\\", "/").rstrip("/")
-            for path in task.get("expected_artifacts", [])
-        }
+        expected_set = {_fold_path(path) for path in task.get("expected_artifacts", [])}
         # Judged on its own, before anything short-circuits. `full_changed_files`
         # answers "what is in this lane", which is a different question from
         # "what did this run do" -- and it is the one that decides whether the
@@ -294,7 +304,7 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
         unexpected_changes = [
             str(path).replace("\\", "/").rstrip("/")
             for path in out["full_changed_files"]
-            if str(path).replace("\\", "/").rstrip("/") not in expected_set
+            if _fold_path(path) not in expected_set
         ]
         if not out["changed_files"]:
             status = "no_changes"
@@ -307,13 +317,14 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
                 status = "blocked"
                 out["blocked_reason"] = "UNEXPECTED_CHANGED_FILES: " + ", ".join(unexpected_changes)
         else:
-            missing = [p for p in task.get("expected_artifacts", []) if p not in out["artifacts"]]
+            present = {_fold_path(path) for path in out["artifacts"]}
+            missing = [p for p in task.get("expected_artifacts", []) if _fold_path(p) not in present]
             if missing:
                 status = "blocked"
                 out["blocked_reason"] = "EXPECTED_ARTIFACT_MISSING: " + ", ".join(missing)
+            touched = {_fold_path(changed) for changed in out["changed_files"]}
             unchanged_artifacts = [
-                p for p in task.get("expected_artifacts", [])
-                if p not in {str(changed).replace("\\", "/").rstrip("/") for changed in out["changed_files"]}
+                p for p in task.get("expected_artifacts", []) if _fold_path(p) not in touched
             ]
             if unchanged_artifacts:
                 status = "blocked"
@@ -325,11 +336,9 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
             # tree, so an artifact a test created reads exactly like delivered
             # work. Accepting that would let the test suite certify itself.
             self_written = sorted(
-                expected_set
-                & {
-                    str(path).replace("\\", "/").rstrip("/")
-                    for path in out["verifier_touched_files"]
-                }
+                str(path).replace("\\", "/").rstrip("/")
+                for path in out["verifier_touched_files"]
+                if _fold_path(path) in expected_set
             )
             if self_written:
                 status = "blocked"
