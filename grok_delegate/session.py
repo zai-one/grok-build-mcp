@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -405,6 +406,63 @@ def resolve_gate(
     }
 
 
+_INSTALL_SH = (
+    "curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh | bash"
+)
+_INSTALL_PS1 = (
+    "irm https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.ps1 | iex"
+)
+
+
+def _install_command() -> str:
+    """The installer the host can actually run.
+
+    A `curl … | bash` card is not an instruction on Windows, it is a dead end,
+    and the operator running this bridge is on Windows. The repository ships
+    both installers; the card should name the one that exists here.
+    """
+    return _INSTALL_PS1 if sys.platform == "win32" else _INSTALL_SH
+
+
+#: Path-ish tokens are removed before intent matching. `update tests/conftest.py`
+#: is a request to change code, but the bare substring `test` routed it to
+#: "verify" -- the filename decided the mode.
+_PATHISH = re.compile(r"\S*[\\/]\S*|\S+\.(?:py|ts|tsx|js|md|json|toml|yaml|yml)\b")
+_EXECUTE_WORDS = re.compile(
+    r"(?i)\b(fix|implement|build|add|create|update|rewrite|refactor|port|migrate|write)\b"
+)
+_VERIFY_WORDS = re.compile(r"(?i)\b(review|verify|check|audit|tests?)\b")
+_BRAINSTORM_WORDS = re.compile(r"(?i)\b(brainstorm|design|options)\b|\bhow should\b")
+_SETUP_WORDS = re.compile(r"(?i)\b(install|setup)\b")
+
+#: Matched in this order once no leading verb decided it.
+_MODE_WORDS = (
+    ("execute", _EXECUTE_WORDS),
+    ("verify", _VERIFY_WORDS),
+    ("brainstorm", _BRAINSTORM_WORDS),
+    ("install", _SETUP_WORDS),
+)
+_FILLER = frozenset({"please", "can", "you", "could", "lets", "let", "us", "we", "i", "now", "just"})
+
+
+def _leading_verb_mode(goal: str) -> str | None:
+    """The mode the goal's own first verb asks for, if it has one.
+
+    Keyword matching alone cannot tell a verb from a noun: "check whether the
+    update landed" is a question about state, but it contains "update". Goals
+    are written as imperatives, so the first real word is the better witness --
+    and when it says nothing, the ordered scan below still gets a turn.
+    """
+    for word in re.findall(r"[a-z]+", goal.lower()):
+        if word in _FILLER:
+            continue
+        for mode, pattern in _MODE_WORDS:
+            if pattern.fullmatch(word):
+                return mode
+        return None
+    return None
+
+
 def _auto_mode(gate: Mapping[str, Any], intent: str, goal: str) -> str:
     if not gate.get("binary_ok") or not gate.get("auth_ok"):
         return "install" if not gate.get("binary_ok") else "triage"
@@ -412,15 +470,14 @@ def _auto_mode(gate: Mapping[str, Any], intent: str, goal: str) -> str:
         return "triage"
     if intent in INTENTS and intent != "auto":
         return intent
-    g = goal.lower()
-    if any(w in g for w in ("fix", "implement", "build", "add ", "refactor", "write code")):
-        return "execute"
-    if any(w in g for w in ("review", "verify", "test", "check")):
-        return "verify"
-    if any(w in g for w in ("brainstorm", "design", "how should", "options")):
-        return "brainstorm"
-    if "install" in g or "setup" in g:
-        return "install"
+    # Filenames are not verbs: strip them, then match whole words only.
+    g = _PATHISH.sub(" ", goal.lower())
+    leading = _leading_verb_mode(g)
+    if leading:
+        return leading
+    for mode, pattern in _MODE_WORDS:
+        if pattern.search(g):
+            return mode
     return "operate"
 
 
@@ -728,9 +785,13 @@ def session_tick(
             if isinstance(cf, list):
                 changed = len(cf)
             tests = compact.get("tests")
-            if isinstance(tests, list):
+            if isinstance(tests, list) and tests:
                 passed = sum(1 for t in tests if isinstance(t, Mapping) and t.get("passed"))
                 tests_summary = f"{passed}/{len(tests)} passed"
+            elif compact.get("tests_skipped_reason"):
+                # An empty list and "the verifier never ran" read identically on
+                # one line, and only one of them means the host must run tests.
+                tests_summary = "skipped:" + str(compact.get("tests_skipped_reason"))
             host_message = _clip(
                 f"{state}: files={changed}"
                 + (f" tests={tests_summary}" if tests_summary else ""),
@@ -843,7 +904,7 @@ def session_next(
     if mode == "install" and step_i == 0:
         card = {
             "kind": "host_cmd",
-            "cmd": "curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh | bash",
+            "cmd": _install_command(),
             "why": "One-command EASY install (then grok login)",
             "args": {},
         }
@@ -891,11 +952,12 @@ def session_next(
                 "session_id": sid,
                 "done": False,
                 "card": {
-                    "kind": "host_cmd",
-                    "cmd": "bash skills/grok-mcp/scripts/update_mcp.sh 2>/dev/null || curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh | bash",
-                    "why": "Update package + skills",
+                    "kind": "tool",
+                    "tool": "grok_agent_update",
+                    "args": {},
+                    "why": "Preview the update; re-issue with confirm=true to apply",
                 },
-                "host_message": "Run update cmd, then session_end.",
+                "host_message": "Preview the update, confirm it, then restart the MCP host.",
                 "budget_remaining": {"tool_calls": max(0, max_t - used_t), "polls": max(0, max_p - used_p)},
             }
         )
@@ -1078,6 +1140,8 @@ def session_end(
             if isinstance(tlist, list) and tlist:
                 passed = sum(1 for t in tlist if isinstance(t, Mapping) and t.get("passed"))
                 tests = f"{passed}/{len(tlist)} passed"
+            elif c.get("tests_skipped_reason"):
+                tests = "skipped:" + str(c.get("tests_skipped_reason"))
             if c.get("blocked_reason"):
                 blockers.append(str(c.get("blocked_reason")))
     elif note:
