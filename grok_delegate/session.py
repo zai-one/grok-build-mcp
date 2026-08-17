@@ -222,6 +222,34 @@ def bind_session_job(
     return None
 
 
+def _session_budget(sess: Mapping[str, Any]) -> dict[str, Any]:
+    """Budget for this session's cards: the project's preset, else the operator's.
+
+    The navigator emits a full task packet, so whatever it puts here arrives at
+    the job as an *explicit* value and outranks the project preset applied later.
+    Reading the preset here is therefore not a nicety -- without it a card would
+    quietly override the very preset the project chose.
+    """
+    budget: dict[str, Any] = {
+        "max_turns": default_max_turns(),
+        "reasoning_effort": default_reasoning_effort(),
+    }
+    root = _session_project_root(sess)
+    if not root:
+        return budget
+    try:
+        from .project_config import project_gate
+
+        gate = project_gate(root)
+    except Exception:
+        # A broken or unreadable config is reported by the job gate, which fails
+        # closed with a usable message. A card is not the place to raise it.
+        return budget
+    if gate.get("enabled"):
+        budget.update(gate.get("budget") or {})
+    return budget
+
+
 def _session_project_root(sess: Mapping[str, Any]) -> str:
     root = str(sess.get("project_root") or "").strip()
     if root:
@@ -253,9 +281,8 @@ def _write_task_packet(sess: Mapping[str, Any]) -> dict[str, Any]:
         "correlation_id": _session_correlation_id(sess),
         "expected_artifacts": artifacts,
         "test_commands": tests,
-        "max_turns": default_max_turns(),
+        **_session_budget(sess),
         "timeout_seconds": ECONOMY_DEFAULT_TIMEOUT_SECONDS,
-        "reasoning_effort": default_reasoning_effort(),
     }
 
 
@@ -408,7 +435,9 @@ def _step(i: int, tool: str, why: str, args_hint: dict[str, Any] | None = None) 
     }
 
 
-def compile_plan(mode: str, goal: str, gate_ready: bool) -> list[dict[str, Any]]:
+def compile_plan(
+    mode: str, goal: str, gate_ready: bool, *, max_turns: int | None = None
+) -> list[dict[str, Any]]:
     """≤5 steps; tools from allowlist only."""
     g = _clip(scrub_secrets(goal), 200) if goal else ""
     steps: list[dict[str, Any]] = []
@@ -439,12 +468,15 @@ def compile_plan(mode: str, goal: str, gate_ready: bool) -> list[dict[str, Any]]
             _step(2, "grok_agent_session_end", "Short receipt"),
         ]
     if mode == "execute":
+        turns = max_turns or ECONOMY_DEFAULT_MAX_TURNS
         return [
             _step(
                 1,
                 "grok_agent_execute",
                 "Implement only listed scope",
-                {"objective": g, "max_turns": ECONOMY_DEFAULT_MAX_TURNS} if g else {"max_turns": ECONOMY_DEFAULT_MAX_TURNS},
+                # The hint must match the budget the card will actually carry,
+                # otherwise a host that follows it downgrades its own preset.
+                {"objective": g, "max_turns": turns} if g else {"max_turns": turns},
             ),
             _step(2, "grok_agent_poll", "Job receipt fields only"),
             _step(3, "grok_agent_session_end", "Host receipt"),
@@ -540,7 +572,13 @@ def session_begin(
     if gate.get("ready") and mode not in {"install", "update", "feedback"}:
         if "grok_agent_status" not in tools and mode == "operate":
             tools = ["grok_agent_status", *tools]
-    plan = compile_plan(mode, goal_s, bool(gate.get("ready")))
+    stored_root = str(project_root or "").strip()[:1_024]
+    if not stored_root and gate.get("roots"):
+        stored_root = str(gate["roots"][0])[:1_024]
+    session_defaults = _session_budget({"project_root": stored_root})
+    plan = compile_plan(
+        mode, goal_s, bool(gate.get("ready")), max_turns=session_defaults.get("max_turns")
+    )
     # recommended = unique plan tools + route tools
     rec_tools: list[str] = []
     for tname in (
@@ -563,9 +601,6 @@ def session_begin(
     # never deny session_end/tick
     deny = [t for t in deny if t not in {"grok_agent_session_end", "grok_agent_session_tick"}]
     sid = uuid.uuid4().hex[:12]
-    stored_root = str(project_root or "").strip()[:1_024]
-    if not stored_root and gate.get("roots"):
-        stored_root = str(gate["roots"][0])[:1_024]
     stored_cid = str(correlation_id or "").strip()[:128] or f"sess-{sid}"
     _sessions[sid] = {
         "session_id": sid,
@@ -606,9 +641,8 @@ def session_begin(
         "deny_tools": deny,
         "host_script": script,
         "defaults": {
-            "max_turns": default_max_turns(),
+            **session_defaults,
             "timeout_seconds": ECONOMY_DEFAULT_TIMEOUT_SECONDS,
-            "reasoning_effort": default_reasoning_effort(),
         },
         "economy_flags": {
             "economy": True,

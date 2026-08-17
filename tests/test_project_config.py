@@ -192,3 +192,44 @@ def test_project_tool_rejects_an_unknown_preset(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("GROK_DELEGATE_ALLOWED_ROOTS", str(tmp_path))
     result = handle_tool_call("grok_agent_project", {"project_root": str(tmp_path), "preset": "turbo"})
     assert result["ok"] is False
+
+
+# --- navigator cards must not override the project's own preset -------------
+
+
+def test_navigator_defaults_follow_the_project_preset(tmp_path) -> None:
+    """A card carries an explicit budget, so it outranks the preset applied later.
+
+    Without this the navigator would hand the host max_turns=12 for a project
+    that chose `max`, quietly downgrading the preset the project just picked.
+    """
+    from grok_delegate.session import _session_budget
+
+    _write(tmp_path, render_config("max"))
+    budget = _session_budget({"project_root": str(tmp_path)})
+    assert budget == {"max_turns": 40, "reasoning_effort": "xhigh"}
+
+
+def test_navigator_falls_back_when_the_project_has_no_config(tmp_path) -> None:
+    from grok_delegate.economy import ECONOMY_DEFAULT_MAX_TURNS, ECONOMY_DEFAULT_REASONING
+    from grok_delegate.session import _session_budget
+
+    budget = _session_budget({"project_root": str(tmp_path)})
+    assert budget["max_turns"] == ECONOMY_DEFAULT_MAX_TURNS
+    assert budget["reasoning_effort"] == ECONOMY_DEFAULT_REASONING
+
+
+def test_a_broken_config_does_not_break_card_compilation(tmp_path) -> None:
+    """The job gate reports a broken config with a usable message; a card cannot."""
+    from grok_delegate.session import _session_budget
+
+    _write(tmp_path, "{ broken")
+    budget = _session_budget({"project_root": str(tmp_path)})
+    assert budget["max_turns"] > 0
+
+
+def test_the_plan_hint_matches_the_budget_the_card_will_carry() -> None:
+    from grok_delegate.session import compile_plan
+
+    hint = compile_plan("execute", "ship it", True, max_turns=40)[0]["args_hint"]
+    assert hint["max_turns"] == 40
