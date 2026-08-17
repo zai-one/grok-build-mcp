@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `jsonschema` is declared in the `test` extra. `tests/test_tool_schemas.py`
+  validates every tool schema against the real 2020-12 metaschema only when it
+  is importable, and skipped silently otherwise -- so on a runtime install the
+  guard was present and doing nothing. Tag `v0.10.0` stays on `556c9aa`.
+
 ## 0.10.0 — Live protocol evidence, and a receipt you can accept work from
 
 The bridge's ACP frame handling had been written by watching **Grok 0.2.118** and
