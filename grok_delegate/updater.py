@@ -160,6 +160,28 @@ def update_status(
     return out
 
 
+def format_update_line(status: dict) -> str:
+    """One host-facing line: available, up to date, or unknown.
+
+    Status receipts already carry the structured block. Hosts that only print
+    a line still need the three answers, and they must stay under 120 chars so
+    they fit a terminal status row.
+    """
+    if status.get("available"):
+        behind = status.get("behind")
+        count = behind if behind is not None else "?"
+        local = str(status.get("local_sha") or "")[:7] or "?"
+        remote = str(status.get("remote_sha") or "")[:7] or "?"
+        line = f"update available: {count} commits behind ({local} -> {remote})"
+    elif status.get("reason"):
+        reason = str(status.get("reason") or "UNKNOWN").splitlines()[0].strip() or "UNKNOWN"
+        line = f"update state unknown: {reason}"
+    else:
+        line = "bridge is up to date"
+    line = line.splitlines()[0]
+    return line[:119]
+
+
 def checkout_is_dirty(checkout: Path | str, *, git_runner: GitRunner) -> bool | None:
     """True when the checkout has local modifications, None when git cannot say.
 
