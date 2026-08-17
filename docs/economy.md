@@ -30,7 +30,7 @@ Host agent  ──short MCP calls──►  grok-delegate  ──►  Grok CLI (
 
 | Variable | Effect |
 |---|---|
-| `GROK_DELEGATE_ECONOMY=1` | Default `max_turns=12`, `timeout_seconds=600`, `reasoning_effort=low` when the client omits them |
+| `GROK_DELEGATE_ECONOMY=1` | Default `timeout_seconds=600` when the client omits it, and compact poll. It also carries `max_turns=12` / `reasoning_effort=low`, but a project that opted in via `.grok-mcp.json` always supplies both, so on the job path the preset wins and economy never lowers the worker |
 | `GROK_DELEGATE_ECONOMY_COMPACT_POLL=1` | Force compact job/poll payloads (summary clip, few events, capped file lists) |
 
 If compact poll is unset, enabling economy also turns compact poll on.

@@ -2,7 +2,10 @@
 
 ## ⚡ Host loop (Session v1.2)
 
-Unofficial bridge. **Save host tokens:**
+Unofficial bridge. **Save host tokens** — measured against a full job record
+(events, stdout, nested result), the compact receipt is 61–88% smaller. Against
+reading the diff alone it only wins once the diff passes the 16 KiB cap, so on a
+one-file change the saving is in *not* pulling the record, not in the diff.
 
 1. `grok_agent_session_begin({"goal":"…","host_budget":"small"})`  
 2. Loop `grok_agent_session_next` → do only `card` (`host_cmd` | `mcp_tool` | `end`)  
@@ -30,13 +33,24 @@ curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/insta
   | bash -s -- --project "$HOME/code/my-project"
 ```
 
-Windows: `irm https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.ps1 | iex`
+Windows (name the project — the default is your whole user profile):
 
-Then:
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.ps1))) -Project "$env:USERPROFILE\code\my-project"
+```
+
+Then, on macOS/Linux:
 
 ```bash
 grok login
 ~/.local/share/grok-mcp/.venv/bin/python -m grok_delegate --self-test
+```
+
+On Windows the installer puts the checkout in `%LOCALAPPDATA%\grok-mcp`:
+
+```powershell
+grok login
+& "$env:LOCALAPPDATA\grok-mcp\.venv\Scripts\python.exe" -m grok_delegate --self-test
 ```
 
 Merge `~/.config/grok-mcp/mcp/claude_desktop.snippet.json` into Claude/Cursor → restart → `grok_agent_status`.
@@ -65,6 +79,12 @@ empty by design:
 export GROK_DELEGATE_ALLOWED_ROOTS=/path/to/project   # ';' separates several
 export GROK_DELEGATE_LANES_PARENT=/path/to/.grok-mcp-lanes
 ```
+
+Set `GROK_DELEGATE_LANES_PARENT` rather than relying on a default: unset, a typed
+execute puts lanes in `<repo-parent>/<repo>-grok-lanes` while `grok_agent_status`
+reports a sibling `pcp-lanes`, so looking for the work by the name the installer
+writes (`.grok-mcp-lanes`) finds nothing. The receipt's `worktree_path` is always
+the honest answer.
 
 Set them where the host will inherit them, then restart it. `grok_agent_status`
 reports what was actually granted under `roots.allowed`. A child of an
@@ -191,7 +211,7 @@ context no longer forces the worker down to `low`.
 
 ```bash
 # day-to-day
-grok-mcp          # launcher from installer
-# or
+grok-mcp          # launcher, macOS/Linux only — install.ps1 writes no wrapper
+# or, anywhere
 python -m grok_delegate.server
 ```

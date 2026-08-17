@@ -49,8 +49,10 @@ allowlisted root is not implicitly trusted.
 ## First readback
 
 1. MCP `initialize` must return protocol `2024-11-05` and server `0.10.0`.
-2. `tools/list` must include all 13 `grok_agent_*` tools and all 8
-   `grok_delegate*` compatibility tools — 21 in total.
+2. `tools/list` must include all 15 `grok_agent_*` tools and all 8
+   `grok_delegate*` compatibility tools — 23 in total. (`grok_agent_project`
+   and `grok_agent_update` arrived after this count was last written; verify it
+   against the server rather than this line, which has now drifted twice.)
 3. Call `grok_agent_status`; default transport must be `stdio`, and auto
    behavior must be `stdio-only-no-fallback`.
 4. Start with `grok_agent_consult`, then use a temporary git repository for an

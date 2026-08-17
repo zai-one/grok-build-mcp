@@ -25,8 +25,10 @@ Historical fixtures under `evidence/round8/acp-fixtures/` were captured on
 Grok `0.2.118`. On that build, `rawInput` arrives in the preceding `tool_call`
 update while the permission request carries its `toolCallId`; the bridge still
 joins those two frames before applying the deny-by-default policy. Treat that
-as observed behaviour, not a version gate. A live ACP rebaseline on the
-currently installed CLI is a remaining check — do not invent new fixtures.
+as observed behaviour, not a version gate. Four live scenarios are captured
+against the installed CLI in `evidence/live-acp/` and replayed by
+`tests/test_live_acp_fixtures.py`; re-capture with `scripts/capture_acp_live.py`
+after a CLI upgrade rather than inventing fixtures by hand.
 
 On a WebSocket disconnect after session creation the client makes one bounded
 reconnect, negotiates ACP again and calls `session/load`. It does not replay an
@@ -100,7 +102,13 @@ progress only and cannot satisfy the final receipt gate.
 
 ## Known compatibility boundary
 
-The wire fixtures in `evidence/round8/acp-fixtures/` are the tested source of
-truth. A different Grok agent version fails version negotiation instead of
-silently claiming compatibility. Rebaseline fixtures and rerun live acceptance
-before changing the expected version.
+The compatibility contract is the ACP protocol integer `1`, and nothing else.
+A different Grok agent version negotiates normally: the version check is off by
+default (`DEFAULT_EXPECTED_AGENT_VERSION is None`), and the opt-in pin
+(`GROK_DELEGATE_EXPECTED_AGENT_VERSION`) emits a warning event without blocking
+the typed path — `status.compatibility.mismatch_blocks_typed_path` is `false`.
+
+Do not read that as a reason to pin. Pinning does not make an upgrade safe, it
+only makes the bridge refuse earlier; what protects against an upgrade is the
+live capture in `evidence/live-acp/`, replayed on every run. Re-capture it and
+fix whatever the replay reports.

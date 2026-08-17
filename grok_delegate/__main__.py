@@ -211,7 +211,7 @@ def _run_self_test() -> int:
         _print("=== PLAIN ENGLISH ===")
         _print("This MCP only works AFTER Grok CLI is installed AND you ran: grok login")
         _print("Same OS user as the MCP process. See docs/START_HERE.md")
-        _print("Agent setup skill: install-grok-mcp")
+        _print("Agent setup skill: grok-mcp")
         _print("=====================")
     return 0 if all_ok else 1
 

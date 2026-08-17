@@ -14,10 +14,17 @@ curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/insta
 **Windows (PowerShell):**
 
 ```powershell
-irm https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.ps1 | iex
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.ps1))) -Project "$env:USERPROFILE\code\my-project"
 ```
 
-This installs Python if needed, the package, env, launcher, and Claude/Cursor snippets.
+`irm ... | iex` cannot pass `-Project`, and the default is your entire user
+profile — which is what the bridge would then be allowed to touch. Name the
+project.
+
+This installs the package, env, and Claude/Cursor snippets. On macOS/Linux it
+also installs Python if it is missing and writes a `grok-mcp` launcher; the
+Windows script does neither — it tells you to install Python and wires the
+snippets to the venv directly.
 
 ## Then do these 3 things
 
