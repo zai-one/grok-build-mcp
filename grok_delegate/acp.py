@@ -1182,6 +1182,12 @@ _FORBIDDEN_COMMAND = re.compile(
     r"(?i)(?:^|[;&|]\s*)git\s+(?:push|merge|pull|rebase|reset|clean|checkout)|"
     r"(?:remove-item|del|erase|rmdir|rm)\b|"
     r"(?:auth\.json|credentials?|oauth|api[_-]?key)|"
+    # Secret-bearing names, in whatever shape a reader can name them. Path
+    # confinement does not help here: `.env` carries no separator, so it never
+    # looked like a path at all, and `git show HEAD:.env` hides it behind a
+    # revision. Both were accepted by every other check in this gate.
+    r"(?:^|[\s:=/\\\"'])\.env(?:\.|\b)|"
+    r"(?:id_[rd]sa|\.pem\b|\.pfx\b|\.p12\b|\.npmrc\b|\.pypirc\b)|"
     r"(?:invoke-webrequest|curl|wget|ssh|scp)\b"
 )
 _ALLOWED_COMMAND = re.compile(
@@ -1210,17 +1216,52 @@ def _command_allowed(command: str, cwd: Path) -> bool:
     return bool(_ALLOWED_COMMAND.match(text)) and _command_paths_confined(text, cwd)
 
 
+#: Extensions Windows will happily execute for a bare name.
+_EXECUTABLE_SUFFIXES = ("", ".exe", ".bat", ".cmd", ".com", ".ps1")
+
+
+def _interpreter_inside_worktree(token: str, root: Path) -> bool:
+    """Would this argv[0] run something the worker could have written?
+
+    A bare name is normally a PATH lookup and fine. It stops being fine when a
+    file of that name exists in the worktree, because Windows searches the
+    working directory -- so a worker that can write files could hand the
+    verifier its own `python.exe`.
+    """
+    text = str(token or "").strip()
+    if not text:
+        return False
+    candidate = Path(text)
+    if "/" in text or "\\" in text or candidate.is_absolute():
+        try:
+            resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError, RuntimeError):
+            return False
+        return True
+    return any((root / (text + suffix)).exists() for suffix in _EXECUTABLE_SUFFIXES)
+
+
 def _command_paths_confined(command: str, cwd: Path) -> bool:
     try:
         tokens = shlex.split(command, posix=False)
     except ValueError:
         return False
     root = cwd.resolve()
+    if tokens and _interpreter_inside_worktree(tokens[0].strip("\"'"), root):
+        # The one operand whose rule is inverted. Everything else must stay
+        # inside the worktree; the interpreter must stay OUT of it, because a
+        # worker that can write files can write a `python.exe`, and on Windows a
+        # bare name is searched for in the working directory.
+        return False
     for raw in tokens[1:]:
         token = raw.strip("\"'")
         if "=" in token:
             token = token.split("=", 1)[1].strip("\"'")
         token = token.split("::", 1)[0]
+        # `git show <rev>:<path>` names a path behind a revision; judge the path.
+        if ":" in token and not re.match(r"^[A-Za-z]:[\\/]", token):
+            token = token.rsplit(":", 1)[-1]
         if not token or token.startswith("-"):
             continue
         # Dotted unittest module names are not filesystem paths. Any explicit
@@ -1255,6 +1296,15 @@ def validated_test_argv(command: str, cwd: Path) -> list[str]:
         raise ACPError("TEST_COMMAND_UNSAFE", "test command quoting is invalid") from exc
     if not argv:
         raise ACPError("TEST_COMMAND_UNSAFE", "test command is empty")
+    # Resolve the launcher here rather than leaving a bare name for CreateProcess
+    # to look up, which on Windows searches the working directory -- the very
+    # directory the worker was allowed to write in. The gate above already
+    # refuses a launcher that exists in the worktree; this makes the refusal
+    # unnecessary rather than load-bearing.
+    if "/" not in argv[0] and "\\" not in argv[0]:
+        located = shutil.which(argv[0])
+        if located:
+            argv[0] = located
     return argv
 
 
