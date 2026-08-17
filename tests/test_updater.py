@@ -212,3 +212,33 @@ def test_status_carries_the_update_block() -> None:
     report = update_report()
     assert "available" in report
     assert isinstance(report["available"], bool)
+
+
+# --- the output ceiling must follow the turn budget ---------------------------
+
+
+def test_output_cap_scales_with_the_turn_budget() -> None:
+    """A fixed ceiling turned a long, healthy job into ACP_OUTPUT_LIMIT.
+
+    Found by running a real `max` preset job: 40 turns of xhigh reasoning passed
+    1MB of legitimate output and the bridge threw away every edit it had made.
+    """
+    from grok_delegate.acp import DEFAULT_OUTPUT_BYTES, output_cap_for
+
+    assert output_cap_for({"max_turns": 5}) == DEFAULT_OUTPUT_BYTES
+    assert output_cap_for({"max_turns": 40}) > output_cap_for({"max_turns": 12})
+    assert output_cap_for({"max_turns": 40}) >= 8_000_000
+
+
+def test_an_explicit_cap_is_never_widened() -> None:
+    """A caller that named a cap meant it; scaling past it would break the guard."""
+    from grok_delegate.acp import output_cap_for
+
+    assert output_cap_for({"max_turns": 40}, configured=16_384) == 16_384
+
+
+def test_a_missing_turn_budget_falls_back_to_the_default() -> None:
+    from grok_delegate.acp import DEFAULT_OUTPUT_BYTES, output_cap_for
+
+    assert output_cap_for({}) == DEFAULT_OUTPUT_BYTES
+    assert output_cap_for({"max_turns": "nonsense"}) == DEFAULT_OUTPUT_BYTES

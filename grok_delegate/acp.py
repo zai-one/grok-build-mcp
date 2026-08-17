@@ -64,6 +64,29 @@ MAX_MALFORMED_FRAMES = 3
 MAX_WS_FRAME_BYTES = 2_000_000
 CANCEL_GRACE_SECONDS = 5.0
 
+#: Output a single turn may legitimately produce. The cap exists to stop a
+#: runaway agent, so it has to scale with how many turns the operator authorised
+#: -- a fixed ceiling turns a long, healthy job into ACP_OUTPUT_LIMIT and throws
+#: away every edit it had already made.
+OUTPUT_BYTES_PER_TURN = 200_000
+
+
+def output_cap_for(task: Mapping[str, Any], *, configured: int = DEFAULT_OUTPUT_BYTES) -> int:
+    """Byte budget for this task's agent output.
+
+    Scaling applies only to the default. A caller that named a cap meant it --
+    tests and constrained deployments rely on a small one holding -- so an
+    explicit value is returned untouched.
+    """
+    if configured != DEFAULT_OUTPUT_BYTES:
+        return configured
+    try:
+        turns = int(task.get("max_turns") or 0)
+    except (TypeError, ValueError):
+        turns = 0
+    return max(DEFAULT_OUTPUT_BYTES, turns * OUTPUT_BYTES_PER_TURN)
+
+
 def _model_argv(task: Mapping[str, Any]) -> list[str]:
     """``--model <id>`` when the task names one, nothing when it does not.
 
@@ -180,16 +203,18 @@ class StdioACPTransport:
             raise ACPError("ACP_SPAWN_FAILED", str(exc)) from exc
 
         process_job = _WindowsKillJob(proc)
+        # Scale with the authorised turn budget, not a fixed ceiling.
+        cap = output_cap_for(task, configured=self.output_byte_cap)
         inbound: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=32)
         reader_overflow = threading.Event()
         reader_stop = threading.Event()
-        reader_budget = {"remaining": self.output_byte_cap}
+        reader_budget = {"remaining": cap}
         reader_budget_lock = threading.Lock()
         threads = [
             threading.Thread(
                 target=_line_reader,
                 args=(
-                    proc.stdout, "stdout", inbound, self.output_byte_cap,
+                    proc.stdout, "stdout", inbound, cap,
                     reader_overflow, reader_budget, reader_budget_lock, reader_stop,
                 ),
                 daemon=True,
@@ -197,7 +222,7 @@ class StdioACPTransport:
             threading.Thread(
                 target=_line_reader,
                 args=(
-                    proc.stderr, "stderr", inbound, min(self.output_byte_cap, 64_000),
+                    proc.stderr, "stderr", inbound, min(cap, 64_000),
                     reader_overflow, reader_budget, reader_budget_lock, reader_stop,
                 ),
                 daemon=True,
@@ -277,7 +302,7 @@ class StdioACPTransport:
                 except queue.Empty:
                     continue
                 output_bytes += len(raw.encode("utf-8", errors="replace"))
-                if output_bytes > self.output_byte_cap:
+                if output_bytes > cap:
                     raise ACPError("ACP_OUTPUT_LIMIT", "agent output exceeded configured cap")
                 if channel == "stderr":
                     if raw:
@@ -481,6 +506,8 @@ class WebSocketACPTransport:
     ) -> dict[str, Any]:
         cwd = Path(cwd).resolve(strict=True)
         started = _utc_now()
+        # Same reasoning as the stdio path: the ceiling follows the turn budget.
+        cap = output_cap_for(task, configured=self.output_byte_cap)
         configured = (self.endpoint or os.environ.get("GROK_DELEGATE_WS_ENDPOINT") or "").strip()
         managed = not bool(configured)
         proc: subprocess.Popen[str] | None = None
@@ -522,7 +549,7 @@ class WebSocketACPTransport:
             threading.Thread(
                 target=_bounded_tail_reader,
                 args=(
-                    proc.stderr, stderr_tail, self.output_byte_cap, stderr_overflow,
+                    proc.stderr, stderr_tail, cap, stderr_overflow,
                 ),
                 daemon=True,
             ).start()
@@ -608,6 +635,8 @@ class WebSocketACPTransport:
         reconnect_factory: Callable[[], "_WebSocketConnection"] | None = None,
         external_overflow: threading.Event | None = None,
     ) -> dict[str, Any]:
+        # Same reasoning as the stdio path: the ceiling follows the turn budget.
+        cap = output_cap_for(task, configured=self.output_byte_cap)
         events: list[dict[str, Any]] = []
         text_chunks: list[str] = []
         tests: list[dict[str, Any]] = []
@@ -703,7 +732,7 @@ class WebSocketACPTransport:
                 if raw is None:
                     continue
                 output_bytes += len(raw.encode("utf-8", errors="replace"))
-                if output_bytes > self.output_byte_cap:
+                if output_bytes > cap:
                     raise ACPError("ACP_OUTPUT_LIMIT", "agent output exceeded configured cap")
                 try:
                     message = json.loads(raw)
