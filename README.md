@@ -98,6 +98,23 @@ nothing. Reading the host's roots over MCP `roots/list`, which would also cover
 `--add-dir` directories and non-Claude hosts, needs a bidirectional stdio loop
 this server does not have yet.
 
+### Keeping the running server current
+
+The server runs from an editable install of a checkout, so three copies of the
+code exist at once: GitHub, that checkout, and the process already in memory.
+Nothing used to reconcile them, and the failure was silent -- a landed fix looked
+unfixed because it never reached the process.
+
+`grok_agent_status` now carries an `update` block comparing the checkout against
+`origin/main`. It uses `ls-remote`, never `fetch`, so checking cannot mutate your
+checkout, and an unreachable network reports `REMOTE_UNREACHABLE` rather than
+"up to date".
+
+When one is available, `grok_agent_update` previews the exact steps; called with
+`confirm: true` it pulls, reinstalls, and asks you to restart the host. It
+refuses on a dirty checkout -- staying a version behind beats overwriting
+uncommitted work. The server cannot restart itself, so that last step is yours.
+
 ### Turning the bridge on for a project
 
 The bridge is off in every project until that project says otherwise. A project

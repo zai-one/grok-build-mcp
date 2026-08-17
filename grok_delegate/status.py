@@ -85,6 +85,25 @@ def compatibility_report(*, detected_cli_version: Any = None) -> dict[str, Any]:
     }
 
 
+def update_report() -> dict[str, Any]:
+    """Whether the running bridge lags its remote, for the status receipt.
+
+    Reported rather than acted on: noticing is cheap and belongs in the status
+    every host already calls, while pulling and restarting is the operator's call
+    and lives behind grok_agent_update.
+    """
+    try:
+        from .updater import update_status
+
+        report = update_status()
+    except Exception:
+        # Never let an update check be the reason status fails.
+        return {"available": False, "reason": "CHECK_FAILED"}
+    if report.get("available"):
+        report["hint"] = "call grok_agent_update with confirm=true, then restart the MCP host"
+    return report
+
+
 def _parse_json_stdout(stdout: str) -> Any:
     text = (stdout or "").strip()
     if not text:
@@ -412,6 +431,7 @@ def build_status_report(
             "hard_cap_max_turns": HARD_CAP_MAX_TURNS,
         },
         "compatibility": compatibility,
+        "update": update_report(),
         "grok": {
             "binary": bin_name,
             "binary_found": bin_found,

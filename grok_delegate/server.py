@@ -160,6 +160,7 @@ TOOL_AGENT_EXECUTE = "grok_agent_execute"
 TOOL_AGENT_FIX = "grok_agent_fix"
 TOOL_AGENT_ECONOMY = "grok_agent_economy"
 TOOL_AGENT_PROJECT = "grok_agent_project"
+TOOL_AGENT_UPDATE = "grok_agent_update"
 TOOL_AGENT_SESSION_BEGIN = "grok_agent_session_begin"
 TOOL_AGENT_SESSION_TICK = "grok_agent_session_tick"
 TOOL_AGENT_SESSION_NEXT = "grok_agent_session_next"
@@ -791,6 +792,76 @@ def handle_status_tool(
     return structured_error("TOOL_UNKNOWN", f"unknown status tool: {name}")
 
 
+def _handle_update_tool(confirm: bool) -> dict[str, Any]:
+    """Report, and on confirmation apply, an update to the bridge checkout.
+
+    Two-step on purpose. Applying is a mutation of the operator's working copy
+    and ends in a restart that drops their session, so it happens only when they
+    said so -- and never over uncommitted work.
+    """
+    from .updater import checkout_is_dirty, default_git_runner, plan_update, update_status
+
+    status = update_status()
+    plan = plan_update(status, python_executable=sys.executable)
+    out: dict[str, Any] = {"ok": True, **status, "plan": plan, "applied": False}
+
+    if not status["checkout"]:
+        out["message"] = "the bridge is not running from a git checkout, so it cannot self-update"
+        return out
+    if not status["available"]:
+        out["message"] = (
+            "the bridge is up to date"
+            if status["reason"] is None
+            else f"cannot tell whether an update exists ({status['reason']})"
+        )
+        return out
+
+    out["message"] = (
+        "an update is available; call again with confirm=true to pull and reinstall, "
+        "then restart the MCP host"
+    )
+    if not confirm:
+        return out
+
+    dirty = checkout_is_dirty(status["checkout"], git_runner=default_git_runner)
+    if dirty or dirty is None:
+        return structured_error(
+            "CHECKOUT_DIRTY" if dirty else "CHECKOUT_STATE_UNKNOWN",
+            "refusing to update: the checkout has local changes or its state cannot be read",
+            checkout=status["checkout"],
+        )
+
+    ran: list[dict[str, Any]] = []
+    for step in plan["steps"]:
+        try:
+            result = default_git_runner(list(step["argv"]), timeout=300.0)
+        except Exception as exc:
+            ran.append({"what": step["what"], "ok": False, "detail": str(exc)[:300]})
+            out.update({"ok": False, "steps_run": ran, "message": "update failed"})
+            return out
+        ok = getattr(result, "returncode", 1) == 0
+        ran.append(
+            {
+                "what": step["what"],
+                "ok": ok,
+                "detail": (str(getattr(result, "stderr", "") or "")[:300] if not ok else ""),
+            }
+        )
+        if not ok:
+            out.update({"ok": False, "steps_run": ran, "message": "update failed"})
+            return out
+
+    out.update(
+        {
+            "applied": True,
+            "steps_run": ran,
+            "message": "updated; restart the MCP host so the running process picks up the new code",
+            "restart_required": True,
+        }
+    )
+    return out
+
+
 def _handle_project_tool(args: Mapping[str, Any]) -> dict[str, Any]:
     """Report or set a project's preset.
 
@@ -942,6 +1013,14 @@ def handle_tool_call(
                 structured_error("ARGUMENTS_UNKNOWN", "grok_agent_economy accepts no arguments")
             )
         return typed_return(economy_playbook())
+
+    if name == TOOL_AGENT_UPDATE:
+        unknown = sorted(set(args) - {"confirm"})
+        if unknown:
+            return typed_return(
+                structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}")
+            )
+        return typed_return(_handle_update_tool(bool(args.get("confirm"))))
 
     if name == TOOL_AGENT_PROJECT:
         unknown = sorted(set(args) - {"project_root", "preset", "note"})
@@ -1343,6 +1422,25 @@ def list_tools() -> list[dict[str, Any]]:
                 "over re-planning. Read-only, no secrets."
             ),
             "inputSchema": _STATUS_SCHEMA,
+        },
+        {
+            "name": TOOL_AGENT_UPDATE,
+            "description": (
+                "Check whether the running bridge is behind its git remote, and update it. "
+                "Without `confirm` it only reports and returns the exact steps it would run. "
+                "With confirm=true it pulls and reinstalls, then asks you to restart the MCP "
+                "host -- the server cannot restart itself. Refuses if the checkout is dirty."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "confirm": {
+                        "type": "boolean",
+                        "description": "Run the update. Omit to preview it.",
+                    }
+                },
+                "additionalProperties": False,
+            },
         },
         {
             "name": TOOL_AGENT_PROJECT,

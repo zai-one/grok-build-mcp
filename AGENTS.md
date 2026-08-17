@@ -49,7 +49,7 @@
 4. Если execute/poll карточка ломается → typed tools с тем же пакетом.
 5. `session_end`. Человек мержит `grok/*`.
 
-Обновление для consuming agents: если `compatibility.bridge_version` / `grok_delegate_version` старше чекаута — `git pull`, `pip install -e .`, **перезапуск MCP**. Фонового updater нет. Контракт = ACP v1, не номер Grok CLI.
+Обновление: `grok_agent_status` сам сравнивает чекаут с origin и кладёт блок `update`. Если `update.available` — `grok_agent_update` без аргументов покажет план, с `confirm=true` сделает pull + reinstall и попросит **перезапустить MCP** (сам себя сервер перезапустить не может). Обновление отказывает на грязном чекауте. Фонового updater по-прежнему нет: проверка автоматическая, применение — только по подтверждению. Контракт = ACP v1, не номер Grok CLI.
 
 ## Когда ломается
 
