@@ -96,9 +96,11 @@ dev-only snapshots may not receive backports.
 - Economy mode shrinks host-agent payloads (compact polls / playbooks). It does
   **not** relax auth or root policy.
 - HTTP bearer tokens are **operator-generated secrets**, never OAuth/session
-  material from Grok or Codex CLI.
-- Prefer TLS reverse proxy for any non-loopback exposure. Treat the bearer as
-  single-tenant and rotate it if leaked.
+  material from Grok or Codex CLI. `--transport http` is private JSON-RPC,
+  not MCP Streamable HTTP; prefer stdio (including over SSH).
+- Bind loopback. A plaintext non-loopback bind requires
+  `GROK_DELEGATE_HTTP_ALLOW_NONLOOPBACK=1`. Treat the bearer as single-tenant
+  (one process per client) and rotate it if leaked.
 - This project is **unofficial** and not affiliated with xAI, Grok, OpenAI,
   Codex, or Anthropic.
 

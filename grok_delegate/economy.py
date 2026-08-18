@@ -221,7 +221,8 @@ def economy_playbook() -> dict[str, Any]:
         },
         "vps": (
             "Run this MCP on a VPS with Grok CLI logged in; connect Claude via "
-            "stdio tunnel or bearer HTTP. Host tokens buy orchestration only; "
+            "stdio over SSH or bearer HTTP JSON-RPC behind TLS (not Streamable HTTP). "
+            "Host tokens buy orchestration only; "
             "Grok does the long coding loop."
         ),
         "disclaimer": (

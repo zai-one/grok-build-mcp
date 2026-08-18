@@ -11,3 +11,5 @@ grok login
 ```
 
 Luego self-test y el JSON en `~/.config/grok-mcp/mcp/`. Proyecto no oficial.
+
+Opcional (documentos en inglés): [VPS / HTTP](vps.md) · [FastMCP](fastmcp.md).

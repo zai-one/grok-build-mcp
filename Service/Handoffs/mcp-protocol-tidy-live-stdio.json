@@ -1,0 +1,20 @@
+{
+  "client": "@modelcontextprotocol/inspector --cli",
+  "transport": "stdio",
+  "command": "npx -y @modelcontextprotocol/inspector --cli --config <temp>/grok-mcp-inspector.json --server grok-delegate --format json",
+  "server": "py -3 -m grok_delegate.server",
+  "when": "2026-08-18T13:36:43Z",
+  "initialize": {
+    "result": {
+      "serverInfo": {"name": "grok-delegate", "version": "0.12.0"},
+      "protocolVersion": "2025-06-18",
+      "capabilities": {"tools": {}}
+    }
+  },
+  "tools_call_grok_agent_economy": {
+    "ok": true,
+    "isError": false,
+    "structuredContent_ok": true,
+    "disclaimer_present": true
+  }
+}

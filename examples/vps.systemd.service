@@ -1,15 +1,23 @@
-# systemd unit template for grok-delegate HTTP MCP on a VPS
+# systemd unit for grok-delegate HTTP JSON-RPC on a Linux VPS
 # Copy to /etc/systemd/system/grok-delegate.service and replace placeholders.
+# Linux only. This file does nothing on Windows.
 # Unofficial community project — not an official xAI/Grok product.
+#
+# This unit starts grok_delegate.server --transport http (private Bearer
+# JSON-RPC). It is not FastMCP and not MCP Streamable HTTP.
 #
 # Security:
 #   - Auth to models = local Grok CLI session for User= below
-#   - HTTP bearer via EnvironmentFile token path only (NOT OAuth)
-#   - Bind loopback; terminate TLS in a reverse proxy
+#   - HTTP bearer via TOKEN_FILE only (NOT OAuth, NOT Environment= raw token;
+#     `systemctl show` prints Environment= values)
+#   - Bind loopback; terminate TLS in a reverse proxy (examples/vps.Caddyfile)
+# Logs: journalctl -u grok-delegate -f
+# Rotation: systemd-journald (SystemMaxUse=), not logrotate.
 
 [Unit]
-Description=grok-delegate MCP (HTTP bearer)
-After=network.target
+Description=grok-delegate MCP (HTTP bearer JSON-RPC)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -17,22 +25,23 @@ User=<SERVICE_USER>
 Group=<SERVICE_GROUP>
 WorkingDirectory=<REPO_PATH>
 
-# Non-secret policy + paths (edit EnvironmentFile outside git for tokens)
 Environment=GROK_DELEGATE_ALLOWED_ROOTS=<PROJECT_ROOT>
-Environment=GROK_DELEGATE_LANES_PARENT=<LANES_PARENT>
-Environment=GROK_DELEGATE_JOBS_DIR=<JOBS_DIR>
+# Optional. Default lanes path is <PROJECT_ROOT>/.grok/lanes
+# Environment=GROK_DELEGATE_LANES_PARENT=<LANES_PARENT>
+# Environment=GROK_DELEGATE_JOBS_DIR=<JOBS_DIR>
 Environment=GROK_DELEGATE_ECONOMY=1
 Environment=GROK_DELEGATE_HTTP_HOST=127.0.0.1
 Environment=GROK_DELEGATE_HTTP_PORT=8765
-# Prefer TOKEN_FILE — set path in a root-owned env file:
-Environment=GROK_DELEGATE_HTTP_TOKEN_FILE=<TOKEN_FILE>
+Environment=GROK_DELEGATE_HTTP_TOKEN_FILE=/etc/grok-delegate/token
 # EnvironmentFile=-/etc/grok-delegate/http.env
 
 ExecStart=<REPO_PATH>/.venv/bin/python -m grok_delegate.server --transport http --host 127.0.0.1 --port 8765
 Restart=on-failure
 RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=grok-delegate
 
-# Hardening suggestions (adjust for your distro)
 NoNewPrivileges=true
 PrivateTmp=true
 

@@ -1,0 +1,11 @@
+# Linux VPS only. Replace mcp.example.invalid with a hostname you control.
+# grok-delegate speaks plaintext HTTP on 127.0.0.1:8765; this is the public TLS socket.
+# This file was not executed on the machine that added it (Windows, no Caddy).
+#
+#   caddy run --config examples/vps.Caddyfile
+#
+# Unofficial community project — not an official xAI/Grok product.
+
+mcp.example.invalid {
+	reverse_proxy 127.0.0.1:8765
+}

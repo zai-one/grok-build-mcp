@@ -120,3 +120,6 @@ def test_http_health_and_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     finally:
         server.shutdown()
         server.server_close()
+        from grok_delegate.contracts import reset_secret_needles_for_tests
+
+        reset_secret_needles_for_tests()

@@ -1,0 +1,38 @@
+=== GET /healthz ===
+{"ok": true, "service": "grok-delegate", "transport": "http", "mcp_binding": "private-jsonrpc"}
+HTTP_CODE:200
+=== GET /mcp (headers+body) ===
+HTTP/1.0 405 Method Not Allowed
+Server: BaseHTTP/0.6 Python/3.14.5
+Date: Tue, 18 Aug 2026 12:39:12 GMT
+Content-Type: application/json; charset=utf-8
+Content-Length: 31
+Cache-Control: no-store
+Allow: POST
+
+{"error": "method_not_allowed"}
+=== GET /readyz (no token) ===
+HTTP/1.0 401 Unauthorized
+Server: BaseHTTP/0.6 Python/3.14.5
+Date: Tue, 18 Aug 2026 12:39:12 GMT
+Content-Type: application/json; charset=utf-8
+Content-Length: 25
+Cache-Control: no-store
+WWW-Authenticate: Bearer
+
+{"error": "unauthorized"}
+=== POST / (should 404) ===
+HTTP/1.0 404 Not Found
+Server: BaseHTTP/0.6 Python/3.14.5
+Date: Tue, 18 Aug 2026 12:39:12 GMT
+Content-Type: application/json; charset=utf-8
+Content-Length: 22
+Cache-Control: no-store
+
+{"error": "not_found"}
+=== stderr (token redacted) ===
+grok-delegate HTTP is private Bearer JSON-RPC, not MCP Streamable HTTP. One process per client. Prefer stdio.
+127.0.0.1 - GET /healthz
+127.0.0.1 - GET /mcp
+127.0.0.1 - GET /readyz
+127.0.0.1 - POST /

@@ -16,7 +16,7 @@ Skill **`grok-mcp` v1.1** enforces this. Execute cards are a full `task`; poll i
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![MCP](https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-purple.svg)](https://modelcontextprotocol.io/)
+[![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
 [![Version](https://img.shields.io/badge/version-0.12.0-informational.svg)](pyproject.toml)
 
 **Claude / Cursor orchestrate → Grok CLI codes** (worktrees, receipts, token economy).

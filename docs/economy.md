@@ -85,8 +85,9 @@ No arguments.
 ## VPS angle
 
 Run Grok CLI + this MCP on a VPS (auth on the VPS). Connect Claude/Cursor via
-stdio tunnel or **bearer HTTP behind TLS**. Host-side tokens buy orchestration;
-Grok does the long loop. See [install/vps.md](install/vps.md).
+stdio over SSH, or **bearer HTTP JSON-RPC behind TLS** (not Streamable HTTP).
+Host-side tokens buy orchestration; Grok does the long loop. See
+[install/vps.md](install/vps.md).
 
 ## Related
 

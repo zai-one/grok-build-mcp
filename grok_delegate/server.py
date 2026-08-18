@@ -149,7 +149,31 @@ except ImportError:  # flat import when package dir is on sys.path
 
 SERVER_NAME = "grok-delegate"
 SERVER_VERSION = _guard_server_version
-PROTOCOL_VERSION = "2024-11-05"
+# Handshake-era revisions this tools-only stdio server actually speaks.
+# 2025-06-18 is the honest latest: we already emit structuredContent, and
+# the 2026-08-18 transport report named this (or 2025-03-26) as the
+# revision to advertise instead of silently staying on the first public
+# snapshot. 2026-07-28 dropped initialize; we do not speak that era.
+SUPPORTED_PROTOCOL_VERSIONS = frozenset(
+    {
+        "2024-11-05",
+        "2025-03-26",
+        "2025-06-18",
+    }
+)
+PROTOCOL_VERSION = "2025-06-18"
+
+
+def negotiate_protocol_version(requested: object) -> str:
+    """Echo a supported handshake version; otherwise return our latest.
+
+    Spec (2025-11-25 Lifecycle, same rule since 2024-11-05): if the server
+    supports the requested version it MUST return that version; otherwise it
+    MUST return another version it supports, SHOULD the latest.
+    """
+    if isinstance(requested, str) and requested in SUPPORTED_PROTOCOL_VERSIONS:
+        return requested
+    return PROTOCOL_VERSION
 
 TOOL_DELEGATE = "grok_delegate"
 TOOL_PLAN = "grok_delegate_plan"
@@ -1705,8 +1729,9 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
     is_notification = "id" not in message
 
     if method == "initialize":
+        requested = params.get("protocolVersion") if isinstance(params, dict) else None
         result = {
-            "protocolVersion": PROTOCOL_VERSION,
+            "protocolVersion": negotiate_protocol_version(requested),
             "capabilities": {"tools": {}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
         }
@@ -1949,9 +1974,13 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: python -m grok_delegate.server\n"
             "       python -m grok_delegate.server --transport http --host 127.0.0.1 --port 8765\n"
             "       python -m grok_delegate --self-test\n"
+            "Default transport is stdio (the product). --transport http is\n"
+            "private Bearer JSON-RPC, not MCP Streamable HTTP; loopback only;\n"
+            "one process per client.\n"
             "Env: GROK_DELEGATE_ALLOWED_ROOTS, GROK_DELEGATE_REPO_ROOT,\n"
             "     GROK_DELEGATE_BIN, GROK_DELEGATE_LANES_PARENT, GROK_DELEGATE_SANDBOX,\n"
-            "     GROK_DELEGATE_ECONOMY=1, GROK_DELEGATE_HTTP_TOKEN\n"
+            "     GROK_DELEGATE_ECONOMY=1, GROK_DELEGATE_HTTP_TOKEN,\n"
+            "     GROK_DELEGATE_HTTP_TOKEN_FILE, GROK_DELEGATE_HTTP_ALLOW_NONLOOPBACK\n"
             "NOT an official xAI/Grok product. NOT the product admin-bridge.\n"
         )
         return 0

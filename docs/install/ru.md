@@ -11,3 +11,5 @@ grok login
 ```
 
 Затем self-test и JSON из `~/.config/grok-mcp/mcp/`. Неофициальный проект (не xAI/Grok).
+
+Опционально (документы на английском): [VPS / HTTP](vps.md) · [FastMCP](fastmcp.md).

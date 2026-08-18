@@ -11,3 +11,5 @@ grok login
 ```
 
 然后 self-test，并把 `~/.config/grok-mcp/mcp/` 里的 JSON 接到 Claude/Cursor。非官方项目。
+
+可选（英文）：[VPS / HTTP](vps.md) · [FastMCP](fastmcp.md)。

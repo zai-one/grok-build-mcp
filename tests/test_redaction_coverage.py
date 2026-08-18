@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from grok_delegate.contracts import redact_text
+from grok_delegate.contracts import redact_text, register_secret_needle, reset_secret_needles_for_tests
 
 
 #: Every sample below is written as two adjacent literals. They are one string
@@ -91,3 +91,15 @@ def test_a_credential_split_across_two_captures_is_redacted_once_joined() -> Non
 def test_ordinary_output_is_left_alone(text: str) -> None:
     """A redactor that eats the diff is a redactor nobody will keep enabled."""
     assert redact_text(text) == text
+
+
+def test_a_registered_http_bearer_is_stripped_even_without_a_key_prefix() -> None:
+    """HTTP tokens are CSPRNG hex. Prefix patterns never see them."""
+    needle = "httpbearerneedle" + "Aa1" * 8
+    try:
+        register_secret_needle(needle)
+        out = redact_text(f"the worker printed {needle} while dumping env")
+        assert needle not in out
+        assert "<REDACTED>" in out
+    finally:
+        reset_secret_needles_for_tests()

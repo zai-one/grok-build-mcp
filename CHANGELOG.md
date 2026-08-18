@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### MCP handshake without pretending to be Streamable HTTP
+
+A 2026-08-18 conformance report recommended against implementing spec
+network MCP (Streamable HTTP, OAuth, dual-era `2026-07-28`) for this
+bridge. Stdio is the product. HTTP stays private Bearer JSON-RPC.
+
+- `initialize` reads `params.protocolVersion` and echoes a handshake-era
+  revision we actually speak (`2024-11-05`, `2025-03-26`, `2025-06-18`).
+  Unknown or modern-only requests get `2025-06-18`.
+- A second HTTP `initialize` is `ONE_CLIENT_PER_PROCESS`.
+
+### HTTP remote install
+
+- Non-loopback HTTP bind requires `GROK_DELEGATE_HTTP_ALLOW_NONLOOPBACK=1` and
+  prints a plaintext warning. This process still does not terminate TLS.
+- `GET /` is no longer an unauthenticated alias of `/healthz`. `GET` and
+  `DELETE` on `/mcp` return 405 with `Allow: POST`.
+- POST without `Content-Type: application/json` is 415, including a missing
+  header.
+- Access logs drop query strings. The HTTP bearer is registered with the
+  receipt redactor (CSPRNG hex has no `xai-` prefix).
+- `docs/install/vps.md` is the install path for the private JSON-RPC
+  transport, not a FastMCP workaround.
+
 ## 0.12.0 — Lanes live with the project
 
 A lane holds unmerged work someone is going to review. That is project state,

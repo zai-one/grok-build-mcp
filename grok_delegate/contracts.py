@@ -461,8 +461,34 @@ _PEM_UNTERMINATED_PRIVATE_BLOCK_PATTERN = re.compile(
 )
 
 
+_EXTRA_SECRET_NEEDLES: list[str] = []
+_MIN_SECRET_NEEDLE = 8
+
+
+def register_secret_needle(value: str) -> None:
+    """Remember an operator secret so receipts and logs cannot echo it.
+
+    HTTP bearers are CSPRNG hex, not ``xai-`` / ``sk-`` prefixes, so the
+    pattern redactor would otherwise leave them intact.
+    """
+    text = str(value).strip()
+    if len(text) < _MIN_SECRET_NEEDLE:
+        return
+    if text not in _EXTRA_SECRET_NEEDLES:
+        _EXTRA_SECRET_NEEDLES.append(text)
+
+
+def reset_secret_needles_for_tests() -> None:
+    _EXTRA_SECRET_NEEDLES.clear()
+
+
 def redact_text(value: str) -> str:
     out = str(value)
+    for needle in _EXTRA_SECRET_NEEDLES:
+        out = out.replace(needle, "<REDACTED>")
+    env_token = os.environ.get("GROK_DELEGATE_HTTP_TOKEN", "").strip()
+    if len(env_token) >= _MIN_SECRET_NEEDLE:
+        out = out.replace(env_token, "<REDACTED>")
     out = _PEM_PRIVATE_BLOCK_PATTERN.sub("<REDACTED_PEM_PRIVATE_KEY>", out)
     out = _PEM_UNTERMINATED_PRIVATE_BLOCK_PATTERN.sub("<REDACTED_PEM_PRIVATE_KEY>", out)
     out = _PEM_PRIVATE_MARKER_PATTERN.sub("<REDACTED_PEM_MARKER>", out)
@@ -552,6 +578,8 @@ __all__ = [
     "objective_hash",
     "redact_text",
     "redact_value",
+    "register_secret_needle",
+    "reset_secret_needles_for_tests",
     "validate_task_packet",
     "validate_transport",
 ]

@@ -840,6 +840,28 @@ class ServerTests(unittest.TestCase):
         )
         assert resp is not None
         self.assertEqual(resp["result"]["serverInfo"]["name"], "grok-delegate")
+        self.assertEqual(resp["result"]["protocolVersion"], server.PROTOCOL_VERSION)
+
+    def test_handle_jsonrpc_initialize_twice_on_stdio_is_the_same_client(self) -> None:
+        first = server.handle_jsonrpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05"},
+            }
+        )
+        second = server.handle_jsonrpc(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18"},
+            }
+        )
+        assert first is not None and second is not None
+        self.assertEqual(first["result"]["protocolVersion"], "2024-11-05")
+        self.assertEqual(second["result"]["protocolVersion"], "2025-06-18")
 
     def test_reserved_lane_via_tool(self) -> None:
         result = server.handle_tool_call(

@@ -99,8 +99,11 @@ def _run_self_test() -> int:
             }
         )
         assert resp is not None
-        name = resp.get("result", {}).get("serverInfo", {}).get("name")
-        return name == "grok-delegate", f"serverInfo.name={name!r}"
+        result = resp.get("result", {})
+        name = result.get("serverInfo", {}).get("name")
+        protocol = result.get("protocolVersion")
+        ok = name == "grok-delegate" and protocol == "2024-11-05"
+        return ok, f"serverInfo.name={name!r} protocolVersion={protocol!r}"
 
     check("rpc_initialize", _rpc_initialize)
 

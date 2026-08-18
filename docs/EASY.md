@@ -51,7 +51,7 @@ grok login
 
 ## Optional later (not required)
 
-- VPS / HTTP: `docs/install/vps.md`
+- VPS: `docs/install/vps.md` (stdio over SSH; HTTP is private JSON-RPC, not Streamable HTTP)
 - FastMCP proxy: `docs/install/fastmcp.md`
 - Token economy tips: `docs/economy.md`
 
