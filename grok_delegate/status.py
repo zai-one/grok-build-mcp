@@ -26,7 +26,12 @@ try:
         trust_host_roots_enabled,
         validate_grok_bin,
     )
-    from .runner import SubprocessRunner, WhichFn, run_readonly_cli
+    from .runner import (
+        SubprocessRunner,
+        WhichFn,
+        in_project_lanes_parent,
+        run_readonly_cli,
+    )
 except ImportError:  # flat import
     from guard import (  # type: ignore
         DEFAULT_EXECUTE_SANDBOX,
@@ -41,7 +46,12 @@ except ImportError:  # flat import
         trust_host_roots_enabled,
         validate_grok_bin,
     )
-    from runner import SubprocessRunner, WhichFn, run_readonly_cli  # type: ignore
+    from runner import (  # type: ignore
+        SubprocessRunner,
+        WhichFn,
+        in_project_lanes_parent,
+        run_readonly_cli,
+    )
 
 # Bounded timeouts for status CLI probes (seconds).
 STATUS_TIMEOUT_SECONDS = 20.0
@@ -418,7 +428,9 @@ def build_status_report(
             lanes_map[str(k)] = str(v)
     else:
         for r in roots:
-            lanes_map[r] = str(Path(r).resolve().parent / "pcp-lanes")
+            # The same resolver execute uses. Computing a second answer here is
+            # how status came to report a directory no job would ever write to.
+            lanes_map[r] = str(in_project_lanes_parent(Path(r)))
 
     env_sandbox = os.environ.get("GROK_SANDBOX") or os.environ.get("GROK_DELEGATE_SANDBOX")
     compatibility = compatibility_report(detected_cli_version=version_info.get("version"))

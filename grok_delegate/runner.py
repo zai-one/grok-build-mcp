@@ -412,10 +412,16 @@ def _reject_always_approve(args: Sequence[str]) -> None:
 
 
 def resolve_lanes_parent(repo_root: Path, lanes_parent: Path | None = None) -> Path:
-    """Default: sibling ``pcp-lanes`` directory next to the main repo."""
+    """Where this repo's lanes live: explicit, else `<project>/.grok/lanes`.
+
+    The old default put them in a sibling `pcp-lanes` -- a name inherited from
+    another project, in a directory the operator never asked to have filled.
+    Three call sites computed three different defaults, so `grok_agent_status`
+    reported a path `execute` would never use.
+    """
     if lanes_parent is not None:
         return Path(lanes_parent).resolve()
-    return (Path(repo_root).resolve().parent / "pcp-lanes")
+    return in_project_lanes_parent(repo_root)
 
 
 def worktree_path_for_lane(lanes_parent: Path, lane: str) -> Path:
@@ -433,6 +439,35 @@ def is_path_inside(child: Path, parent: Path) -> bool:
         return True
     except (ValueError, OSError):
         return False
+
+
+#: Where a lane may live inside the project it belongs to. The leading dot is
+#: the whole reason this is safe rather than a mess: pytest skips `.*` by
+#: default, ripgrep and most indexers skip hidden directories, and one
+#: `.gitignore` line hides it from git. A worktree dropped into the source tree
+#: proper would be walked by all three, so that stays refused.
+LANE_HOME_DIRNAME = ".grok"
+LANE_SUBDIRNAME = "lanes"
+
+
+def in_project_lanes_parent(repo_root: Path) -> Path:
+    """`<project>/.grok/lanes` -- lanes live with the work they belong to."""
+    return Path(repo_root).resolve() / LANE_HOME_DIRNAME / LANE_SUBDIRNAME
+
+
+def is_hidden_inside(child: Path, parent: Path) -> bool:
+    """Inside *parent*, and reached only through dot-directories.
+
+    This is the exception the inside-repo guard allows. `<repo>/.grok/lanes/x`
+    passes; `<repo>/lanes/x` and `<repo>/src/.grok/x` do not -- the second
+    because its first segment is an ordinary directory that tools do walk.
+    """
+    try:
+        relative = Path(child).resolve().relative_to(Path(parent).resolve())
+    except (ValueError, OSError):
+        return False
+    parts = relative.parts
+    return bool(parts) and parts[0].startswith(".")
 
 
 def _git_timeout_error(
@@ -586,6 +621,45 @@ def _after_checkout_timeout(
     )
 
 
+def ensure_lane_dir_ignored(
+    repo_root: Path,
+    *,
+    git_runner: GitRunner | None = None,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Make sure the lane directory is ignored by the project it lives in.
+
+    A lane inside the project is only tidy while git cannot see it. Without this
+    the operator's own `git status` fills with a checkout they did not make.
+
+    Asks git rather than parsing the file: the rule may already be in
+    `.gitignore`, in `.git/info/exclude`, or in a parent's file. One line is
+    appended only when git says the path is genuinely not ignored, so calling it
+    on every run is safe.
+    """
+    git = git_runner or default_git_runner
+    root = Path(repo_root).resolve()
+    probe = LANE_HOME_DIRNAME + "/"
+    try:
+        checked = git(["-C", str(root), "check-ignore", "-q", probe], None, timeout)
+    except Exception:  # noqa: BLE001 - never fail a job over housekeeping
+        return {"ok": False, "ignored": False, "written": False, "reason": "CHECK_FAILED"}
+    if checked.get("returncode") == 0:
+        return {"ok": True, "ignored": True, "written": False, "reason": "ALREADY_IGNORED"}
+
+    target = root / ".gitignore"
+    block = "\n# grok-mcp worktrees for delegated jobs\n" + probe + "\n"
+    try:
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        if any(line.strip() == probe for line in existing.splitlines()):
+            return {"ok": True, "ignored": True, "written": False, "reason": "ALREADY_LISTED"}
+        separator = "" if (not existing or existing.endswith("\n")) else "\n"
+        target.write_text(existing + separator + block, encoding="utf-8")
+    except OSError:
+        return {"ok": False, "ignored": False, "written": False, "reason": "WRITE_FAILED"}
+    return {"ok": True, "ignored": True, "written": True, "reason": "APPENDED"}
+
+
 def prepare_worktree(
     *,
     repo_root: Path,
@@ -617,11 +691,12 @@ def prepare_worktree(
     parent = resolve_lanes_parent(root, lanes_parent)
     target = worktree_path_for_lane(parent, normalized)
 
-    if is_path_inside(target, root):
+    if is_path_inside(target, root) and not is_hidden_inside(target, root):
         return structured_error(
             "WORKTREE_INSIDE_REPO",
-            "target worktree path resolves inside the main repo working tree; "
-            "use an external pcp-lanes path",
+            "target worktree path resolves into the visible source tree; lanes may "
+            f"live inside the project only under a dot-directory such as "
+            f"{LANE_HOME_DIRNAME}/{LANE_SUBDIRNAME}",
             target=str(target),
             repo_root=str(root),
         )

@@ -57,7 +57,12 @@ try:
         validate_sandbox_profile,
         validate_session_id,
     )
-    from .runner import delegate, is_path_inside  # type: ignore[no-redef]
+    from .runner import (  # type: ignore[no-redef]
+        delegate,
+        in_project_lanes_parent,
+        is_hidden_inside,
+        is_path_inside,
+    )
     from .driver import is_empty_result  # type: ignore[no-redef]
     from . import jobs  # type: ignore[no-redef]
     from .status import (  # type: ignore[no-redef]
@@ -109,7 +114,12 @@ except ImportError:  # flat import when package dir is on sys.path
         validate_sandbox_profile,
         validate_session_id,
     )
-    from runner import delegate, is_path_inside  # noqa: E402
+    from runner import (  # type: ignore  # noqa: E402
+        delegate,
+        in_project_lanes_parent,
+        is_hidden_inside,
+        is_path_inside,
+    )
     from driver import is_empty_result  # noqa: E402
     import jobs  # noqa: E402
     from status import (  # noqa: E402
@@ -536,8 +546,8 @@ def load_allowed_roots(
 
 
 def default_lanes_parent_for_root(repo_root: Path) -> Path:
-    """Sibling ``pcp-lanes`` next to the repo root."""
-    return Path(repo_root).resolve().parent / "pcp-lanes"
+    """`<project>/.grok/lanes` -- one answer, shared with execute and status."""
+    return in_project_lanes_parent(repo_root)
 
 
 def resolve_trusted_repo_root(
@@ -621,10 +631,11 @@ def resolve_trusted_lanes_parent(
     else:
         candidate = Path(str(client)).expanduser().resolve()
 
-    if is_path_inside(candidate, repo_root):
+    if is_path_inside(candidate, repo_root) and not is_hidden_inside(candidate, repo_root):
         raise GuardError(
             "LANES_PARENT_INSIDE_REPO",
-            "lanes_parent must not resolve inside the main repo working tree",
+            "lanes_parent must not resolve into the visible source tree; inside the "
+            "project it is allowed only under a dot-directory",
         )
     return candidate
 

@@ -8,3 +8,6 @@ venv/
 # Stray run artifacts from other tools sharing this checkout
 outputs/
 *.log
+
+# grok-mcp worktrees for delegated jobs
+.grok/

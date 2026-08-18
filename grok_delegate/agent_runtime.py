@@ -26,7 +26,17 @@ from .acp import (
 )
 from .contracts import build_prompt, finalize_receipt, redact_text, validate_task_packet, validate_transport
 from .guard import GuardError, normalize_lane, structured_error, validate_grok_bin
-from .runner import GitRunner, collect_diff, commit_lane_work, delegate, prepare_worktree
+from .runner import (
+    GitRunner,
+    collect_diff,
+    commit_lane_work,
+    delegate,
+    ensure_lane_dir_ignored,
+    in_project_lanes_parent,
+    is_hidden_inside,
+    is_path_inside,
+    prepare_worktree,
+)
 
 _CONCURRENCY = max(1, min(int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "1") or "1"), 2))
 _MAX_QUEUED = max(1, min(int(os.environ.get("GROK_DELEGATE_MAX_QUEUED", "8") or "8"), 32))
@@ -319,6 +329,10 @@ def run_task(
                 cancel_event,
             )
 
+        # The lane lives under the project's dot-directory, so git has to be
+        # told to ignore it before the checkout appears -- otherwise the
+        # operator's own status fills with a worktree they did not make.
+        ensure_lane_dir_ignored(root, git_runner=git_runner, timeout=30.0)
         prep = prepare_worktree(
             repo_root=root,
             lane=lane,
@@ -911,13 +925,25 @@ def _fallback_diffstat(paths: Sequence[str]) -> str:
 
 
 def _default_lanes_parent(root: Path) -> Path:
+    """Where this job's worktree goes: the operator's pin, else `<root>/.grok/lanes`.
+
+    Inside the project on purpose. A lane holds unmerged work someone is going
+    to review, which belongs with the project rather than in a sibling directory
+    the operator never asked to have created. The leading dot is what makes it
+    safe: pytest skips `.*`, ripgrep and indexers skip hidden, and one
+    `.gitignore` line hides it from git. A lane in the visible source tree is
+    still refused, because all three would walk it.
+    """
     configured = (os.environ.get("GROK_DELEGATE_LANES_PARENT") or "").strip()
-    candidate = Path(configured).expanduser().resolve() if configured else root.parent / f"{root.name}-grok-lanes"
-    try:
-        candidate.relative_to(root)
-    except ValueError:
+    if not configured:
+        return in_project_lanes_parent(root)
+    candidate = Path(configured).expanduser().resolve()
+    if not is_path_inside(candidate, root) or is_hidden_inside(candidate, root):
         return candidate
-    raise GuardError("LANES_PARENT_INSIDE_REPO", "lanes parent must be outside project_root")
+    raise GuardError(
+        "LANES_PARENT_INSIDE_REPO",
+        "lanes parent must be outside project_root, or under a dot-directory inside it",
+    )
 
 
 def _lane_name(value: str | None, task: Mapping[str, Any]) -> str:

@@ -1142,11 +1142,38 @@ class MultiRootAllowlistTests(unittest.TestCase):
         )
         self.assertTrue(guard.paths_equal(got, self.root_a))
 
-    def test_lanes_parent_defaults_to_sibling_pcp_lanes(self) -> None:
+    def test_lanes_parent_defaults_into_the_projects_dot_directory(self) -> None:
+        """Lanes hold unmerged work someone will review, so they live with it.
+
+        The old default was a sibling `pcp-lanes` -- a name inherited from
+        another project, in a directory the operator never asked to have filled,
+        and one of three different answers the code gave to the same question.
+        """
         parent = server.resolve_trusted_lanes_parent({}, repo_root=self.root_a)
         assert parent is not None
-        self.assertEqual(parent.name, "pcp-lanes")
-        self.assertFalse(runner.is_path_inside(parent, self.root_a))
+        self.assertEqual(parent.name, runner.LANE_SUBDIRNAME)
+        self.assertEqual(parent.parent.name, runner.LANE_HOME_DIRNAME)
+        self.assertTrue(runner.is_path_inside(parent, self.root_a))
+        self.assertTrue(runner.is_hidden_inside(parent, self.root_a))
+
+    def test_every_path_that_answers_where_lanes_go_agrees(self) -> None:
+        """Three call sites used to compute three different defaults, so
+        `grok_agent_status` reported a directory `execute` would never use."""
+        from grok_delegate import agent_runtime
+
+        server_answer = server.resolve_trusted_lanes_parent({}, repo_root=self.root_a)
+        runner_answer = runner.resolve_lanes_parent(self.root_a)
+        execute_answer = agent_runtime._default_lanes_parent(self.root_a.resolve())
+        self.assertTrue(guard.paths_equal(server_answer, runner_answer))
+        self.assertTrue(guard.paths_equal(server_answer, execute_answer))
+
+    def test_a_lane_in_the_visible_source_tree_is_still_refused(self) -> None:
+        """The dot is what makes this safe; without it, tools walk the lane."""
+        with self.assertRaises(guard.GuardError) as refused:
+            server.resolve_trusted_lanes_parent(
+                {"lanes_parent": str(self.root_a / "lanes")}, repo_root=self.root_a
+            )
+        self.assertEqual(refused.exception.code, "LANES_PARENT_INSIDE_REPO")
 
     def test_parse_allowed_roots_semicolon_and_json(self) -> None:
         parts = guard.parse_allowed_roots_env(f"{self.root_a};{self.root_b}")

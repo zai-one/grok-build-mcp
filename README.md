@@ -17,7 +17,7 @@ Skill **`grok-mcp` v1.1** enforces this. Execute cards are a full `task`; poll i
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio%20%7C%20HTTP-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.11.0-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.12.0-informational.svg)](pyproject.toml)
 
 **Claude / Cursor orchestrate → Grok CLI codes** (worktrees, receipts, token economy).
 
@@ -80,11 +80,15 @@ export GROK_DELEGATE_ALLOWED_ROOTS=/path/to/project   # ';' separates several
 export GROK_DELEGATE_LANES_PARENT=/path/to/.grok-mcp-lanes
 ```
 
-Set `GROK_DELEGATE_LANES_PARENT` rather than relying on a default: unset, a typed
-execute puts lanes in `<repo-parent>/<repo>-grok-lanes` while `grok_agent_status`
-reports a sibling `pcp-lanes`, so looking for the work by the name the installer
-writes (`.grok-mcp-lanes`) finds nothing. The receipt's `worktree_path` is always
-the honest answer.
+Unset, lanes go to **`<project>/.grok/lanes/<slug>`** — inside the project they
+belong to, under a dot-directory the bridge adds to `.gitignore` on first use.
+A lane holds unmerged work someone will review, so it lives with the work rather
+than in a sibling directory nobody asked for. The dot is what keeps it out of the
+way: pytest skips `.*`, ripgrep and indexers skip hidden, git is told once.
+
+`GROK_DELEGATE_LANES_PARENT` still overrides it, and a path in the *visible*
+source tree is still refused — tools walk that. The receipt's `worktree_path` is
+always the honest answer.
 
 Set them where the host will inherit them, then restart it. `grok_agent_status`
 reports what was actually granted under `roots.allowed`. A child of an

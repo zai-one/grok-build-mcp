@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.12.0 — Lanes live with the project
+
+A lane holds unmerged work someone is going to review. That is project state,
+not a cache, so it now lives inside the project it belongs to:
+
+    <project>/.grok/lanes/<slug>
+
+The leading dot is what makes this safe rather than a mess, and each claim was
+checked rather than assumed: pytest's default `norecursedirs` skips `.*`, so the
+project's own suite does not collect the tests inside every lane; ripgrep and
+most indexers skip hidden directories; and one `.gitignore` line hides it from
+git. The bridge appends that line itself on first use, asking `git check-ignore`
+rather than parsing the file, so a rule already present anywhere counts.
+
+**Breaking:** the default moved. `GROK_DELEGATE_LANES_PARENT` still overrides it
+and existing lanes are untouched, but a host relying on the old default will find
+new lanes somewhere else.
+
+### One question, one answer
+
+Three call sites computed three different defaults, so `grok_agent_status`
+reported a directory `execute` would never write to -- `<parent>/pcp-lanes`,
+a name inherited from an unrelated project, while typed execute used
+`<parent>/<repo>-grok-lanes` and the installer wrote a third. They now share one
+resolver, and a test asserts they agree.
+
+### The inside-repo guard became a rule instead of a refusal
+
+`WORKTREE_INSIDE_REPO` and `LANES_PARENT_INSIDE_REPO` refused any path inside the
+project. They now refuse any path inside the *visible* source tree: reachable
+only through a leading dot-directory is allowed, everything else -- including
+`src/.grok/x`, whose first segment is an ordinary directory -- still fails closed.
+
 ## 0.11.0 — What the audits found
 
 Six independent read-only audits ran in parallel over the 0.10.0 tree: security,
