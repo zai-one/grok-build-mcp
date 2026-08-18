@@ -29,8 +29,12 @@ speak this dialect. For those hosts use stdio on the VPS over SSH, not this
 URL. FastMCP is **not** the server install path; see [fastmcp.md](fastmcp.md).
 
 One HTTP process is one operator. The bearer identifies the process, not a
-person. A second `initialize` on the same process returns JSON-RPC error
-`ONE_CLIENT_PER_PROCESS`. Remote tools spend the **VPS user’s** `grok login`.
+person. An `initialize` from a **different** client (a different
+`clientInfo.name`) returns JSON-RPC error `ONE_CLIENT_PER_PROCESS`; the same
+client reconnecting after a dropped connection does not, so a network blip
+costs no restart. Treat this as a warning, not a boundary: `tools/call` never
+required `initialize`, and the bearer is the only authentication. Remote tools
+spend the **VPS user’s** `grok login`.
 
 ## Linux VPS path
 
@@ -289,7 +293,7 @@ py -3 -m grok_delegate.server --transport http --host 127.0.0.1 --port 8765
 | logrotate | Logs go to journald; unit does not ship a logrotate file. |
 
 What **was** run on this Windows machine: `py -3 -m pytest tests -q` —
-**753 passed, 1 skipped, 79 subtests**, exit 0. HTTP auth, `/healthz` body,
+**755 passed, 1 skipped, 79 subtests**, exit 0. HTTP auth, `/healthz` body,
 401/405/415, token-not-in-logs, redaction of the bearer, and
 refuse-without-token are in that suite. A loopback
 `python -m grok_delegate.server --transport http` smoke is in

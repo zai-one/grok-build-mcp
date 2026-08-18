@@ -32,8 +32,10 @@ are not treated as isolation proof.
   live success. The v2 record marks it `orphaned` and whether its worktree makes
   it recoverable; serialized records are compacted below the reload cap.
 - HTTP `--transport http`, if started, is private Bearer JSON-RPC: token
-  required including loopback, loopback bind by default, one `initialize` per
-  process. It is not MCP Streamable HTTP. Spec tool-bans from the 2026-08-18
+  required including loopback, loopback bind by default, one client per
+  process (a differently-named `clientInfo` is refused; the same client
+  reconnecting is not — the check is a warning, not authentication, because
+  `tools/call` never required `initialize`). It is not MCP Streamable HTTP. Spec tool-bans from the 2026-08-18
   network threat model stay documentation-level unless that listener is on;
   turning it on still exposes the same tools as stdio to the bearer holder.
 

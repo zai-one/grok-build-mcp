@@ -11,8 +11,9 @@ every other process on the machine and with the browser, and the tools behind
 this endpoint create worktrees and run commands. ``/healthz`` is the only
 unauthenticated route, and it answers nothing. Bind is loopback-only unless
 ``GROK_DELEGATE_HTTP_ALLOW_NONLOOPBACK=1`` (plaintext on a public interface is
-a last-resort operator choice, not the default). One MCP ``initialize`` per
-process — start another process for another client.
+a last-resort operator choice, not the default). One client per process — a
+*different* client's ``initialize`` is refused; the same client reconnecting
+is not.
 Never place Grok OAuth tokens in the HTTP bearer field.
 """
 
@@ -36,9 +37,28 @@ MAX_BODY = 2_000_000
 MCP_BINDING = "private-jsonrpc"
 ONE_CLIENT_REASON = "ONE_CLIENT_PER_PROCESS"
 ONE_CLIENT_MESSAGE = (
-    "ONE_CLIENT_PER_PROCESS: this grok-delegate process already completed "
-    "MCP initialize. One process per client; start another process."
+    "ONE_CLIENT_PER_PROCESS: this grok-delegate process is already initialized "
+    "by a different client. One process per client; start another process."
 )
+
+
+def _client_identity(params: Any) -> str:
+    """What the client called itself in ``initialize``.
+
+    This is not authentication -- the bearer is, and ``tools/call`` never
+    required ``initialize`` at all. It only separates a host reconnecting
+    after a dropped connection from a genuinely second host, so a network
+    blip does not cost a service restart. Two hosts that describe themselves
+    identically are indistinguishable here, and both are admitted.
+
+    The version is deliberately ignored: two copies of one host may well run
+    different versions, so matching on it would not catch that case anyway,
+    while an ordinary host upgrade would start reading as a second client.
+    """
+    info = params.get("clientInfo") if isinstance(params, dict) else None
+    if not isinstance(info, dict):
+        return ""
+    return str(info.get("name") or "").strip()
 
 
 def _configured_token(explicit: Optional[str] = None) -> Optional[str]:
@@ -82,7 +102,7 @@ class DelegateHTTPServer(ThreadingHTTPServer):
             max(1, min(int(os.environ.get("GROK_DELEGATE_HTTP_MAX_INFLIGHT", "16") or "16"), 256))
         )
         self.initialize_lock = threading.Lock()
-        self.initialize_claimed = False
+        self.initialize_claimed_by: Optional[str] = None
         super().__init__(server_address, DelegateHTTPRequestHandler)
 
 
@@ -221,8 +241,10 @@ class DelegateHTTPRequestHandler(BaseHTTPRequestHandler):
     def _dispatch_jsonrpc(self, message: dict[str, Any]) -> dict[str, Any] | None:
         if message.get("method") != "initialize":
             return handle_jsonrpc(message)
+        identity = _client_identity(message.get("params"))
         with self.server.initialize_lock:
-            if self.server.initialize_claimed:
+            claimed = self.server.initialize_claimed_by
+            if claimed is not None and claimed != identity:
                 return {
                     "jsonrpc": "2.0",
                     "id": message.get("id"),
@@ -233,7 +255,7 @@ class DelegateHTTPRequestHandler(BaseHTTPRequestHandler):
                     },
                 }
             response = handle_jsonrpc(message)
-            self.server.initialize_claimed = True
+            self.server.initialize_claimed_by = identity
             return response
 
 

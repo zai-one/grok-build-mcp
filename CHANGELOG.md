@@ -1,17 +1,40 @@
 # Changelog
 
-## Unreleased
+## 0.13.0 — Say what the transport is
 
-### MCP handshake without pretending to be Streamable HTTP
+Three read-only research passes asked what it would take to be a network MCP
+server. The answer that survived was: don't be one. Stdio is the product and
+is a normative transport; the 199-line HTTP listener is a private Bearer
+JSON-RPC binding an operator opts into, and calling it "Streamable-ish" was
+the closest thing to a spec claim it ever had. So this release stops implying
+otherwise, and fixes the one thing that was genuinely wrong on the wire — the
+handshake.
 
-A 2026-08-18 conformance report recommended against implementing spec
-network MCP (Streamable HTTP, OAuth, dual-era `2026-07-28`) for this
-bridge. Stdio is the product. HTTP stays private Bearer JSON-RPC.
+Reports: `Service/Research/2026-08-18-mcp-transport-conformance.md`,
+`-network-threat-model.md`, `-multi-client.md`.
+
+### The handshake stopped answering with the first revision ever published
 
 - `initialize` reads `params.protocolVersion` and echoes a handshake-era
   revision we actually speak (`2024-11-05`, `2025-03-26`, `2025-06-18`).
-  Unknown or modern-only requests get `2025-06-18`.
-- A second HTTP `initialize` is `ONE_CLIENT_PER_PROCESS`.
+  Unknown or modern-only requests get `2025-06-18`. Previously every client
+  was told `2024-11-05` no matter what it asked for, which is what the spec
+  says to do only when nothing else matches.
+- `2026-07-28` is not claimed. That era drops `initialize` for
+  `server/discover`, and we do not speak it.
+
+**Breaking:** a host that pins `2024-11-05` still gets `2024-11-05`; a host
+that requires exactly `2025-11-25` now sees `2025-06-18` and may disconnect
+rather than fall back.
+
+### One client per process, but a reconnect is not a second client
+
+An `initialize` from a different `clientInfo.name` is refused with
+`ONE_CLIENT_PER_PROCESS`. The same client reconnecting is not — the claim used
+to be permanent, so a dropped connection cost a service restart. Nothing was
+protected by that: `tools/call` never required `initialize`, so the refusal
+only ever stopped the well-behaved client. The check is a warning that two
+hosts are sharing one job registry, not authentication; the bearer is that.
 
 ### HTTP remote install
 

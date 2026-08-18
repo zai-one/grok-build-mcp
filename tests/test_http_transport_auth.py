@@ -265,20 +265,44 @@ def test_http_initialize_echoes_an_older_handshake_version(server: str) -> None:
     assert body["result"]["protocolVersion"] == "2024-11-05"
 
 
-def test_second_http_initialize_is_refused_as_one_process_per_client(server: str) -> None:
-    payload = {
+def _initialize(name: str, version: str = "0") -> dict:
+    return {
         "jsonrpc": "2.0",
         "method": "initialize",
         "params": {
             "protocolVersion": "2025-06-18",
             "capabilities": {},
-            "clientInfo": {"name": "pytest", "version": "0"},
+            "clientInfo": {"name": name, "version": version},
         },
     }
-    first_status, first = _post(server, {**payload, "id": 1}, token=TOKEN)
-    second_status, second = _post(server, {**payload, "id": 2}, token=TOKEN)
+
+
+def test_a_second_different_client_is_refused_as_one_process_per_client(server: str) -> None:
+    first_status, first = _post(server, {**_initialize("pytest"), "id": 1}, token=TOKEN)
+    second_status, second = _post(server, {**_initialize("other-host"), "id": 2}, token=TOKEN)
     assert first_status == HTTPStatus.OK
     assert first["result"]["protocolVersion"] == "2025-06-18"
     assert second_status == HTTPStatus.OK
     assert second["error"]["data"]["reason"] == "ONE_CLIENT_PER_PROCESS"
     assert "one process per client" in second["error"]["message"].lower()
+
+
+def test_the_same_client_reconnecting_is_not_a_second_client(server: str) -> None:
+    """A dropped connection must not cost a service restart.
+
+    The claim used to be permanent, so a host that reconnected -- which is
+    ordinary, not adversarial -- was locked out until the operator restarted
+    the process. Nothing was gained by that: `tools/call` never required
+    `initialize`, so the refusal only ever stopped the well-behaved client.
+    """
+    for attempt in (1, 2, 3):
+        status, body = _post(server, {**_initialize("pytest"), "id": attempt}, token=TOKEN)
+        assert status == HTTPStatus.OK
+        assert body["result"]["protocolVersion"] == "2025-06-18", f"attempt {attempt}"
+
+
+def test_an_upgraded_host_is_still_the_same_client(server: str) -> None:
+    """Version is not part of the identity; a host upgrade is not a new host."""
+    _post(server, {**_initialize("pytest", "1.0"), "id": 1}, token=TOKEN)
+    _status, body = _post(server, {**_initialize("pytest", "2.0"), "id": 2}, token=TOKEN)
+    assert body["result"]["protocolVersion"] == "2025-06-18"
