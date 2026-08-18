@@ -6,6 +6,7 @@
 | Проект | Grok CLI (`zai-one/grok-mcp`) |
 | Агент | Cursor Grok 4.6 (subagent) |
 | Baseline SHA | `faab02ec430dd8f9c127741132be986b278a9232` |
+| Итоговый SHA | `7b08073428a9f308ca25abc68ae724ce5659532b` |
 | Ветка | `grok/mcp-protocol-tidy` |
 | Дата | 2026-08-18 |
 | **Вердикт** | **GREEN С ОГОВОРКАМИ** — сетевой spec-транспорт **не** реализован по рекомендации R1; stdio handshake и честные имена сделаны |
