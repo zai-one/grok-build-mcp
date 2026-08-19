@@ -28,7 +28,36 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
-## Unreleased
+## 0.16.0 — A read destroyed what it read
+
+A skeptic run through this bridge, against this repository, reviewing the code
+released here hours earlier. It ran the pytest it was handed -- the first time
+that has been possible -- and found something the 844 tests could not.
+
+### `grok_agent_poll` truncated the receipt it was reading
+
+`_bounded_poll` copied the record with `dict()`, which is shallow, and the
+`result` it then wrote into was the object still held in the job registry. So
+bounding the events on the way out **shortened the durable receipt**. Poll once
+with `limit: 1` and the tail was gone for good; poll again with `limit: 64` and
+`events_total` counted the already-shortened list and reported 1 of 1. The
+top-level list survived, which made a single record carry two different answers
+to the same question.
+
+Introduced in 0.15.0, by the change that was supposed to make polling cheap.
+Nothing caught it because the tests built a record and threw it away instead of
+asking whether it had changed -- so that is now what they assert.
+
+### Read-only git the gate had no row for
+
+`_ALLOWED_COMMAND` permitted `status`, `diff`, `log`, `show` and `rev-parse`.
+It did not permit `ls-files`, and an audit job died asking for exactly that: the
+refusal ended the turn and the job produced nothing. Added `ls-files`,
+`ls-tree`, `shortlog`, `describe` and `blame` -- none of which reach further
+than `show` and `diff` already did, while the forbidden contour (push, merge,
+reset, clean, `.env`, keys, network tools) stays a separate check that still
+refuses them even when declared. `git grep` is deliberately not added: its
+useful forms need characters this gate strips anyway.
 
 ### Three guards against the class of mistake, not the three mistakes
 

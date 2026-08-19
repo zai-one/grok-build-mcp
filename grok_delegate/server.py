@@ -1902,6 +1902,13 @@ def _bounded_poll(record: dict[str, Any], limit: int) -> dict[str, Any]:
     quietly ends reads like a job that quietly stopped.
     """
     out = dict(record)
+    # `dict()` is shallow, and `jobs` hands back a record whose `result` is the
+    # very object stored in the registry. Rebinding `events` on it truncated the
+    # durable receipt as a side effect of *reading* it: poll once with limit=1
+    # and the tail was gone for good, with `events_total` afterwards counting the
+    # already-shortened list and reporting 1 of 1.
+    if isinstance(out.get("result"), dict):
+        out["result"] = dict(out["result"])
     for holder in (out, out.get("result") if isinstance(out.get("result"), dict) else None):
         if holder is None:
             continue

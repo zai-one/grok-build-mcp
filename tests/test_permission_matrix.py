@@ -116,6 +116,45 @@ def test_the_matrix_covers_every_kind_the_gate_names(cwd: Path) -> None:
     assert named <= covered, f"gate names kinds with no matrix row: {sorted(named - covered)}"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git status --porcelain",
+        "git log --oneline -20",
+        "git diff --stat",
+        "git show HEAD",
+        "git rev-parse HEAD",
+        "git ls-files",
+        "git ls-tree HEAD",
+        "git shortlog -sn",
+        "git describe --tags",
+        "git blame README.md",
+    ],
+)
+def test_a_declared_read_only_git_command_is_allowed(command: str, cwd: Path) -> None:
+    """`ls-files` is on this list because a real audit job died asking for it."""
+    assert _decide("execute", {"command": command}, profile="read-only", cwd=cwd,
+                   declared=(command,)) == "ALLOW"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push origin main",
+        "git merge grok/x",
+        "git reset --hard",
+        "git clean -xdff",
+        "git checkout main",
+        "git config user.email me@example.invalid",
+        "git show HEAD:.env",
+    ],
+)
+def test_git_that_changes_or_leaks_is_refused_even_when_declared(command: str, cwd: Path) -> None:
+    """Declaring it is not enough: the forbidden contour is a separate check."""
+    assert _decide("execute", {"command": command}, profile="workspace", cwd=cwd,
+                   declared=(command,)) == "REJECT"
+
+
 def test_an_unknown_kind_fails_closed(cwd: Path) -> None:
     """A future ACP tool kind must be refused until someone decides otherwise."""
     for kind in ("browse", "network", "sudo", "delete", "spawn"):

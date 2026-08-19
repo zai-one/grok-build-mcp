@@ -1206,7 +1206,15 @@ _ALLOWED_COMMAND = re.compile(
     r"(?:\S*[\\/])?(?:py(?:thon\d*)?(?:\.exe)?(?:\s+-\d+)?)\s+-m\s+(?:pytest|unittest)\b|"
     r"pytest\b|npm(?:\.cmd)?\s+(?:test|run\s+test)\b|pnpm\s+test\b|"
     r"cargo\s+test\b|go\s+test\b|dotnet\s+test\b|"
-    r"git\s+(?:status|diff|log|show|rev-parse)\b|"
+    # Read-only git. `ls-files` is here because a real audit job died on it:
+    # the reviewer asked for the tracked file list, the allowlist had no row for
+    # it, and the refusal ended the turn. These add no reach that `show` and
+    # `diff` did not already have, and the forbidden contour (push/merge/reset/
+    # clean, .env, keys, network tools) is a separate check that still applies.
+    # `git grep` is deliberately absent: its useful forms need characters this
+    # gate strips anyway, so allowing it would advertise something that does not
+    # work.
+    r"git\s+(?:status|diff|log|show|rev-parse|ls-files|ls-tree|shortlog|describe|blame)\b|"
     r"rg\b|Get-Content\b|Get-ChildItem\b|Test-Path\b"
     r")"
 )

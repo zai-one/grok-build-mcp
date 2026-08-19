@@ -102,6 +102,36 @@ def test_truncation_is_never_silent() -> None:
     assert out["events_omitted"] == 90, "the caller must be able to tell it is not the whole story"
 
 
+def test_reading_a_job_does_not_shorten_it() -> None:
+    """The bug the tests above could not see, because they threw the input away.
+
+    `jobs.get_job` returns a record whose `result` is the object still held in
+    the registry, and `dict()` is shallow. Rebinding `events` on it truncated the
+    durable receipt as a side effect of reading it: one poll with limit=1 and the
+    tail was gone, after which `events_total` counted the shortened list and
+    reported 1 of 1. Found by a skeptic run through the bridge, not by this file.
+    """
+    record = _record(64)
+    live_result = record["result"]
+
+    _bounded_poll(record, 1)
+
+    assert len(record["events"]) == 64, "the top-level list was rebound, not mutated"
+    assert len(live_result["events"]) == 64, "a read must not shorten what it read"
+    assert "events_total" not in live_result, "and must not annotate it either"
+
+    again = _bounded_poll(record, 64)
+    assert again["result"]["events_total"] == 64, "the second reader still sees the whole story"
+
+
+def test_two_polls_in_a_row_agree(tmp_path) -> None:
+    """Idempotence is the property; the aliasing bug broke it invisibly."""
+    record = _record(50)
+    first = _bounded_poll(record, 10)
+    second = _bounded_poll(record, 10)
+    assert first == second
+
+
 def test_a_record_without_events_is_returned_unharmed() -> None:
     assert _bounded_poll({"job_id": "job-x", "state": "running"}, 5) == {
         "job_id": "job-x",
