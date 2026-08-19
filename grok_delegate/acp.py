@@ -213,6 +213,7 @@ class StdioACPTransport:
         cap = output_cap_for(task, configured=self.output_byte_cap)
         inbound: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=32)
         reader_overflow = threading.Event()
+        written: set[str] = set()
         reader_stop = threading.Event()
         reader_budget = {"remaining": cap}
         reader_budget_lock = threading.Lock()
@@ -338,6 +339,7 @@ class StdioACPTransport:
                         message.get("params") or {}, tool_state
                     )
                     decision = permission_decision(permission_params, task, cwd)
+                    written.update(approved_write_paths(permission_params, decision, cwd))
                     send({"jsonrpc": "2.0", "id": message["id"], "result": {"outcome": decision}})
                     tool = ((message.get("params") or {}).get("toolCall") or {})
                     emit(
@@ -443,6 +445,7 @@ class StdioACPTransport:
                 "status": status,
                 "session_id": session_id,
                 "stop_reason": stop_reason,
+                "worker_written_files": sorted(written),
                 "summary": _redact_text("".join(text_chunks))[:16_000],
                 "tests": tests,
                 "events": events,
@@ -663,6 +666,7 @@ class WebSocketACPTransport:
         cancel_deadline: float | None = None
         reconnect_used = False
         timed_out = False
+        written: set[str] = set()
 
         def emit(kind: str, payload: Mapping[str, Any]) -> None:
             event = {
@@ -767,6 +771,7 @@ class WebSocketACPTransport:
                         message.get("params") or {}, tool_state
                     )
                     decision = permission_decision(permission_params, task, cwd)
+                    written.update(approved_write_paths(permission_params, decision, cwd))
                     send({"jsonrpc": "2.0", "id": message["id"], "result": {"outcome": decision}})
                     tool = ((message.get("params") or {}).get("toolCall") or {})
                     emit("permission", {"decision": decision, "tool": {
@@ -830,6 +835,7 @@ class WebSocketACPTransport:
             )
             return {
                 "status": status, "session_id": session_id, "stop_reason": stop_reason,
+                "worker_written_files": sorted(written),
                 "summary": _redact_text("".join(text_chunks))[:16_000], "tests": tests, "events": events,
                 "agent_version": agent_version, "worker_pid": worker_pid, "agent_pid": worker_pid,
                 "started_at": started, "finished_at": _utc_now(),
@@ -1332,6 +1338,43 @@ def validated_test_argv(command: str, cwd: Path) -> list[str]:
 #: Add keys here as captures reveal them -- an unknown key must keep failing
 #: closed, so the list stays a list rather than becoming a heuristic.
 _PATH_KEYS = ("file_path", "path", "target", "destination", "target_file", "notebook_path")
+
+
+def approved_write_paths(params: Mapping[str, Any], decision: Mapping[str, Any], cwd: Path) -> list[str]:
+    """Repo-relative paths this decision actually let the worker write.
+
+    The bridge approves every write the worker makes, so it knows which files
+    are the worker's. It had no way to say so, and the acceptance gate treated
+    every difference in the tree as the worker's doing -- including files put
+    there by whatever else runs in that directory. On a machine where Grok CLI
+    has other MCP servers configured, one of them creating a log relative to its
+    working directory was enough to block every execute job with
+    UNEXPECTED_CHANGED_FILES for something the worker never touched.
+    """
+    if str(decision.get("outcome")) != "selected":
+        return []
+    chosen = decision.get("optionId")
+    allow = next(
+        (o for o in (params.get("options") or []) if o.get("kind") == "allow_once"), None
+    )
+    if allow is None or chosen != allow.get("optionId"):
+        return []
+    tool = params.get("toolCall") or {}
+    if str(tool.get("kind") or "").lower() not in {"edit", "write"}:
+        return []
+    raw = tool.get("rawInput") or {}
+    out: list[str] = []
+    for key in _PATH_KEYS:
+        value = raw.get(key)
+        if not value:
+            continue
+        path = Path(str(value))
+        candidate = path if path.is_absolute() else (cwd / path)
+        try:
+            out.append(candidate.resolve().relative_to(cwd).as_posix())
+        except (ValueError, OSError):
+            continue
+    return out
 
 
 def _paths_confined(raw: Mapping[str, Any], cwd: Path) -> bool:

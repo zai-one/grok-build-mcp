@@ -296,6 +296,8 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
     out.setdefault("tests", [])
     out.setdefault("tests_skipped_reason", None)
     out.setdefault("verifier_touched_files", [])
+    out.setdefault("worker_written_files", [])
+    out.setdefault("foreign_changed_files", [])
     out.setdefault("artifacts", [])
     out.setdefault("findings", [])
     out.setdefault("summary", "")
@@ -313,11 +315,30 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
         # answers "what is in this lane", which is a different question from
         # "what did this run do" -- and it is the one that decides whether the
         # branch is safe to merge.
+        # Only what the permission gate let the worker write counts as the
+        # worker's. Everything else in the tree belongs to somebody else: a test
+        # run's __pycache__, or -- observed on a real machine -- another MCP
+        # server the CLI has configured writing a log relative to its working
+        # directory, which happens to be the lane. Blaming the worker for those
+        # blocked every execute job with UNEXPECTED_CHANGED_FILES for files it
+        # never touched, and a gate that cries wolf is a gate people switch off.
+        # An empty list means the transport reported nothing, so fall back to
+        # judging everything rather than silently accepting everything.
+        authored = {_fold_path(path) for path in out.get("worker_written_files") or []}
         unexpected_changes = [
             str(path).replace("\\", "/").rstrip("/")
             for path in out["full_changed_files"]
             if _fold_path(path) not in expected_set
+            and (not authored or _fold_path(path) in authored)
         ]
+        foreign = sorted(
+            str(path).replace("\\", "/").rstrip("/")
+            for path in out["full_changed_files"]
+            if _fold_path(path) not in expected_set and authored and _fold_path(path) not in authored
+        )
+        # Reported, never hidden: the operator still has to know the lane is not
+        # only their work before they merge it.
+        out["foreign_changed_files"] = foreign
         if not out["changed_files"]:
             status = "no_changes"
             out["blocked_reason"] = "EXECUTE_NO_CHANGES"

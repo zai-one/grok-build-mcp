@@ -28,6 +28,57 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.17.0 — Whose change is it
+
+Every `execute` and `fix` job on this machine came back `blocked`:
+
+    UNEXPECTED_CHANGED_FILES: __pycache__/app.cpython-314.pyc,
+                              outputs/ads/logs/runtime.log,
+                              tests/__pycache__/test_app...pyc
+
+The worker had touched none of them. The `.pyc` files were the byproduct of the
+test run the bridge itself had told it to make. The log belongs to a *different*
+MCP server the Grok CLI has configured, which creates it relative to its working
+directory -- and its working directory is the lane. It appeared in read-only
+runs too, where the worker wrote nothing at all.
+
+So the gate built to prevent a false success was producing a false failure, and
+a gate that cries wolf is a gate people switch off.
+
+### The bridge already knew, and never wrote it down
+
+It approves every write the worker makes. Both transports now record the paths
+those approvals covered and return them as `worker_written_files`, and the
+acceptance gate judges only those. Anything else that moved in the tree is
+reported as `foreign_changed_files` -- named, never hidden, because the operator
+still has to know the branch is not only their work before merging it.
+
+What deliberately did not change: a file the worker really did write and nobody
+asked for still blocks; `ARTIFACT_WRITTEN_BY_VERIFIER` is untouched; and an
+empty attribution list means judge everything, not accept everything, so an
+older transport reporting nothing cannot read as innocence.
+
+### `scripts/soak.py`
+
+The suite proves units; this proves the product. One real job per role against a
+scratch repository and a live Grok CLI, judged by the receipt rather than by
+anything the agent says about itself, failing on the specific ways jobs have
+actually died: a gate refusal that killed the turn, an output cap that truncated
+it, a poll that cost the host more than 16 KiB. Grok side is deliberately not
+economised. Exit code 0 only when every row passes; evidence lands in
+`Service/Audits/soak-<stamp>.json` so runs can be compared instead of recalled.
+
+It found the bug above on its first run.
+
+### The loop is written down
+
+`AGENTS.md` gains **Цикл доводки**: what "done" means as a list that can be
+falsified, and the standing instruction to keep iterating without asking. Two
+consecutive green soaks, a suite that grew with every fix, no gate-killed turns,
+no truncated output, polls under 16 KiB, a skeptic that proved something by
+running it, an executor whose work reached a lane. Budgets are asymmetric on
+purpose: the worker is unmetered, the host's context is the thing to save.
+
 ## 0.16.0 — A read destroyed what it read
 
 A skeptic run through this bridge, against this repository, reviewing the code

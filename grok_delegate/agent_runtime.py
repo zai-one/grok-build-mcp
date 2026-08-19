@@ -581,6 +581,11 @@ def run_task(
             "tests": verified_tests,
             "tests_skipped_reason": tests_skipped,
             "verifier_touched_files": verifier_touched,
+            # Paths the permission gate actually let the worker write. Anything
+            # else that moved in the tree belongs to somebody else -- another
+            # MCP server the CLI has configured, a test run's byproducts -- and
+            # the acceptance gate has no business blaming the worker for it.
+            "worker_written_files": result.get("worker_written_files") or [],
             "lane_commit": lane_commit,
             "artifacts": _present_artifacts(cwd, task),
             "summary": redact_text(str(result.get("summary") or "")),

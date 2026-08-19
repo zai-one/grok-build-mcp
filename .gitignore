@@ -14,3 +14,6 @@ outputs/
 
 # Local host config: enabled plugins are personal, not project state
 .claude/settings.json
+
+# Soak evidence is a run artifact: compared locally, not kept in history
+Service/Audits/soak-*.json
