@@ -28,6 +28,24 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## Unreleased
+
+### A capture of the protocol was also a capture of the operator's servers
+
+`evidence/live-acp/*.jsonl` is committed on purpose -- `tests/test_live_acp_fixtures.py`
+reads it -- and the Grok CLI announces the host's whole MCP inventory during a
+session. So four fixtures carried the names and endpoint URLs of whatever else
+the person who recorded them had wired up. No token, which is exactly why the
+redactor let it through: a bare URL matches no secret pattern.
+
+`scripts/capture_acp_live.py` now replaces any `mcpServers` list with its count,
+and the four committed fixtures are scrubbed. Nothing asserts on that field, so
+the evidence they exist to provide is unchanged.
+
+`.claude/settings.json` is no longer tracked, and is ignored from now on. It held
+one line naming a plugin from the author's own workspace: personal host state
+that had nothing to do with this project and no reason to be public.
+
 ## 0.14.0 — The host already knows which folder you opened
 
 Installing the bridge used to leave you with a server that started fine and then

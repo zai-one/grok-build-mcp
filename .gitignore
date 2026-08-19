@@ -11,3 +11,6 @@ outputs/
 
 # grok-mcp worktrees for delegated jobs
 .grok/
+
+# Local host config: enabled plugins are personal, not project state
+.claude/settings.json

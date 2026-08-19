@@ -121,6 +121,13 @@ def _redact(obj: Any, *, cwd: str, home: str, session_ids: dict[str, str]) -> An
             low = str(key).lower()
             if any(part in low for part in _SECRET_KEYS):
                 out[key] = "<REDACTED>"
+            elif low == "mcpservers" and isinstance(value, list):
+                # The operator's own MCP inventory: names and endpoint URLs of
+                # whatever else they have wired up. No token, so no secret
+                # pattern matches it, and it went into a committed fixture --
+                # publishing someone's private endpoints as a side effect of
+                # capturing a protocol trace. The count is all a fixture needs.
+                out[key] = [{"_omitted_host_inventory": len(value)}]
             elif low in {"cwd", "currentworkingdirectory"}:
                 out[key] = "<CWD>"
             elif low == "sessionid" and isinstance(value, str):
