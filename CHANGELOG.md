@@ -28,6 +28,30 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## Unreleased
+
+### Three guards against the class of mistake, not the three mistakes
+
+The bugs fixed in 0.15.0 were all the same shape: something advertised in a
+schema or a description, and something else happening in the code. 844 tests
+did not catch any of them, because the suite tested behaviour someone had
+thought about and nothing connected the advertised surface to the tested one.
+
+- **The permission decision is now a generated matrix** rather than remembered
+  examples: profile x tool kind x request shape, every cell spelled out, plus a
+  check that the gate names no kind the matrix has no row for. Replayed against
+  the 0.14.0 branch order, the read-only-runs-a-declared-command row fails --
+  the bug would have been caught the moment the file existed.
+- **Every tool parameter must say what proves it does anything.** A registry
+  maps each of the 54 advertised parameters to its evidence, and the test fails
+  both ways: a new parameter with no entry, and an entry for a parameter that no
+  longer exists. `limit` shipped dead for two releases because nothing asked.
+  Also asserts every tool sets `additionalProperties: false`, so a typo is a
+  refusal rather than a silently ignored request.
+- **A poll's cost is a property, not a byte count that rots.** Twenty times the
+  events must cost the host under one percent more. On 0.14.0 a single poll of a
+  1000-event job was 490,286 characters; it is now 10,396.
+
 ## 0.15.0 — Found by using it on itself
 
 Two jobs were run through this bridge, against this repository, to audit it.
