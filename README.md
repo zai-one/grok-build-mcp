@@ -2,6 +2,7 @@
 
 **Hand the coding loop to Grok CLI. Your host reads a receipt, not a repository.**
 
+[![tests](https://github.com/zai-one/grok-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/zai-one/grok-mcp/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
