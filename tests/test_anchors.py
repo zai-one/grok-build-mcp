@@ -237,8 +237,15 @@ class AnchorWiringInDelegateTests(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.repo = Path(tempfile.mkdtemp())
-        self.lanes = Path(tempfile.mkdtemp())
+        # .resolve() matters: on Windows a temp path can carry an 8.3 short
+        # name (C:\Users\RUNNER~1\...), and the runner resolves the lanes parent
+        # before handing it to git. The fake git below matches the worktree
+        # target by string prefix, so an unresolved path here never matches,
+        # never creates the directory, and the delegate fails
+        # WORKTREE_MISSING_AFTER_ADD -- on CI only, never on a machine whose
+        # user name is short enough to escape 8.3 mangling.
+        self.repo = Path(tempfile.mkdtemp()).resolve()
+        self.lanes = Path(tempfile.mkdtemp()).resolve()
 
     def _delegate(self, goal: str, *, fail_on_missing_anchors: bool = False):
         from grok_delegate import runner as runner_mod
