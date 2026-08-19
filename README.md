@@ -348,7 +348,6 @@ unverified job done. That is the same standard we hold delivery to.
 
 **Talk to us:** [zai.one](https://zai.one) ·
 [contact@zai.one](mailto:contact@zai.one) ·
-[+7 495 128-46-86](tel:+74951284686) ·
 [Telegram](https://t.me/Zai_one_bot)
 
 ---
