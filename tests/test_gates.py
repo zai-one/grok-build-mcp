@@ -91,7 +91,7 @@ class RecordingRunner:
 
 
 class GateRunnerTests(unittest.TestCase):
-    """Every R7-A scenario from GOAL-ROUND7-AUTONOMY.md."""
+    """Every R7-A scenario from Service/Archive/GOAL-ROUND7-AUTONOMY.md."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

@@ -1,6 +1,6 @@
 """Unit tests for grok_delegate.anchors (R7-B goal anchor pre-validation).
 
-Full scenario matrix from GOAL-ROUND7-AUTONOMY.md R7-B. Uses tempfile
+Full scenario matrix from Service/Archive/GOAL-ROUND7-AUTONOMY.md R7-B. Uses tempfile
 worktrees only — never touches the real repo. No subprocess, no git
 mutation, no real grok.
 """

@@ -110,7 +110,7 @@ Fail-closed errors return `{ "ok": false, "error": "<CODE>", "message": "…" }`
 5. **Shell is git-only** — no `python*` / `pytest*` / `npm*` allows.
 6. **Sandbox** — default `--sandbox workspace` (execute) / `read-only` (plan).
    Known profiles only: `off|workspace|devbox|read-only|strict`. OS enforcement
-   is platform-dependent (see `EVIDENCE-ROUND4.md`).
+   is platform-dependent (see `Service/Archive/EVIDENCE-ROUND4.md`).
 7. **Server path normalization** — `confine_path_to_root` rejects `..` escape for
    server-controlled paths before spawn.
 8. **Bounded** — server-side `max_turns` hard cap + wall-clock timeout + output
@@ -152,8 +152,7 @@ grok_delegate/
   README.md
 tests/
   test_grok_delegate.py
-EVIDENCE.md
-EVIDENCE-ROUND4.md
+Service/Archive/     # round evidence and goal specs (history)
 ```
 
 ## Env

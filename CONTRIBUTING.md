@@ -47,15 +47,40 @@ environment values that look like secrets.
 - Prefer pure policy in `guard.py` and transport-thin code in `server.py`.
 - Redact secrets in logs, receipts, and errors.
 
+## Changelog
+
+If a change is visible from outside the package, it needs a `CHANGELOG.md`
+entry **in the same pull request** — tool schemas, wire answers, defaults,
+environment variables, refusals, install steps. Internal refactoring that
+changes nothing observable does not.
+
+Add it under `## Unreleased`; that heading becomes the version number when the
+release goes out. Write why the change exists and what an existing setup will
+notice, not what moved — the diff already says what moved. Mark anything
+breaking with **Breaking:**, including a default that moved without raising an
+error. The header of `CHANGELOG.md` has the full convention.
+
 ## Pull requests
 
 1. Fork (or branch from `main`) and keep PRs focused on one concern.
-2. Add or update tests for behavior changes.
+2. Add or update tests for behavior changes. A change that leaves the suite
+   green is a change no test covers — write the test that would have caught it.
 3. Run `pytest tests -q` and fix failures before requesting review.
 4. Update docs under `docs/` when operators or integrators are affected.
-5. Describe the change, risk, and how you verified it in the PR body.
-6. Do not include real credentials, home directories, or private hostnames in
+5. Add a `CHANGELOG.md` entry under `## Unreleased` for anything observable.
+6. Describe the change, risk, and how you verified it in the PR body.
+7. Do not include real credentials, home directories, or private hostnames in
    diffs, fixtures, or screenshots.
+
+## Where files go
+
+The repository root holds only what a first-time reader opens: `README.md`,
+`CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `LICENSE`, the agent
+instruction files, and `pyproject.toml`. Working notes — goal specs, evidence,
+handoffs — belong under `Service/`, and finished rounds under
+`Service/Archive/`. Run artifacts are not committed at all; the one exception
+is `evidence/live-acp`, which `tests/test_live_acp_fixtures.py` reads, so it is
+part of the suite rather than a leftover.
 
 ## Security issues
 

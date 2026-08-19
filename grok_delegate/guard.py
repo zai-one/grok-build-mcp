@@ -364,7 +364,7 @@ def build_permission_profile(plan_only: bool = False) -> dict[str, Any]:
     Note (R3/R4): pattern deny is best-effort for the permission engine.
     Relative ``../`` via agent tools is closed only when OS ``--sandbox`` is
     actually enforced (not claimed on Windows by docs); server path
-    normalization covers server-controlled paths only — see EVIDENCE-ROUND4.md.
+    normalization covers server-controlled paths only — see Service/Archive/EVIDENCE-ROUND4.md.
     """
     if plan_only:
         deny = list(_BASE_DENY) + [_PLAN_DENY_WRITE, _PLAN_DENY_EDIT, _PLAN_DENY_BASH]

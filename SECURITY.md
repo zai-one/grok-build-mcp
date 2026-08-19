@@ -7,9 +7,10 @@ repository (Security → Advisories → New draft advisory). Do not open a publi
 issue for unfixed vulnerabilities, and do not attach secrets, tokens, or full
 MCP host configs that may contain environment values.
 
-If you cannot use advisories, reach the maintainers through
-[zai.one](https://zai.one) — still without credentials, and without a full MCP
-config.
+If you cannot use advisories, write to
+[contact@zai.one](mailto:contact@zai.one) — still without credentials, and
+without a full MCP config. The bridge is maintained by
+[ZAI](https://zai.one).
 
 We aim to acknowledge reports promptly and coordinate a fix before public
 disclosure when possible.

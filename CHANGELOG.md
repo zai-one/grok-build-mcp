@@ -1,5 +1,33 @@
 # Changelog
 
+Every release has a name, because a version number does not tell anyone whether
+to upgrade. Entries answer **why** a change exists and what an existing setup
+will notice; the diff already says what moved.
+
+**How this file is kept**
+
+- One section per version, newest first: `## X.Y.Z — <what the release is>`.
+  Work that has not shipped collects under `## Unreleased` until it does, and
+  that heading then becomes the version.
+- Anything an operator or a host can observe gets an entry: tool schemas, wire
+  answers, defaults, env vars, refusals, install steps. Internal refactors that
+  change nothing observable do not.
+- Breaking changes are marked **Breaking:** and say what an existing setup will
+  see. A moved default is breaking even when nothing raises an error.
+- Semver is judged from the MCP surface. A changed tool schema, a changed wire
+  answer, or a moved default is at least a minor. Fixes that leave the surface
+  alone are patches.
+- Written for the person deciding whether to upgrade, so entries name the
+  symptom rather than the commit.
+
+**Where the version lives.** Four places must agree: `pyproject.toml`,
+`SERVER_VERSION` in `grok_delegate/guard.py` (the package reads it from there —
+`__init__.py` re-exports it, and a test forbids any other module from spelling
+it out), the badge in `README.md`, and the line in `docs/CODEX-MCP-SETUP.md`.
+Release procedure is in [AGENTS.md](AGENTS.md).
+
+---
+
 ## 0.13.0 — Say what the transport is
 
 Three read-only research passes asked what it would take to be a network MCP

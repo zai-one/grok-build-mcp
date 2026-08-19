@@ -1,6 +1,6 @@
 """Unit tests for grok_delegate.driver (R7-E unattended loop).
 
-Every scenario listed in GOAL-ROUND7-AUTONOMY.md R7-E. Injects fake
+Every scenario listed in Service/Archive/GOAL-ROUND7-AUTONOMY.md R7-E. Injects fake
 ``delegate`` and ``run_gates`` only — never spawns a real executor, gate, or
 git mutation. Lock/pid liveness is also injectable.
 """

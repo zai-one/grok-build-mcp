@@ -1,6 +1,6 @@
 """Unit tests for grok_delegate.jobs_store (R7-D durable jobs).
 
-Every scenario listed in GOAL-ROUND7-AUTONOMY.md R7-D. Uses tempfile and
+Every scenario listed in Service/Archive/GOAL-ROUND7-AUTONOMY.md R7-D. Uses tempfile and
 mocked liveness (os.kill / alive_check); never spawns a real gate, grok, or
 git mutation. Simulates server restart by load_jobs into a fresh dict.
 """

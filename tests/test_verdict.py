@@ -1,6 +1,6 @@
 """Unit tests for grok_delegate.verdict (R7-C structured lane verdict).
 
-Every scenario listed in GOAL-ROUND7-AUTONOMY.md R7-C. Pure unit tests —
+Every scenario listed in Service/Archive/GOAL-ROUND7-AUTONOMY.md R7-C. Pure unit tests —
 no subprocess, no real git, no real grok. Diff inputs are plain dicts shaped
 like runner.collect_diff.
 """

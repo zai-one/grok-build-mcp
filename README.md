@@ -261,5 +261,43 @@ python -m grok_delegate.server
 
 ---
 
-Built and maintained by **[ZAI](https://zai.one)**, an internet agency.
-Issues and pull requests are welcome.
+## Who builds this
+
+<div align="center">
+
+## [ZAI](https://zai.one)
+
+**International internet agency — marketing and development under one roof**
+
+*Strategy · Brand & design · Video production · PR & events · Web, SEO,
+advertising and analytics*
+
+</div>
+
+ZAI is a full-cycle agency: one team takes a product from positioning and offer
+through the creative and the site to the traffic and the numbers that say
+whether it worked. No handoffs between four vendors who each blame the other
+three.
+
+`grok-delegate` came out of that work rather than a lab. Agency delivery runs
+across many repositories at once, and an editor that re-reads a repository to
+confirm a change bills for every token it spends doing it. Moving the loop to a
+cheaper worker only pays if the result can be trusted without re-reading —
+which is why the effort here went into evidence rather than throughput. The
+bridge runs the tests itself, gates the receipt, and refuses to call an
+unverified job done. That is the same standard we hold delivery to.
+
+| | |
+|---|---|
+| **Marketing** | positioning, offer and messaging, launch planning, PR and events, creative, video and photo production |
+| **Development** | websites and web products, SEO, advertising, analytics, AI tooling and automation — this repository is a sample of it |
+
+**Talk to us:** [zai.one](https://zai.one) ·
+[contact@zai.one](mailto:contact@zai.one) ·
+[+7 495 128-46-86](tel:+74951284686) ·
+[Telegram](https://t.me/Zai_one_bot)
+
+---
+
+Issues and pull requests are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
