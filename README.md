@@ -1,28 +1,52 @@
-# grok-delegate (MCP)
+# grok-delegate
 
-## ⚡ Host loop (Session v1.2)
-
-Unofficial bridge. **Save host tokens** — measured against a full job record
-(events, stdout, nested result), the compact receipt is 61–88% smaller. Against
-reading the diff alone it only wins once the diff passes the 16 KiB cap, so on a
-one-file change the saving is in *not* pulling the record, not in the diff.
-
-1. `grok_agent_session_begin({"goal":"…","host_budget":"small"})`  
-2. Loop `grok_agent_session_next` → do only `card` (`host_cmd` | `mcp_tool` | `end`)  
-3. Stop when `done=true`
-
-Skill **`grok-mcp` v1.1** enforces this. Execute cards are a full `task`; poll is `{job_id}` only. No OAuth in MCP config — CLI login only. CLI version is **unpinned** by default.
-
+**Hand the coding loop to Grok CLI. Your host reads a receipt, not a repository.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
 [![Version](https://img.shields.io/badge/version-0.13.0-informational.svg)](pyproject.toml)
 
-**Claude / Cursor orchestrate → Grok CLI codes** (worktrees, receipts, token economy).
+Claude Code, Cursor and Codex spend most of their context on the cheapest part
+of the work: the edit → run tests → read output → fix loop. `grok-delegate` is
+an MCP server that hands that loop to **Grok CLI** on your own machine, in a git
+worktree of its own, and gives your host back a bounded receipt — changed files,
+diffstat, a capped diff, and test results.
 
-> **Unofficial community project** — not xAI, Grok, Anthropic, or OpenAI.  
-> Auth = local `grok login` only. Never put OAuth/API keys in MCP config.
+Against the full job record it replaces, that receipt is **61–88% smaller**.
+Worth stating precisely, because the honest version sells better than the
+brochure one: against *reading the diff yourself* it only wins once the diff
+passes the 16 KiB cap. On a one-file change the saving is in not pulling the
+record at all.
+
+## Why the receipt is worth trusting
+
+Delegation is only cheaper if you can believe the result without re-reading
+everything. Four things make that true here:
+
+- **The bridge runs your tests — the worker does not get to grade itself.**
+  Anything the agent says about its own tests is labelled `agent-reported` and
+  is not evidence. A live capture once caught an agent reporting exit code 0
+  while pytest was failing: in a shell, `a; b` returns *b*'s exit code.
+- **A job that changed nothing — or touched files you never asked for — comes
+  back `blocked`,** with the reason, instead of `ok` and a cheerful summary.
+  An artifact written by the test run rather than by the worker is caught too.
+- **It never pushes and never merges.** Work lands on a `grok/*` branch, which
+  the bridge commits for you even if the worker ran out of turns. You review it.
+- **It fails closed.** The allowlist is empty until you grant an exact root, and
+  every project stays off until it carries a `.grok-mcp.json` of its own.
+
+Nothing is pinned, deliberately: no hardcoded model, no pinned Grok CLI build.
+An upstream upgrade reaches you without waiting for a release here.
+
+## Requirements
+
+Python 3.10+, git, and **Grok CLI installed and logged in** (`grok login`) as the
+same OS user that runs the bridge. Auth stays with the CLI — this server never
+reads your credentials, and no OAuth or API key ever belongs in an MCP config.
+Zero runtime dependencies otherwise.
+
+> **Unofficial community project** — not xAI, Grok, Anthropic, or OpenAI.
 
 ---
 
@@ -54,6 +78,21 @@ grok login
 ```
 
 Merge `~/.config/grok-mcp/mcp/claude_desktop.snippet.json` into Claude/Cursor → restart → `grok_agent_status`.
+
+## Host loop
+
+Once it is wired, the whole protocol is three steps:
+
+1. `grok_agent_session_begin({"goal":"…","host_budget":"small"})`
+2. Loop `grok_agent_session_next` → execute only the `card` it hands you
+   (`host_cmd` | `mcp_tool` | `end`)
+3. Stop when `done=true`
+
+The **`grok-mcp`** skill enforces this shape, so a host that loads it does not
+have to be told twice. Execute cards carry a full `task`; a poll card is
+`{job_id}` and nothing else. If a card ever fails schema validation, the typed
+tools — consult → execute → poll → review — take the same packet.
+
 
 ### Claude Code, on this repository
 
@@ -219,3 +258,8 @@ grok-mcp          # launcher, macOS/Linux only — install.ps1 writes no wrapper
 # or, anywhere
 python -m grok_delegate.server
 ```
+
+---
+
+Built and maintained by **[ZAI](https://zai.one)**, an internet agency.
+Issues and pull requests are welcome.

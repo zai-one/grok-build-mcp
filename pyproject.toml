@@ -5,14 +5,25 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "grok-delegate"
 version = "0.13.0"
-description = "Local stdio MCP bridge for Grok CLI delegation (worktrees, ACP transports, receipts)"
+description = "MCP bridge that hands the coding loop to Grok CLI and returns a verified, bounded receipt"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "Aleksandr / zai-one" },
 ]
-keywords = ["mcp", "grok", "cli", "agent", "stdio"]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "grok",
+    "claude-code",
+    "codex",
+    "cursor",
+    "agent",
+    "delegation",
+    "token-economy",
+    "stdio",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -24,6 +35,12 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://zai.one"
+Repository = "https://github.com/zai-one/grok-mcp"
+Issues = "https://github.com/zai-one/grok-mcp/issues"
+Changelog = "https://github.com/zai-one/grok-mcp/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # jsonschema is what makes tests/test_tool_schemas.py actually validate the
