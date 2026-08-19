@@ -10,7 +10,7 @@ MCP host configs that may contain environment values.
 If you cannot use advisories, write to
 [contact@zai.one](mailto:contact@zai.one) — still without credentials, and
 without a full MCP config. The bridge is maintained by
-[ZAI](https://zai.one).
+[ZAI.ONE](https://zai.one).
 
 We aim to acknowledge reports promptly and coordinate a fix before public
 disclosure when possible.

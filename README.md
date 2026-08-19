@@ -6,6 +6,11 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
 [![Version](https://img.shields.io/badge/version-0.13.0-informational.svg)](pyproject.toml)
+[![Built by ZAI.ONE](https://img.shields.io/badge/built%20by-ZAI.ONE-111111.svg)](https://zai.one)
+
+> Built by **[ZAI.ONE](https://zai.one)** — international internet agency.
+> Marketing and development under one roof. We ship software for a living, and
+> we pay for the tokens; that is where this came from.
 
 Claude Code, Cursor and Codex spend most of their context on the cheapest part
 of the work: the edit → run tests → read output → fix loop. `grok-delegate` is
@@ -13,11 +18,59 @@ an MCP server that hands that loop to **Grok CLI** on your own machine, in a git
 worktree of its own, and gives your host back a bounded receipt — changed files,
 diffstat, a capped diff, and test results.
 
+```mermaid
+flowchart LR
+    H["Your editor<br/>Claude · Cursor · Codex"]
+    B["grok-delegate<br/>MCP server"]
+    W["Grok CLI<br/>own git worktree<br/>branch grok/*"]
+    T{"tests run by<br/>the bridge,<br/>not the agent"}
+    R["receipt<br/>files · diffstat<br/>capped diff · tests"]
+    X["blocked<br/>+ the reason"]
+
+    H -- "goal" --> B
+    B -- "task" --> W
+    W -- "changes" --> T
+    T -- "clean" --> R
+    T -- "nothing changed,<br/>unasked files,<br/>red tests" --> X
+    R --> H
+    X --> H
+```
+
 Against the full job record it replaces, that receipt is **61–88% smaller**.
 Worth stating precisely, because the honest version sells better than the
 brochure one: against *reading the diff yourself* it only wins once the diff
 passes the 16 KiB cap. On a one-file change the saving is in not pulling the
 record at all.
+
+## Is this for you
+
+**Yes** — you drive Claude Code, Cursor or Codex every day, you have a Grok CLI
+session, and you have noticed that most of what your editor reads is output it
+produced itself. Doubly so across several repositories, on a plan you watch.
+
+**No** — you have no Grok CLI login. The bridge carries no credentials of its
+own and cannot work without one. Also no if you want an agent that merges its
+own work: this one commits to a `grok/*` branch and stops there, on purpose.
+
+## Give this to your assistant
+
+The shortest way in is to let the editor install it. Paste this into Claude
+Code, Cursor or Codex, opened in the repository you want to delegate from:
+
+```text
+Install the grok-delegate MCP bridge from https://github.com/zai-one/grok-mcp
+into this project. Read its README and docs/EASY.md first, run the installer for
+my platform from the Install section, set GROK_DELEGATE_ALLOWED_ROOTS to this
+repository, create .grok-mcp.json with preset "standard", then call
+grok_agent_status and show me what it reports. Auth is `grok login` only — never
+put an API key or OAuth token in the MCP config.
+```
+
+Reading this as an agent, not a person? [`AGENTS.md`](AGENTS.md) is the rulebook,
+[`docs/EASY.md`](docs/EASY.md) the install path,
+[`skills/grok-mcp`](skills/grok-mcp) a router skill for Claude/Cursor/Codex, and
+[`schemas/`](schemas/) the tool schemas. Tools are discovered over MCP
+`tools/list` — nothing here needs scraping.
 
 ## Why the receipt is worth trusting
 
@@ -265,7 +318,7 @@ python -m grok_delegate.server
 
 <div align="center">
 
-## [ZAI](https://zai.one)
+## [ZAI.ONE](https://zai.one)
 
 **International internet agency — marketing and development under one roof**
 
@@ -274,7 +327,7 @@ advertising and analytics*
 
 </div>
 
-ZAI is a full-cycle agency: one team takes a product from positioning and offer
+ZAI.ONE is a full-cycle agency: one team takes a product from positioning and offer
 through the creative and the site to the traffic and the numbers that say
 whether it worked. No handoffs between four vendors who each blame the other
 three.
