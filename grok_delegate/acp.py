@@ -1128,16 +1128,22 @@ def permission_decision(
     permitted = False
     if kind == "think":
         permitted = True
-    elif task.get("permission_profile") == "read-only":
-        permitted = kind in {"read", "search"} and _paths_confined(raw, cwd)
-    elif kind in {"edit", "write"}:
-        permitted = _paths_confined(raw, cwd)
     elif kind == "execute":
+        # A declared command is the operator's own authorisation, so the profile
+        # does not get to veto it. read-only used to reach this branch never --
+        # which meant a skeptic could not run the very pytest it was handed, and
+        # could only ever assert about text it had read. read-only now means
+        # "changes nothing", not "does nothing"; `_command_allowed` is still the
+        # thing standing between a declared string and the filesystem.
         command = str(raw.get("command") or "").strip()
         permitted = (
             command in {str(item).strip() for item in task.get("test_commands", [])}
             and _command_allowed(command, cwd)
         )
+    elif task.get("permission_profile") == "read-only":
+        permitted = kind in {"read", "search"} and _paths_confined(raw, cwd)
+    elif kind in {"edit", "write"}:
+        permitted = _paths_confined(raw, cwd)
     elif kind in {"read", "search"}:
         permitted = _paths_confined(raw, cwd)
 

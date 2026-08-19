@@ -28,7 +28,47 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
-## Unreleased
+## 0.15.0 — Found by using it on itself
+
+Two jobs were run through this bridge, against this repository, to audit it.
+Both died the same way and produced nothing, and that is where these changes
+come from -- not from reading the code, which had been read plenty.
+
+### A skeptic could not run the test it was handed
+
+`consult` and `skeptic` are locked to `permission_profile: read-only` by the
+task contract, and in `permission_decision` the read-only branch matched before
+the execute branch could ever be reached. So a skeptic could not run `pytest`,
+could not run `git log`, could not reproduce anything -- it could read files and
+assert about what it read. For a role whose whole job is to disbelieve, that is
+the wrong shape.
+
+A command declared in `test_commands` is the operator's own authorisation, so
+the profile no longer vetoes it. `read-only` now means "changes nothing" rather
+than "does nothing": `edit` and `write` are still refused, an undeclared command
+is still refused in both profiles, and `_command_allowed` still stands between a
+declared string and the filesystem.
+
+### `grok_agent_poll` charged the host for the whole history, twice
+
+`limit` was in the tool schema, was accepted by the unknown-argument check, and
+was then never read on the path that takes a `job_id` -- the only path anyone
+uses. Passing `limit: 1` returned exactly as much as passing nothing. And a
+finished job carried its event list twice, once at the top level and once nested
+inside `result`.
+
+Polls now keep the newest `limit` events (default 20) in both places and report
+`events_total` with `events_omitted`, because a list that quietly ends reads
+like a job that quietly stopped.
+
+### The worker is told what to do when the gate says no
+
+`build_prompt` already said to run test commands verbatim. What it did not say
+is that there are no other commands at all, and -- the part that actually cost
+two jobs -- what to do when the work needs one. Both agents wrote an ad-hoc
+script, were denied, and stopped, leaving nothing on disk to commit. The prompt
+now states the closed world and gives a legal move: write down the command you
+would have run, and finish the rest without it.
 
 ### A capture of the protocol was also a capture of the operator's servers
 

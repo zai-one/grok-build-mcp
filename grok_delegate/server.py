@@ -1223,17 +1223,17 @@ def handle_tool_call(
         unknown = sorted(set(args) - {"job_id", "limit"})
         if unknown:
             return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
+        try:
+            limit = max(1, min(int(args.get("limit", DEFAULT_POLL_EVENTS)), 64))
+        except (TypeError, ValueError):
+            return typed_return(structured_error("LIMIT_INVALID", "limit must be an integer"))
         job_id = str(args.get("job_id") or "").strip()
         if job_id:
             record = jobs.get_job(job_id)
             if record is None:
                 return typed_return(structured_error("JOB_UNKNOWN", f"unknown job_id: {job_id}"))
-            compact = compact_job_record(record)
+            compact = _bounded_poll(compact_job_record(record), limit)
             return typed_return({"ok": True, **compact})
-        try:
-            limit = max(1, min(int(args.get("limit", 20)), 64))
-        except (TypeError, ValueError):
-            return typed_return(structured_error("LIMIT_INVALID", "limit must be an integer"))
         listed = [compact_job_record(j) for j in jobs.list_jobs(limit=limit)]
         return typed_return({"ok": True, "jobs": listed, "economy": economy_enabled()})
 
@@ -1883,6 +1883,37 @@ def configure_durable_jobs(env: Mapping[str, str] | None = None) -> Path | None:
     jobs.configure_jobs_dir(target)
     jobs.rehydrate_jobs(target)
     return target
+
+
+#: A poller wants to know what is happening now, not to re-read the handshake.
+#: Before this had a value, a poll returned every event the job had ever
+#: produced -- and a finished job returned them twice, once at the top level and
+#: once nested inside ``result``.
+DEFAULT_POLL_EVENTS = 20
+
+
+def _bounded_poll(record: dict[str, Any], limit: int) -> dict[str, Any]:
+    """Keep the newest ``limit`` events and say what was left out.
+
+    The ``limit`` argument was accepted by the schema, accepted by the
+    unknown-argument check, and then never read on the path that takes a
+    ``job_id`` -- so the one knob a host had for its own context window did
+    nothing at all. Truncation is reported rather than silent: a list that
+    quietly ends reads like a job that quietly stopped.
+    """
+    out = dict(record)
+    for holder in (out, out.get("result") if isinstance(out.get("result"), dict) else None):
+        if holder is None:
+            continue
+        events = holder.get("events")
+        if not isinstance(events, list):
+            continue
+        total = len(events)
+        if total > limit:
+            holder["events"] = events[-limit:]
+            holder["events_omitted"] = total - limit
+        holder["events_total"] = total
+    return out
 
 
 def allowed_roots_empty_error() -> dict[str, Any]:

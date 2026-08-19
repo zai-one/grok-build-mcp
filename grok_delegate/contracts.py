@@ -244,6 +244,18 @@ def build_prompt(task: Mapping[str, Any]) -> str:
                 # command was denied and the turns spent on it were wasted.
                 "Run each test command exactly as written above, with nothing appended.",
                 "The permission gate matches the text literally and denies anything else.",
+                # Twice in a row a live job died here: the agent needed a number
+                # it could not read off disk, wrote an ad-hoc script, was denied,
+                # and stopped -- producing nothing at all after minutes of paid
+                # work. Being told the rule was not enough; it also needed a
+                # legal move for the case the rule forbids.
+                "Those are the only commands available to you. Reading and searching files"
+                " is always allowed; every other command is denied, and the denial can end"
+                " your turn.",
+                "If you need something you cannot get by reading or searching, do not try a"
+                " command anyway. Write down what you would have run and why, and finish the"
+                " rest of the work without it. A partial result on disk beats a denied"
+                " command and nothing.",
             ]
         )
     if task["role"] in {"execute", "fix"}:
