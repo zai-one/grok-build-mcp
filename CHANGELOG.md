@@ -28,6 +28,44 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.14.0 — The host already knows which folder you opened
+
+Installing the bridge used to leave you with a server that started fine and then
+refused every job tool with `ALLOWED_ROOTS_EMPTY`. The only cure was editing the
+MCP host's own config to add an environment variable and restarting the host —
+before the first useful call, in every host, for every project.
+
+MCP has a mechanism for exactly this question, and the reason it was missing is
+structural rather than accidental: `roots/list` is a request the **server** sends
+to the **client**, and this server's stdio loop only ever answered. It never
+asked. Now it does.
+
+- After `notifications/initialized`, a client that declared the `roots`
+  capability is asked for its roots, and those directories join the allowlist.
+  No environment variable, no restart.
+- `notifications/roots/list_changed` re-asks. Closing a folder narrows the
+  scope — a withdrawn root stops being granted rather than lingering.
+- Declared roots **widen** the explicit allowlist rather than replacing it.
+  `GROK_DELEGATE_ALLOWED_ROOTS` and `GROK_DELEGATE_REPO_ROOT` keep their meaning.
+- `GROK_DELEGATE_MCP_ROOTS=0` refuses host-declared roots entirely.
+
+**Breaking:** a host that declares roots now grants them by default. This is
+deliberately unlike `GROK_DELEGATE_TRUST_HOST_ROOTS`, which stays opt-in: that
+one reads an environment variable any process could set, while a root here
+arrives because a person opened that directory in their editor, over the
+protocol's designated channel. No tool call can invent one — the agent never
+gets to name a root.
+
+### `ALLOWED_ROOTS_EMPTY` says which of three situations this is
+
+The message was `configure GROK_DELEGATE_ALLOWED_ROOTS or GROK_DELEGATE_REPO_ROOT`
+regardless of cause, and in the most common case — a host that would have
+declared its workspace if asked — it was also the wrong advice. It now names
+whether host roots are switched off, whether the host never offered the
+capability, or whether it simply has not answered yet, and carries `fix_with`
+steps for that case. `PROJECT_NOT_ENABLED` gained `restart_required: false`,
+because that one really is fixable from inside the running session.
+
 ## 0.13.0 — Say what the transport is
 
 Three read-only research passes asked what it would take to be a network MCP

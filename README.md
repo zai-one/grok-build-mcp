@@ -6,7 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.13.0-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.14.0-informational.svg)](pyproject.toml)
 [![Built by ZAI.ONE](https://img.shields.io/badge/built%20by-ZAI.ONE-111111.svg)](https://zai.one)
 
 > Built by **[ZAI.ONE](https://zai.one)** — international internet agency.
@@ -61,11 +61,13 @@ Code, Cursor or Codex, opened in the repository you want to delegate from:
 ```text
 Install the grok-delegate MCP bridge from https://github.com/zai-one/grok-mcp
 into this project. Read its README and docs/EASY.md first, run the installer for
-my platform from the Install section, set GROK_DELEGATE_ALLOWED_ROOTS to this
-repository, create .grok-mcp.json with preset "standard", then call
-grok_agent_status and show me what it reports. Auth is `grok login` only — never
-put an API key or OAuth token in the MCP config.
+my platform from the Install section, create .grok-mcp.json with preset
+"standard", then call grok_agent_status and show me what it reports. Auth is
+`grok login` only — never put an API key or OAuth token in the MCP config.
 ```
+
+Your host supplies the project directory itself if it speaks MCP `roots`, so
+there is usually no environment variable to set and nothing to restart.
 
 Reading this as an agent, not a person? [`AGENTS.md`](AGENTS.md) is the rulebook,
 [`docs/EASY.md`](docs/EASY.md) the install path,
@@ -87,11 +89,28 @@ everything. Four things make that true here:
   An artifact written by the test run rather than by the worker is caught too.
 - **It never pushes and never merges.** Work lands on a `grok/*` branch, which
   the bridge commits for you even if the worker ran out of turns. You review it.
-- **It fails closed.** The allowlist is empty until you grant an exact root, and
-  every project stays off until it carries a `.grok-mcp.json` of its own.
+- **It fails closed.** Nothing is in scope until a root is granted, and every
+  project stays off until it carries a `.grok-mcp.json` of its own. A root is
+  never granted by a tool call — it comes from the directory *you* opened.
 
 Nothing is pinned, deliberately: no hardcoded model, no pinned Grok CLI build.
 An upstream upgrade reaches you without waiting for a release here.
+
+## It works in the host you already use
+
+The bridge asks your editor which folder you have open, over MCP `roots/list`,
+and works there. No environment variable, no restart, no per-project setup —
+open a different project and the scope follows; close it and the scope narrows.
+
+That is not a convenience shortcut around the allowlist, it is the protocol's
+own answer to the question. A root arrives because a person opened that
+directory; an agent cannot name one, and `GROK_DELEGATE_ALLOWED_ROOTS` still
+works and still wins where you want the list written down. If you would rather
+the host had no say at all, `GROK_DELEGATE_MCP_ROOTS=0` refuses it.
+
+Hosts without `roots` support fall back to the environment variable, and the
+refusal says which of those situations you are in rather than printing the same
+sentence at everyone.
 
 ## Requirements
 
@@ -163,10 +182,10 @@ interpreter:
 export GROK_MCP_PYTHON=python3
 ```
 
-This path skips the installer, so nothing writes the env file for you. Read-only
-tools such as `grok_agent_status` work immediately; anything that touches a
-repository fails closed until you grant an exact root, because the allowlist is
-empty by design:
+This path skips the installer, so nothing writes the env file for you. Claude
+Code declares its workspace over MCP `roots`, so the project you have open is
+granted without any of that. The variables below are for a host that does not,
+or for granting a directory you have not opened:
 
 ```bash
 export GROK_DELEGATE_ALLOWED_ROOTS=/path/to/project   # ';' separates several

@@ -33,6 +33,16 @@ for _p in (str(_ROOT), str(_HERE)):
         sys.path.insert(0, _p)
 
 try:
+    from .host_roots import (  # type: ignore[no-redef]
+        ROOTS_CHANGED_NOTIFICATION,
+        apply_roots_response,
+        build_roots_request,
+        client_supports_roots,
+        mcp_roots_enabled,
+        host_roots,
+        is_roots_response,
+        remember_client_capabilities,
+    )
     from .audit import (  # type: ignore[no-redef]
         build_delegation_audit,
         emit as audit_emit,
@@ -90,6 +100,16 @@ try:
         economy_playbook,
     )
 except ImportError:  # flat import when package dir is on sys.path
+    from host_roots import (  # noqa: E402
+        ROOTS_CHANGED_NOTIFICATION,
+        apply_roots_response,
+        build_roots_request,
+        client_supports_roots,
+        mcp_roots_enabled,
+        host_roots,
+        is_roots_response,
+        remember_client_capabilities,
+    )
     from audit import (  # noqa: E402
         build_delegation_audit,
         emit as audit_emit,
@@ -566,6 +586,16 @@ def load_allowed_roots(
             continue
         if host_root not in roots:
             roots.append(host_root)
+
+    # Roots the host declared over MCP. On by default, unlike the env-var route
+    # above: these are directories the person opened in their own editor, the
+    # protocol's designated way to say so, and no tool call can invent one. The
+    # alternative was a server that answered ALLOWED_ROOTS_EMPTY until someone
+    # edited the host config and restarted it.
+    if env is None:
+        for declared in host_roots():
+            if declared not in roots:
+                roots.append(declared)
     return roots
 
 
@@ -933,10 +963,7 @@ def _handle_project_tool(args: Mapping[str, Any]) -> dict[str, Any]:
         return structured_error("PROJECT_ROOT_EMPTY", "project_root is required")
     roots = load_allowed_roots()
     if not roots:
-        return structured_error(
-            "ALLOWED_ROOTS_EMPTY",
-            "configure GROK_DELEGATE_ALLOWED_ROOTS or GROK_DELEGATE_REPO_ROOT",
-        )
+        return allowed_roots_empty_error()
     try:
         root = Path(raw_root).resolve()
     except OSError as exc:
@@ -1016,6 +1043,10 @@ def _apply_project_gate(task: Mapping[str, Any]) -> tuple[dict[str, Any] | None,
             "tool": TOOL_AGENT_PROJECT,
             "args": {"project_root": root, "preset": "standard"},
         }
+        # Unlike a missing root, this one is fixable from inside the running
+        # session: the tool writes the file and the next call sees it. Saying so
+        # is the difference between a caller retrying and a caller giving up.
+        detail["restart_required"] = False
         return structured_error("PROJECT_NOT_ENABLED", message, **detail), out
 
     # Preset budget fills what the caller left unsaid; an explicit field wins.
@@ -1226,10 +1257,7 @@ def handle_tool_call(
         else:
             roots = load_allowed_roots()
         if not roots:
-            return typed_return(structured_error(
-                "ALLOWED_ROOTS_EMPTY",
-                "configure GROK_DELEGATE_ALLOWED_ROOTS or GROK_DELEGATE_REPO_ROOT",
-            ), args.get("task") if isinstance(args.get("task"), Mapping) else None)
+            return typed_return(allowed_roots_empty_error(), args.get("task") if isinstance(args.get("task"), Mapping) else None)
         try:
             grok_bin = resolve_server_grok_bin({})
         except GuardError as exc:
@@ -1730,6 +1758,10 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
 
     if method == "initialize":
         requested = params.get("protocolVersion") if isinstance(params, dict) else None
+        # Whether the client can answer roots/list decides if the loop asks at
+        # all. Recorded here because initialize is the only place the client
+        # says so.
+        remember_client_capabilities(params)
         result = {
             "protocolVersion": negotiate_protocol_version(requested),
             "capabilities": {"tools": {}},
@@ -1853,6 +1885,68 @@ def configure_durable_jobs(env: Mapping[str, str] | None = None) -> Path | None:
     return target
 
 
+def allowed_roots_empty_error() -> dict[str, Any]:
+    """Say *why* there is no root and what to do about it.
+
+    Three different situations end with an empty allowlist and they need three
+    different answers. "configure GROK_DELEGATE_ALLOWED_ROOTS" was the same
+    sentence for all of them, and in the most common one -- a host that would
+    have declared its workspace if asked -- it was also the wrong advice.
+    """
+    if not mcp_roots_enabled():
+        reason = "host-declared roots are switched off (GROK_DELEGATE_MCP_ROOTS=0)"
+        fix = [
+            "unset GROK_DELEGATE_MCP_ROOTS so the host can declare the directory you opened",
+            "or set GROK_DELEGATE_ALLOWED_ROOTS=<exact project path> in the bridge's entry "
+            "in your MCP host config, then restart the host",
+        ]
+    elif not client_supports_roots():
+        reason = (
+            "this host did not offer the MCP roots capability, so it never told the bridge "
+            "which directory you are working in"
+        )
+        fix = [
+            "set GROK_DELEGATE_ALLOWED_ROOTS=<exact project path> in the bridge's entry in "
+            "your MCP host config (';' separates several), then restart the host",
+            "GROK_DELEGATE_REPO_ROOT=<path> pins a single project instead",
+        ]
+    else:
+        reason = (
+            "the host offers roots but has not answered roots/list yet, or answered with none"
+        )
+        fix = [
+            "open a folder or workspace in the host and try again -- no restart needed",
+            "or set GROK_DELEGATE_ALLOWED_ROOTS=<exact project path> to stop depending on the host",
+        ]
+    return structured_error(
+        "ALLOWED_ROOTS_EMPTY",
+        "no project root is granted, so every repository is out of scope: " + reason,
+        reason=reason,
+        fix_with=fix,
+        host_declares_roots=client_supports_roots(),
+        mcp_roots_enabled=mcp_roots_enabled(),
+        note=(
+            "A root is never granted by a tool call. It comes from the host you opened the "
+            "project in, or from an environment variable you set."
+        ),
+    )
+
+
+def _roots_followup(message: Any) -> dict[str, Any] | None:
+    """A ``roots/list`` request to send after this message, or None.
+
+    The client announces readiness with ``notifications/initialized`` and any
+    later change with ``notifications/roots/list_changed``. Both mean the same
+    thing here: ask again. Asking is skipped when the client never offered the
+    capability, so a host without roots support sees no extra traffic.
+    """
+    if not isinstance(message, Mapping):
+        return None
+    if message.get("method") not in {"notifications/initialized", ROOTS_CHANGED_NOTIFICATION}:
+        return None
+    return build_roots_request()
+
+
 def serve_stdio(
     stdin: TextIO | None = None,
     stdout: TextIO | None = None,
@@ -1887,9 +1981,14 @@ def serve_stdio(
                 message = json.loads(body)
             except json.JSONDecodeError:
                 continue
+            if is_roots_response(message):
+                apply_roots_response(message)
+                continue
             response = handle_jsonrpc(message)
-            if response is not None:
-                raw = json.dumps(response, ensure_ascii=False)
+            for payload in (response, _roots_followup(message)):
+                if payload is None:
+                    continue
+                raw = json.dumps(payload, ensure_ascii=False)
                 out.write(f"Content-Length: {len(raw.encode('utf-8'))}\r\n\r\n{raw}")
                 out.flush()
             continue
@@ -1902,6 +2001,10 @@ def serve_stdio(
             out.flush()
             continue
 
+        if is_roots_response(message):
+            apply_roots_response(message)
+            continue
+
         try:
             response = handle_jsonrpc(message)
         except Exception as exc:  # noqa: BLE001
@@ -1912,8 +2015,10 @@ def serve_stdio(
             )
             traceback.print_exc(file=sys.stderr)
 
-        if response is not None:
-            out.write(json.dumps(response, ensure_ascii=False) + "\n")
+        for payload in (response, _roots_followup(message)):
+            if payload is None:
+                continue
+            out.write(json.dumps(payload, ensure_ascii=False) + "\n")
             out.flush()
 
 
@@ -1945,11 +2050,17 @@ def _serve_binary_stdio(inn: Any, out: Any) -> None:
                 return
         else:
             body = bytearray(first.rstrip(b"\r\n"))
+        followup: dict[str, Any] | None = None
         try:
             message = json.loads(bytes(body).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             response = _jsonrpc_error(None, -32700, "parse error")
         else:
+            if is_roots_response(message):
+                # Our own answer coming back, not a client request. Handing it
+                # to the dispatcher would be an unknown-method error.
+                apply_roots_response(message)
+                continue
             try:
                 response = handle_jsonrpc(message)
             except Exception as exc:  # noqa: BLE001
@@ -1959,11 +2070,13 @@ def _serve_binary_stdio(inn: Any, out: Any) -> None:
                     f"internal error: {type(exc).__name__}",
                 )
                 traceback.print_exc(file=sys.stderr)
-        if response is None:
-            continue
-        raw = json.dumps(response, ensure_ascii=False).encode("utf-8")
-        out.write((f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw) if framed else raw + b"\n")
-        out.flush()
+            followup = _roots_followup(message)
+        for payload in (response, followup):
+            if payload is None:
+                continue
+            raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            out.write((f"Content-Length: {len(raw)}\r\n\r\n".encode("ascii") + raw) if framed else raw + b"\n")
+            out.flush()
 
 
 def main(argv: list[str] | None = None) -> int:
