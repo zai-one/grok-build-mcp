@@ -7,6 +7,7 @@ No OAuth or API keys are stored here.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Mapping
 
@@ -18,6 +19,10 @@ ECONOMY_MAX_SUMMARY = 1_500
 ECONOMY_MAX_EVENTS = 4
 ECONOMY_MAX_CHANGED_FILES = 24
 ECONOMY_MAX_UNIFIED_DIFF = 16_384
+#: What one compact poll may cost the host, whole. The per-field caps above bound
+#: each field on its own and sum to well over this; the record is fitted to it
+#: after assembly so the promise is about the thing the host actually pays for.
+ECONOMY_MAX_RECORD = 16_384
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
@@ -172,6 +177,57 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
         else:
             out[key] = value
     out["economy_compact"] = True
+    return _fit_record_budget(out, ECONOMY_MAX_RECORD)
+
+
+def _fit_record_budget(out: dict[str, Any], cap: int) -> dict[str, Any]:
+    """Hold the whole record under one budget, not each field under its own.
+
+    Per-field caps do not add up to a promise. ``ECONOMY_MAX_UNIFIED_DIFF`` alone
+    is the entire poll budget, so a job with a large diff produced a "compact"
+    record of 22 KB while every individual cap was respected -- and the host paid
+    for it on the poll that mattered most, the last one.
+
+    Trimming is ordered by what a reader can most afford to lose, and it is never
+    silent: ``economy_trimmed`` names each field that gave way, because a receipt
+    that quietly drops half a diff is worse than one that admits it.
+    """
+    def size() -> int:
+        return len(json.dumps(out, ensure_ascii=False, default=str))
+
+    if size() <= cap:
+        return out
+
+    trimmed: list[str] = []
+    #: field -> the smallest length worth keeping. A diff cut to nothing tells
+    #: the reader less than a diff cut to its first hunk.
+    order: tuple[tuple[str, int], ...] = (
+        ("unified_diff", 512), ("events", 1), ("diffstat", 200),
+        ("summary", 300), ("full_changed_files", 4), ("changed_files", 4),
+    )
+    for key, floor in order:
+        for _ in range(8):  # halving converges; the bound stops a pathological value
+            over = size() - cap
+            if over <= 0:
+                break
+            value = out.get(key)
+            if isinstance(value, str) and len(value) > floor:
+                # Same marker the per-field clip uses: one truncation convention
+                # on the wire, and `economy_trimmed` to say the budget caused it.
+                keep = max(floor, len(value) - over - 48)
+                out[key] = value[:keep].removesuffix("\n…(truncated)") + "\n…(truncated)"
+            elif isinstance(value, list) and len(value) > floor:
+                out[key] = value[: max(floor, len(value) // 2)]
+            else:
+                break
+            if key not in trimmed:
+                trimmed.append(key)
+        if size() <= cap:
+            break
+
+    if trimmed:
+        out["economy_trimmed"] = trimmed
+        out["economy_budget_chars"] = cap
     return out
 
 

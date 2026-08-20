@@ -29,7 +29,18 @@ pytest tests/test_grok_delegate.py -v
 
 # Operator self-check (needs grok on PATH and local CLI session for full PASS)
 python -m grok_delegate --self-test
+
+# Standing routines: one promise per routine, verdict read off a real receipt.
+# --harness-only takes seconds and needs no worker; the rest run live jobs.
+python scripts/routines.py --list
+python scripts/routines.py --harness-only
 ```
+
+The unit suite proves units. `scripts/routines.py` proves the promises around
+them — that a refusal bends a job instead of killing it, that a secret never
+reaches a receipt, that one poll stays cheap however long the job ran. Its
+findings land in `Service/Audits/routines-<stamp>.json`, each row carrying the
+receipt slice that decided it and the command that reproduces it.
 
 Do not commit live smoke output that contains machine-specific paths or any
 environment values that look like secrets.

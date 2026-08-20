@@ -52,7 +52,7 @@ allowlisted root is not implicitly trusted.
    speaks. A client that sends `2024-11-05` gets `2024-11-05` back; a
    client that sends an unknown or later revision (including
    `2026-07-28`) gets `2025-06-18`. `serverInfo.version` is the package
-   version (`0.20.0` on this line).
+   version (`0.21.0` on this line).
 2. `tools/list` must include all 15 `grok_agent_*` tools and all 8
    `grok_delegate*` compatibility tools — 23 in total. (`grok_agent_project`
    and `grok_agent_update` arrived after this count was last written; verify it

@@ -28,6 +28,49 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.21.0 — One poll, one budget
+
+### One poll now has one budget
+
+`ECONOMY_MAX_UNIFIED_DIFF` is 16 KiB and so was the whole promise — "one poll
+stays under 16 KiB whatever the job did". Every per-field cap was respected and
+a compact record still came back at 22 KB, because the caps bound fields, not
+the record. The host paid for it on the poll that matters most: the last one,
+the only one carrying a diff.
+
+The record is now fitted to `ECONOMY_MAX_RECORD` after assembly. Trimming is
+ordered by what a reader can most afford to lose and is never silent —
+`economy_trimmed` names each field that gave way and `economy_budget_chars`
+says what it gave way to. A receipt that never approached the budget is left
+exactly as it was, so nothing new appears on ordinary jobs.
+
+### The opt-in tool ignored the allowlist it was handed
+
+`handle_tool_call(..., allowed_roots=[x])` meant one thing for job tools and
+nothing at all for `grok_agent_project`, which read module state instead. Any
+embedder passing its own roots got `ALLOWED_ROOTS_EMPTY` from the single tool
+whose job is to clear `PROJECT_NOT_ENABLED`. Hosts over stdio and HTTP never
+saw this — they do not inject — which is why it survived until something did.
+
+### Routines: the bridge audited by the bridge
+
+`scripts/routines.py` is a standing catalogue where each routine names one
+promise and reads its verdict off a receipt. `--harness-only` runs in seconds
+without a worker; the rest pay for a live one. The `audit.*` routines hand Grok
+a brief and take back a report file, and every `read: file:line` in that report
+is checked against the tree — file present, line in range, quoted text nearby.
+Without that check a worker could attach one real pytest run and invent the rest,
+since `finalize_receipt` looks at the declared command and knows nothing about
+the JSON beside it. Findings land in `Service/Audits/routines-<stamp>.json` with
+the receipt slice that decided each one and the command that reproduces it.
+
+The brief itself went through two live skeptic rounds before it was worth
+running: the first version told a read-only role to write a file, which the gate
+refuses before `edit` is ever reached, so the auditor would have produced
+nothing at all.
+
+---
+
 ## 0.20.0 — One lane, one worker
 
 The four claims the previous round left unverified, taken one at a time. Two

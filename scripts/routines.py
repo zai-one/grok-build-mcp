@@ -27,7 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
+import re
 import subprocess
 import sys
 import tempfile
@@ -518,6 +518,23 @@ def r_perm_readonly(row: Row, turns: int) -> Row:
 # --- live routines judged by the harness ----------------------------------------
 
 
+def _drain(job_id: str, root: Path, seconds: float = 45.0) -> None:
+    """Cancel and wait for the worker to actually go.
+
+    Returning from a routine while a worker is still shutting down leaves the
+    next routine sharing the machine with it, and the timings in `tasks.cancel`
+    are the first thing that goes strange when that happens.
+    """
+    call("grok_agent_cancel", {"job_id": job_id}, root)
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        time.sleep(2.0)
+        if call("grok_agent_poll", {"job_id": job_id, "limit": 1}, root).get("state") in {
+            "done", "error", "cancelled"
+        }:
+            return
+
+
 def _start_long(root: Path, lane: str, correlation_id: str) -> dict:
     """Start something that will still be running a few seconds from now."""
     return call(
@@ -615,7 +632,7 @@ def r_tasks_lane(row: Row, turns: int) -> Row:
         elif second.get("error") != "LANE_BUSY":
             row.fail(f"refused for the wrong reason: {second.get('error')!r}")
     finally:
-        call("grok_agent_cancel", {"job_id": first["job_id"]}, root)
+        _drain(first["job_id"], root)
     return row.settle()
 
 
@@ -638,7 +655,7 @@ def r_calls_idempotent(row: Row, turns: int) -> Row:
         elif again.get("ok") and not again.get("idempotent_replay"):
             row.fail("the replay was not marked as one, so a host cannot tell")
     finally:
-        call("grok_agent_cancel", {"job_id": first["job_id"]}, root)
+        _drain(first["job_id"], root)
     return row.settle()
 
 
@@ -824,7 +841,10 @@ def _citation_holds(worktree: Path, probe: str, output: str) -> "str | None":
     """
     body = probe.split(":", 1)[1].strip() if ":" in probe else ""
     path, _, line_text = body.rpartition(":")
-    if not path or not line_text.strip().isdigit():
+    # `file:120-134` is how a reviewer naturally cites a block, and rejecting it
+    # would fail honest findings for punctuation. The first number is the anchor.
+    line_text = line_text.strip().split("-", 1)[0].split(",", 1)[0].strip()
+    if not path or not line_text.isdigit():
         return f"citation is not file:line -- {probe[:80]!r}"
     target = worktree / path.strip().replace("\\", "/")
     if not target.exists():
@@ -837,7 +857,11 @@ def _citation_holds(worktree: Path, probe: str, output: str) -> "str | None":
     if not 1 <= number <= len(lines):
         return f"{path.strip()} has {len(lines)} lines; the citation says {number}"
 
-    quoted = [seg.strip() for seg in str(output or "").splitlines() if len(seg.strip()) >= 12]
+    # Reviewers quote with the line number attached; that prefix is not in the
+    # file, and matching on it would fail honest citations for their formatting.
+    quoted = [re.sub(r"^\s*\d+\s*[:|]?\s?", "", seg).strip()
+              for seg in str(output or "").splitlines()]
+    quoted = [seg for seg in quoted if len(seg) >= 12]
     if not quoted:
         return None  # nothing quoted to check; the line number at least resolves
     window = "\n".join(lines[max(0, number - 11):number + 10])
@@ -862,7 +886,11 @@ def _audit(dimension: str) -> "Callable[[Row, int], Row]":
             {"objective": objective, "project_root": str(_ROOT),
              "correlation_id": "r-" + dimension.replace(".", "-"), "role": "execute",
              "permission_profile": "workspace", "expected_artifacts": [report],
-             "test_commands": [TEST_COMMAND], "base_ref": "HEAD", "max_turns": turns,
+             "test_commands": [TEST_COMMAND], "base_ref": "HEAD",
+             # An audit reads before it writes, and reading this repository is
+             # not cheap in turns. The worker is the cheap side of this bridge;
+             # starving it here buys nothing and costs the whole report.
+             "max_turns": min(60, max(turns, 50)),
              "reasoning_effort": "xhigh"},
             _ROOT, "r-" + dimension.replace(".", "-"), row, timeout_s=1800.0,
         )
@@ -919,6 +947,174 @@ def _audit(dimension: str) -> "Callable[[Row, int], Row]":
     return run
 
 
+def r_calls_navigator(row: Row, turns: int) -> Row:
+    """The card the navigator hands the host has to be callable as written.
+
+    This is the path the skill tells every host to take, and the way it fails is
+    always the same: the card names a tool and carries arguments that tool's own
+    schema rejects, so the host gets `additionalProperties` from the call it was
+    just told to make. Validating the card against the advertised schema is the
+    only check that catches it before an operator does.
+    """
+    try:
+        from jsonschema import Draft202012Validator
+    except ImportError:
+        row.fail("jsonschema is not installed, so the card was never actually validated")
+        return row.settle()
+
+    root = seed_repo()
+    schemas = {tool["name"]: tool.get("inputSchema") or {} for tool in server.list_tools()}
+    begun = call(
+        "grok_agent_session_begin",
+        {"intent": "auto", "goal": "add a mul function to app.py", "host_budget": "small",
+         "project_root": str(root), "expected_artifacts": ["app.py"],
+         "test_commands": [TEST_COMMAND]},
+        root,
+    )
+    if not begun.get("ok"):
+        row.fail(f"session_begin refused: {begun.get('error')}")
+        return row.settle()
+    session_id = begun.get("session_id")
+
+    seen: list[dict[str, Any]] = []
+    try:
+        for _ in range(6):
+            step = call("grok_agent_session_next", {"session_id": session_id}, root)
+            card = step.get("card") or {}
+            seen.append({"kind": card.get("kind"), "tool": card.get("tool")})
+            if card.get("kind") == "mcp_tool":
+                tool = str(card.get("tool") or "")
+                if tool not in schemas:
+                    row.fail(f"the card names {tool!r}, which this server does not advertise")
+                    break
+                errors = sorted(
+                    Draft202012Validator(schemas[tool]).iter_errors(card.get("args") or {}),
+                    key=lambda e: list(e.path),
+                )
+                if errors:
+                    row.fail(f"{tool} card fails its own schema: "
+                             f"{errors[0].message[:120]} at {list(errors[0].path)}")
+                    break
+                if tool.endswith("_execute"):
+                    task = (card.get("args") or {}).get("task") or {}
+                    missing = [k for k in ("objective", "project_root", "correlation_id",
+                                           "expected_artifacts", "test_commands")
+                               if not task.get(k)]
+                    if missing:
+                        row.fail(f"the execute card is not self-contained; missing {missing}")
+                    break  # executing it would start a real job; the shape is the promise
+            if card.get("kind") == "end" or step.get("done"):
+                break
+    finally:
+        call("grok_agent_session_end", {"session_id": session_id}, root)
+
+    row.evidence["cards"] = seen
+    if not any(c["kind"] == "mcp_tool" for c in seen):
+        row.fail(f"the navigator never produced a tool card: {seen}")
+    return row.settle()
+
+
+def r_economy_compact(row: Row, turns: int) -> Row:
+    """The cheap poll must stay honest: smaller, never mutating, never silent.
+
+    `ok` in the envelope means the tool call worked, not that the work is
+    acceptable -- so a compact record that dropped `status` and `blocked_reason`
+    would show a host `ok: true, state: done` for a job the gate refused. It
+    keeps them today; this is what says so tomorrow.
+    """
+    import copy
+
+    from grok_delegate.economy import compact_job_record
+
+    before = os.environ.get("GROK_DELEGATE_ECONOMY_COMPACT_POLL")
+    os.environ["GROK_DELEGATE_ECONOMY_COMPACT_POLL"] = "1"
+    try:
+        record = {
+            "ok": True, "job_id": "j1", "state": "done",
+            "result": {
+                "ok": False, "status": "blocked",
+                "blocked_reason": "UNEXPECTED_CHANGED_FILES: notes.md",
+                "summary": "all done!" + " padding" * 400,
+                "changed_files": [f"file{i}.py" for i in range(60)],
+                "artifacts": ["app.py"], "tests": [],
+                "unified_diff": "+x\n" * 5000,
+                "worktree_path": "X", "branch": "grok/x",
+                "lane_commit": {"ok": True, "committed": True, "sha": "deadbee"},
+            },
+        }
+        untouched = copy.deepcopy(record)
+        compact = compact_job_record(record)
+        row.evidence["compact_keys"] = sorted(compact)
+        row.evidence["sizes"] = {"full": len(json.dumps(record, default=str)),
+                                 "compact": len(json.dumps(compact, default=str))}
+
+        if compact.get("status") != "blocked":
+            row.fail("a blocked job reads as done in the compact poll: status was dropped")
+        if "UNEXPECTED" not in str(compact.get("blocked_reason")):
+            row.fail("the compact poll does not say why the job was blocked")
+        if record != untouched:
+            row.fail("compacting mutated the stored record: a read changed the receipt")
+        if row.evidence["sizes"]["compact"] >= row.evidence["sizes"]["full"]:
+            row.fail("the compact poll is not smaller than the full one")
+        if row.evidence["sizes"]["compact"] > POLL_BUDGET_CHARS:
+            row.fail(f"a compact poll still costs {row.evidence['sizes']['compact']} chars")
+    finally:
+        if before is None:
+            os.environ.pop("GROK_DELEGATE_ECONOMY_COMPACT_POLL", None)
+        else:
+            os.environ["GROK_DELEGATE_ECONOMY_COMPACT_POLL"] = before
+    return row.settle()
+
+
+def r_tasks_reuse(row: Row, turns: int) -> Row:
+    """A lane used twice must show the second job's own work, not an empty diff.
+
+    `base_ref` defaults to HEAD, and on a reused lane HEAD is the previous job's
+    commit -- so the diff of the second job collapsed to nothing and a finished
+    job reported `no_changes`. The fix resolves the base in the main repository
+    before the worker starts; this is the live path that proves it still does.
+    """
+    root = seed_repo()
+    lane = "r-" + row.routine.replace(".", "-")
+    first = _survivor(
+        row, "grok_agent_execute",
+        "Add a `mul(a, b)` function returning a * b to app.py. Leave everything else alone.",
+        root, turns=turns, artifacts=["app.py"],
+    )
+    row.evidence["first"] = {"status": first.get("status"),
+                             "sha": (first.get("lane_commit") or {}).get("sha")}
+    if first.get("status") != "completed":
+        row.fail(f"the first job never landed: {first.get('blocked_reason')!r}")
+        return row.settle()
+
+    second_row = Row(routine=row.routine, dimension=row.dimension, driver=row.driver)
+    polled = run_job(
+        "grok_agent_execute",
+        {"objective": "Add a `sub(a, b)` function returning a - b to app.py. Leave mul and "
+                      "add alone.",
+         "project_root": str(root), "correlation_id": "r-tasks-reuse-2", "role": "execute",
+         "permission_profile": "workspace", "expected_artifacts": ["app.py"],
+         "test_commands": [TEST_COMMAND], "base_ref": "HEAD", "max_turns": turns,
+         "reasoning_effort": "xhigh"},
+        root, lane, second_row, timeout_s=600.0,
+    )
+    row.reasons.extend(second_row.reasons)
+    row.max_poll_chars = max(row.max_poll_chars, second_row.max_poll_chars)
+    second = polled.get("result") or {}
+    row.evidence["second"] = {
+        "status": second.get("status"), "blocked_reason": second.get("blocked_reason"),
+        "changed_files": second.get("changed_files"),
+        "sha": (second.get("lane_commit") or {}).get("sha"),
+    }
+    if second.get("status") == "no_changes":
+        row.fail("the second job on this lane reported no_changes: the base moved with it")
+    if not second.get("changed_files"):
+        row.fail("the second job's own work does not appear in its diff")
+    if (second.get("lane_commit") or {}).get("sha") == row.evidence["first"]["sha"]:
+        row.fail("the second job committed nothing of its own")
+    return row.settle()
+
+
 # --- the catalogue ---------------------------------------------------------------
 
 
@@ -941,6 +1137,9 @@ ROUTINES: "dict[str, tuple[str, str, Callable[[Row, int], Row]]]" = {
     "tasks.cancel": ("tasks", "grok", r_tasks_cancel),
     "tasks.lane": ("tasks", "grok", r_tasks_lane),
     "calls.idempotent": ("calls", "grok", r_calls_idempotent),
+    "economy.compact": ("economy", "harness", r_economy_compact),
+    "calls.navigator": ("calls", "harness", r_calls_navigator),
+    "tasks.reuse": ("tasks", "grok", r_tasks_reuse),
     **{name: (name.split(".", 1)[0], "grok", _audit(name)) for name in AUDITS},
 }
 
@@ -1039,7 +1238,16 @@ def main(argv: "list[str] | None" = None) -> int:
         encoding="utf-8",
     )
     print(f"evidence: {out.relative_to(_ROOT)}")
-    return 0 if all(r.passed for r in rows) else 1
+
+    # The point of a routine is the fix that follows it, so the last thing on
+    # screen is the work list rather than a number the reader has to interpret.
+    broken = [r for r in rows if not r.passed]
+    if broken:
+        print("\nreproduce, then fix, then add the test that would have caught it:")
+        for row in broken:
+            print(f"  py -3 scripts/routines.py --only {row.routine}"
+                  f"   # {row.reasons[0][:60]}")
+    return 0 if not broken else 1
 
 
 if __name__ == "__main__":

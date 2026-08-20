@@ -18,7 +18,6 @@ outputs/
 # Soak evidence is a run artifact: compared locally, not kept in history
 Service/Audits/soak-*.json
 Service/Audits/routines-*.json
-Service/Audits/audit-*-report.json
 
 # Work prompts other sessions drop here. Not this project, never committed.
 .grok-review-input/

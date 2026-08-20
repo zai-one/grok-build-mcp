@@ -123,3 +123,55 @@ def test_http_health_and_auth(monkeypatch: pytest.MonkeyPatch) -> None:
         from grok_delegate.contracts import reset_secret_needles_for_tests
 
         reset_secret_needles_for_tests()
+
+
+def test_one_poll_stays_inside_one_budget_however_big_the_job(monkeypatch) -> None:
+    """Per-field caps are not a budget: `ECONOMY_MAX_UNIFIED_DIFF` alone is all of it.
+
+    A job with a large diff produced a "compact" record of 22 KB while every
+    individual cap was respected, and the host paid for it on the poll that
+    matters most -- the last one, the only one carrying the diff.
+    """
+    import json as _json
+
+    from grok_delegate.economy import ECONOMY_MAX_RECORD, compact_job_record
+
+    monkeypatch.setenv("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    record = {
+        "ok": True, "job_id": "j", "state": "done",
+        "result": {
+            "status": "completed", "summary": "s" * 9000,
+            "changed_files": [f"file{i}.py" for i in range(400)],
+            "unified_diff": "+padding padding padding\n" * 9000,
+            "diffstat": "d" * 4000, "artifacts": ["app.py"], "tests": [],
+        },
+    }
+    out = compact_job_record(record)
+    assert len(_json.dumps(out, ensure_ascii=False)) <= ECONOMY_MAX_RECORD
+
+
+def test_a_trimmed_receipt_says_which_fields_gave_way(monkeypatch) -> None:
+    """Silent truncation reads as "that is all there was", which is the worse lie."""
+    from grok_delegate.economy import compact_job_record
+
+    monkeypatch.setenv("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    out = compact_job_record(
+        {"ok": True, "job_id": "j", "state": "done",
+         "result": {"status": "completed", "unified_diff": "+x\n" * 20000}}
+    )
+    assert "unified_diff" in out["economy_trimmed"]
+    assert out["economy_budget_chars"] > 0
+    assert out["unified_diff"].endswith("…(truncated)")
+
+
+def test_a_small_receipt_is_left_exactly_as_it_was(monkeypatch) -> None:
+    """The budget must not announce itself on a job that never approached it."""
+    from grok_delegate.economy import compact_job_record
+
+    monkeypatch.setenv("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    out = compact_job_record(
+        {"ok": True, "job_id": "j", "state": "done",
+         "result": {"status": "completed", "summary": "done", "unified_diff": "+x\n"}}
+    )
+    assert "economy_trimmed" not in out
+    assert out["unified_diff"] == "+x\n"
