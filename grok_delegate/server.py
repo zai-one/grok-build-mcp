@@ -945,7 +945,10 @@ def _handle_update_tool(confirm: bool) -> dict[str, Any]:
     return out
 
 
-def _handle_project_tool(args: Mapping[str, Any]) -> dict[str, Any]:
+def _handle_project_tool(
+    args: Mapping[str, Any],
+    allowed_roots: Sequence[Path | str] | None = None,
+) -> dict[str, Any]:
     """Report or set a project's preset.
 
     Writing is confined to the config file inside an allowlisted root: the point
@@ -963,7 +966,15 @@ def _handle_project_tool(args: Mapping[str, Any]) -> dict[str, Any]:
     raw_root = str(args.get("project_root") or "").strip()
     if not raw_root:
         return structured_error("PROJECT_ROOT_EMPTY", "project_root is required")
-    roots = load_allowed_roots()
+    # Every other tool honours the allowlist the caller injected; this one read
+    # module state instead, so an embedder that passes `allowed_roots=` -- the
+    # harness in scripts/ among them -- got ALLOWED_ROOTS_EMPTY from the one tool
+    # whose job is to fix PROJECT_NOT_ENABLED.
+    roots = (
+        load_allowed_roots(injected=allowed_roots)
+        if allowed_roots is not None
+        else load_allowed_roots()
+    )
     if not roots:
         return allowed_roots_empty_error()
     try:
@@ -1118,7 +1129,7 @@ def handle_tool_call(
             return typed_return(
                 structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}")
             )
-        return typed_return(_handle_project_tool(args))
+        return typed_return(_handle_project_tool(args, allowed_roots))
 
     if name == TOOL_AGENT_SESSION_BEGIN:
         unknown = sorted(

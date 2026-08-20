@@ -233,3 +233,37 @@ def test_the_plan_hint_matches_the_budget_the_card_will_carry() -> None:
 
     hint = compile_plan("execute", "ship it", True, max_turns=40)[0]["args_hint"]
     assert hint["max_turns"] == 40
+
+
+def test_the_opt_in_tool_honours_an_injected_allowlist(tmp_path) -> None:
+    """`handle_tool_call(..., allowed_roots=[x])` has to mean the same for every tool.
+
+    Job tools resolved the injected allowlist and this one read module state, so
+    an embedder that passes its own roots -- `scripts/routines.py` does -- got
+    ALLOWED_ROOTS_EMPTY from the single tool whose job is to clear
+    PROJECT_NOT_ENABLED. Nothing else in the process had to be misconfigured for
+    that to happen; it was the parameter being quietly ignored.
+    """
+    out = handle_tool_call(
+        "grok_agent_project",
+        {"project_root": str(tmp_path), "preset": "cheap"},
+        allowed_roots=[tmp_path],
+    )
+    assert out["ok"] is True, out
+    assert (tmp_path / CONFIG_FILENAME).exists()
+
+
+def test_an_injected_allowlist_still_excludes_everything_else(tmp_path) -> None:
+    """Honouring the injection must not widen it: a sibling is not an allowed root."""
+    granted = tmp_path / "granted"
+    stranger = tmp_path / "stranger"
+    granted.mkdir()
+    stranger.mkdir()
+    out = handle_tool_call(
+        "grok_agent_project",
+        {"project_root": str(stranger), "preset": "cheap"},
+        allowed_roots=[granted],
+    )
+    assert out["ok"] is False
+    assert out["error"] == "PROJECT_ROOT_NOT_ALLOWED"
+    assert not (stranger / CONFIG_FILENAME).exists()
