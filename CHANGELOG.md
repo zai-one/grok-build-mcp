@@ -28,6 +28,68 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.18.0 — What the skeptics found, and what the clock found
+
+Five skeptic jobs, five lenses, run through this bridge against this repository.
+Four finished; none died on a gate refusal or a truncated report, which is what
+0.15.0 and 0.16.0 were for. Findings verified before acting on them -- roughly
+half held.
+
+### The lane commit swept up work that was not the worker's
+
+`commit_lane_work` staged with `git add -A`, so a branch a human is meant to
+review carried a foreign MCP server's log and two `__pycache__` blobs -- files
+0.17.0's own acceptance gate had already named as somebody else's. Judging them
+foreign and committing them anyway was the bridge disagreeing with itself.
+
+The lane now stages what the gate calls the worker's: approved writes plus the
+expected artifacts. When that filter leaves nothing, the receipt says
+`NOTHING_TO_COMMIT` rather than reporting an empty commit as work.
+
+### Eight ways a secret reached a receipt
+
+Every one verified by running it, and every one a shape a worker meets in files
+it is allowed to read -- a Django settings module, a compose file, a JSON config:
+
+- `SECRET_KEY=` and `AWS_SECRET_ACCESS_KEY=` -- the old pattern wanted `secret`
+  to stand alone, so a key that merely contained it walked through.
+- `{"api_key": …}` and `{"client_secret": …}`.
+- `Authorization: Basic <base64>` lost only the word `Basic`.
+- `PASSWORD="correct horse battery staple"` was cut at the first space.
+- `redis://:pass@host` -- an empty user did not match at all.
+- `postgres://u:pa@ss@host` was cut at the first `@`.
+- `sk_live_…` -- an underscore where the list assumed a dash.
+
+Also fixed the opposite failure, which the same skeptic warned about: a redactor
+that eats the diff is one people switch off. `token: str = ""` and
+`password_hash = bcrypt(x)` are left alone.
+
+### A quiet job is no longer indistinguishable from a working one
+
+When the model is full, the Grok CLI answers `500 … at capacity`, retries up to
+fifteen times with backoff, and says nothing over ACP. From here that looked
+exactly like thinking, and an operator cancelled live work forty seconds in.
+
+Polls now carry `quiet_for_s`, and past 45 seconds of silence the bridge reports
+what the CLI wrote in its own log about the process we spawned -- `worker_pid`
+joins the two. A capacity refusal comes back named `PROVIDER_AT_CAPACITY` with
+the attempt count, so waiting can be told from a broken job. Best effort by
+construction: an unreadable log is no answer rather than an error, and
+`GROK_DELEGATE_CLI_LOG=0` switches it off.
+
+### The suite went green for two hours and eleven minutes
+
+The first draft of the redaction fix wrapped the secret-word alternation in
+`[A-Za-z0-9_.-]*` on both sides: two unbounded quantifiers around an
+alternation. One line of a diff went from 0.19ms to 34ms, and `redact_text` runs
+on every event and every line of stderr, so the suite went from two minutes to
+2:10:44 -- passing the entire time. Caught by the clock, not by a red test.
+
+Rewritten as a linear scan with the secret-word decision made in Python, and two
+tests now assert what a redaction costs. A non-matching key also stopped hiding
+the one behind it: `URL: ws://host?server-key=x` matched `URL`, swallowed the
+whole address, and never examined `server-key`.
+
 ## 0.17.0 — Whose change is it
 
 Every `execute` and `fix` job on this machine came back `blocked`:

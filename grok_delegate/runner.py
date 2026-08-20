@@ -880,6 +880,7 @@ def commit_lane_work(
     *,
     branch: str,
     correlation_id: str,
+    paths: Sequence[str] | None = None,
     git_runner: GitRunner | None = None,
     timeout: float = 60.0,
 ) -> dict[str, Any]:
@@ -915,9 +916,24 @@ def commit_lane_work(
     if head.get("returncode") != 0 or str(head.get("stdout") or "").strip() != lane:
         return {"ok": False, "committed": False, "reason": "BRANCH_MISMATCH", "sha": None}
 
-    staged = git(["-C", str(wt), "add", "-A"], None, timeout)
+    # Stage what the worker was approved to write, not everything lying around.
+    # `add -A` put a foreign MCP server's log and two `__pycache__` blobs into a
+    # branch a human is meant to review -- files the acceptance gate had already
+    # named as somebody else's. Judging them foreign and committing them anyway
+    # was the bridge disagreeing with itself. With no attribution at all the old
+    # sweep stands, because then the gate judges every path and would block.
+    argv = ["-C", str(wt), "add", "-A"]
+    if paths:
+        argv += ["--", *[str(p) for p in paths]]
+    staged = git(argv, None, timeout)
     if staged.get("returncode") != 0 or staged.get("timedOut"):
         return {"ok": False, "committed": False, "reason": "ADD_FAILED", "sha": None}
+    if paths:
+        # Nothing of the worker's survived the filter: saying "committed" here
+        # would be the same lie in a smaller font.
+        pending = git(["-C", str(wt), "diff", "--cached", "--name-only"], None, timeout)
+        if not str(pending.get("stdout") or "").strip():
+            return {"ok": True, "committed": False, "reason": "NOTHING_TO_COMMIT", "sha": None}
 
     message = f"grok(lane): worker output for {str(correlation_id)[:120]}"
     done = git(

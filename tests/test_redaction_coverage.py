@@ -103,3 +103,39 @@ def test_a_registered_http_bearer_is_stripped_even_without_a_key_prefix() -> Non
         assert "<REDACTED>" in out
     finally:
         reset_secret_needles_for_tests()
+
+
+# --- the redactor is a hot path, and a worker chooses its input ------------------
+
+
+def test_redaction_does_not_blow_up_on_input_a_worker_could_choose() -> None:
+    """Catastrophic backtracking, caught by a suite that took two hours.
+
+    A first attempt at widening the key patterns wrapped the secret-word
+    alternation in `[A-Za-z0-9_.-]*` on both sides. One line of a diff went from
+    0.19ms to 34ms, and `redact_text` runs on every event and every line of
+    stderr -- the suite went from two minutes to 2:10:44 and stayed green the
+    whole way, which is how this nearly shipped.
+    """
+    import time
+
+    hostile = "\n".join(f"+    self.token_map[{i}] = compute({i})" for i in range(200))
+    started = time.perf_counter()
+    redact_text(hostile)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 1.0, f"8KB of ordinary diff took {elapsed:.2f}s; something backtracks"
+
+
+def test_redaction_cost_grows_with_the_input_not_faster() -> None:
+    """The property, rather than a millisecond count that rots on a slower box."""
+    import time
+
+    def cost(lines: int) -> float:
+        text = "\n".join(f"+ secret_looking_name_{i} = compute({i})" for i in range(lines))
+        started = time.perf_counter()
+        for _ in range(3):
+            redact_text(text)
+        return time.perf_counter() - started
+
+    small, large = cost(50), cost(400)
+    assert large < small * 40, f"8x the input cost {large / max(small, 1e-9):.0f}x the time"

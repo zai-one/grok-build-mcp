@@ -542,6 +542,13 @@ def run_task(
             cwd,
             branch=str(branch or ""),
             correlation_id=str(task.get("correlation_id") or jid),
+            # What the gate calls the worker's is what the lane gets. Anything
+            # else in the tree belongs to somebody else, and the branch a human
+            # reviews should not carry it.
+            paths=sorted(
+                {str(p) for p in (result.get("worker_written_files") or [])}
+                | {str(p) for p in (task.get("expected_artifacts") or [])}
+            ),
             git_runner=git_runner,
             timeout=min(float(task["timeout_seconds"]), 60.0),
         )

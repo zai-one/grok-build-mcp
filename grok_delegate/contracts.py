@@ -438,10 +438,97 @@ def bounded_event(event: Mapping[str, Any]) -> dict[str, Any]:
     return clean(dict(event))
 
 
+#: The name beside the value. Every one of these was found leaking by a skeptic
+#: reading real files a worker is allowed to read: `SECRET_KEY=` in a Django
+#: settings module, `AWS_SECRET_ACCESS_KEY=` in a compose file, `"api_key"` and
+#: `"client_secret"` in JSON. The old list wanted `secret` to stand alone, so a
+#: key that merely *contained* it walked straight through.
+#: Deciding "is this key a secret" in Python instead of in the pattern. The
+#: first version wrapped this alternation in `[A-Za-z0-9_.-]*` on both sides,
+#: which is two unbounded quantifiers around an alternation -- catastrophic
+#: backtracking. One line of a diff took 34ms and the test suite went from two
+#: minutes to two hours. `redact_text` runs on every event and every line of
+#: stderr, so this is the hot path, and a regex that can blow up on input a
+#: worker chooses does not belong in it.
+_SECRET_WORDS = re.compile(
+    r"(?:secret|passwd|password|api[_-]?key|apikey|access[_-]?key|private[_-]?key"
+    r"|access[_-]?token|refresh[_-]?token|auth[_-]?token|session[_-]?token|token"
+    r"|credential|cookie|server[_-]?key)",
+    re.IGNORECASE,
+)
+#: Bounded, and it cannot overlap what follows it, so matching stays linear.
+_KEY = r"[A-Za-z0-9_.\[\]-]{1,64}"
+
+
+def _looks_secret(name: str) -> bool:
+    return bool(_SECRET_WORDS.search(name))
+
+
+def _redact_assignments(text: str, pattern: re.Pattern[str], build) -> str:
+    """Substitute, but do not let an innocent key hide a guilty one behind it.
+
+    `re.sub` resumes after the whole match, so `URL: ws://host?server-key=x`
+    matched key=`URL` with the entire address as its value, decided `URL` is not
+    a secret, and skipped past `server-key=` without ever looking at it. Here a
+    key that is not a secret costs only its own length, and scanning continues
+    inside what it would have swallowed.
+    """
+    out: list[str] = []
+    pos = 0
+    while pos <= len(text):
+        match = pattern.search(text, pos)
+        if match is None:
+            break
+        key = match.group("key")
+        if _looks_secret(key):
+            out.append(text[pos:match.start()])
+            out.append(build(match))
+            pos = match.end()
+        else:
+            # Step past the name only, so the value stays available to the scan.
+            resume = match.start("key") + len(key)
+            out.append(text[pos:resume])
+            pos = resume
+    out.append(text[pos:])
+    return "".join(out)
+
+#: Each pattern carries its own replacement, because they no longer share a
+#: shape: the quoted one has to put the quotes back.
+#: `Authorization: Basic dXNlcjpwYXNz` used to lose only the word `Basic`,
+#: leaving base64 of user:password in the clear. Kept apart from the two below
+#: because the header name is fixed, so there is no key to judge.
+_AUTHORIZATION_PATTERN = re.compile(
+    r"(?i)(authorization\s*[:=]\s*)"
+    r"(?:bearer|basic|digest|token|negotiate|apikey)?\s*(?:[^\s,;}\]]+)"
+)
+
 _SECRET_TEXT_PATTERNS = (
-    re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer\s+)?)([^\s,}\]]+)"),
-    re.compile(r"(?i)((?:api[_-]?key|server[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret|cookie|client[_-]?secret)\s*[:=]\s*[\"']?)([^\s\"'&,}\]]+)"),
-    re.compile(r"(?i)([\"'](?:password|passwd|accessToken|refreshToken|clientSecret|cookie)[\"']\s*:\s*[\"'])([^\"']+)"),
+    # Quoted value: to the closing quote, so a passphrase does not survive from
+    # its second word onwards.
+    (
+        re.compile(r"([\"']?)(?P<key>" + _KEY + r")\1(\s*[:=]\s*)(?!//)([\"'])[^\"'\n]{3,}\4"),
+        lambda m: f"{m.group(1)}{m.group('key')}{m.group(1)}{m.group(3)}{m.group(4)}<REDACTED>{m.group(4)}",
+    ),
+    # Bare value: stops at a delimiter, never at a space alone. Parentheses are
+    # excluded and eight characters are required so the redactor stops eating
+    # code -- `token: str = ""` became `token: <REDACTED> = ""` and
+    # `password_hash = bcrypt(x)` lost its call, and a redactor that mangles the
+    # diff is one people turn off. A quoted value is still caught from three
+    # characters up by the pattern above.
+    (
+        # `(?!//)` stops a URL scheme reading as an assignment: in
+        # `ws://host?server-key=x` the key matched `ws` and its value swallowed
+        # the rest of the URL, so the real `server-key=` was never examined.
+        re.compile(r"(?P<key>" + _KEY + r")(\s*[:=]\s*)(?!//)([^\s\"'&,;}\]()\n]{8,})"),
+        lambda m: f"{m.group('key')}{m.group(2)}<REDACTED>",
+    ),
+)
+
+#: Vendor keys shaped `sk_live_…` / `pk_test_…`: an underscore where the older
+#: list assumed a dash, which is how a Stripe secret key read as ordinary text.
+_VENDOR_UNDERSCORE_KEY = re.compile(
+    r"(?<![A-Za-z0-9])[a-z]{2,4}_(?:live|test|prod)_[A-Za-z0-9]{16,}",
+    re.IGNORECASE | re.ASCII,
 )
 
 #: Credentials that carry their own prefix, so no `key=` context is needed to
@@ -467,8 +554,11 @@ _BARE_CREDENTIAL_PATTERN = re.compile(
 #: A password living in a URL rather than beside an `=`. The scheme and user are
 #: kept, because a receipt that says only <REDACTED> is harder to act on than one
 #: that says which service leaked.
+#: The user may be empty (`redis://:pass@host`), and the password may itself
+#: contain an `@` -- the old pattern stopped at the first one and leaked the
+#: tail. Anchored so the match ends at the *last* `@` before the host.
 _URL_USERINFO_PATTERN = re.compile(
-    r"(?i)\b([a-z][a-z0-9+.-]{1,31}://)([^\s:/@]{1,128}):([^\s/@]{1,256})@",
+    r"(?i)\b([a-z][a-z0-9+.-]{1,31}://)([^\s:/@]{0,128}):([^\s/]{1,256})@(?=[^\s/@]*(?:[/\s?#]|$))",
 )
 
 #: The same prefixes, wrapped onto the next line. A terminal breaking a long key
@@ -528,8 +618,10 @@ def redact_text(value: str) -> str:
     out = _WRAPPED_CREDENTIAL_PATTERN.sub("<REDACTED>", out)
     out = _BARE_CREDENTIAL_PATTERN.sub("<REDACTED>", out)
     out = _URL_USERINFO_PATTERN.sub(r"\1\2:<REDACTED>@", out)
-    for pattern in _SECRET_TEXT_PATTERNS:
-        out = pattern.sub(r"\1<REDACTED>", out)
+    out = _VENDOR_UNDERSCORE_KEY.sub("<REDACTED>", out)
+    out = _AUTHORIZATION_PATTERN.sub(r"\1<REDACTED>", out)
+    for pattern, build in _SECRET_TEXT_PATTERNS:
+        out = _redact_assignments(out, pattern, build)
     return out
 
 

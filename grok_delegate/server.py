@@ -1232,7 +1232,7 @@ def handle_tool_call(
             record = jobs.get_job(job_id)
             if record is None:
                 return typed_return(structured_error("JOB_UNKNOWN", f"unknown job_id: {job_id}"))
-            compact = _bounded_poll(compact_job_record(record), limit)
+            compact = _annotate_silence(_bounded_poll(compact_job_record(record), limit))
             return typed_return({"ok": True, **compact})
         listed = [compact_job_record(j) for j in jobs.list_jobs(limit=limit)]
         return typed_return({"ok": True, "jobs": listed, "economy": economy_enabled()})
@@ -1890,6 +1890,40 @@ def configure_durable_jobs(env: Mapping[str, str] | None = None) -> Path | None:
 #: produced -- and a finished job returned them twice, once at the top level and
 #: once nested inside ``result``.
 DEFAULT_POLL_EVENTS = 20
+
+
+def _annotate_silence(record: dict[str, Any]) -> dict[str, Any]:
+    """Say how long a running job has been quiet, and why if the CLI knows.
+
+    Silence used to be indistinguishable from work. It is the shape a provider
+    outage takes here: the CLI answers a 500 by retrying internally, emits
+    nothing over ACP, and an operator with no other signal cancels a job that
+    was only waiting its turn.
+    """
+    from datetime import datetime, timezone
+
+    from .worker_health import SILENCE_HINT_SECONDS, diagnose_worker
+
+    if record.get("state") != "running":
+        return record
+    events = record.get("events")
+    stamp = None
+    if isinstance(events, list) and events:
+        stamp = (events[-1] or {}).get("at") if isinstance(events[-1], dict) else None
+    if not stamp:
+        return record
+    try:
+        last = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        quiet = (datetime.now(timezone.utc) - last).total_seconds()
+    except (TypeError, ValueError):
+        return record
+    record["last_event_at"] = str(stamp)
+    record["quiet_for_s"] = round(max(0.0, quiet), 1)
+    if quiet >= SILENCE_HINT_SECONDS:
+        health = diagnose_worker(record.get("worker_pid"))
+        if health:
+            record["worker_health"] = health
+    return record
 
 
 def _bounded_poll(record: dict[str, Any], limit: int) -> dict[str, Any]:
