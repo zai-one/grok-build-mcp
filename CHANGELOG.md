@@ -28,6 +28,33 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## Unreleased
+
+### One call can now wait, and say that it is waiting
+
+A job runs for minutes on a thread inside this server, finishes, runs its
+verifier, commits its lane — and nothing wakes the host. `grok_agent_execute`
+hands back a `job_id` and the receipt sits in the registry until somebody thinks
+to ask again. From the other side of the pipe that is indistinguishable from
+nothing happening, which is a fair reason to prefer a terminal where output at
+least scrolls.
+
+`grok_agent_poll` takes `wait_seconds` (0–1800). With it the call blocks until
+the job is terminal and returns the finished receipt, emitting
+`notifications/progress` every five seconds with the job's phase and how long it
+has been in it. Absent or zero, the tool behaves exactly as before — nothing
+moved for anyone not asking.
+
+Progress goes out through the same framing the request arrived on, because this
+server speaks both `Content-Length` and line-delimited and writing the wrong one
+reaches nobody. The progress token is held for one dispatch and cleared in a
+`finally`, so it can never address a call the client has already been answered
+on. A notifier that raises — a client that closed its end — loses the progress
+and not the job.
+
+Whether a given client extends its own timeout on receiving progress is the
+client's business, and worth one experiment before relying on it.
+
 ## 0.22.0 — Promises the bridge can keep
 
 ### **Breaking:** the compat tools now honour the project opt-in

@@ -69,6 +69,7 @@ PROMISES: dict[str, str] = {
     "rules": "passed through to argv",
     "suggest_issue": "doctor output shape",
     "verbose": "doctor output shape",
+    "wait_seconds": "test_wait_blocks_until_terminal / test_wait_emits_progress",
 }
 
 

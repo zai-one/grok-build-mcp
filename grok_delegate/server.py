@@ -21,9 +21,10 @@ import logging
 import logging.handlers
 import os
 import sys
+import time
 import traceback
 from pathlib import Path
-from typing import Any, Mapping, Sequence, TextIO
+from typing import Any, Callable, Mapping, Sequence, TextIO
 
 # Allow package and flat execution.
 _HERE = Path(__file__).resolve().parent
@@ -491,11 +492,29 @@ def _agent_task_schema(*, require_role: bool, write_role: bool = False) -> dict[
     }
 
 
+#: Longest a single poll may block waiting for a job to finish. Bounded because
+#: the client, not this server, decides when a call has hung: a wait longer than
+#: the client's own patience returns nothing to anybody.
+MAX_POLL_WAIT_SECONDS = 1800
+#: How often a blocking poll tells the client it is still alive. Progress is the
+#: only thing separating "working" from "hung" on the other side of the pipe.
+POLL_PROGRESS_INTERVAL_SECONDS = 5.0
+
 _AGENT_POLL_SCHEMA = {
     "type": "object",
     "properties": {
         "job_id": {"type": "string", "maxLength": 128},
         "limit": {"type": "integer", "minimum": 1, "maximum": 64},
+        "wait_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": MAX_POLL_WAIT_SECONDS,
+            "description": (
+                "Block until the job reaches a terminal state, up to this many "
+                "seconds, emitting notifications/progress while it waits. 0 or "
+                "absent returns immediately, as before."
+            ),
+        },
     },
     "additionalProperties": False,
 }
@@ -1235,18 +1254,26 @@ def handle_tool_call(
         return typed_return({"ok": bool(report.get("ok")), "legacy": report, "runtime": runtime_status()})
 
     if name == TOOL_AGENT_POLL:
-        unknown = sorted(set(args) - {"job_id", "limit"})
+        unknown = sorted(set(args) - {"job_id", "limit", "wait_seconds"})
         if unknown:
             return typed_return(structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}"))
         try:
             limit = max(1, min(int(args.get("limit", DEFAULT_POLL_EVENTS)), 64))
         except (TypeError, ValueError):
             return typed_return(structured_error("LIMIT_INVALID", "limit must be an integer"))
+        try:
+            wait_seconds = max(0, min(int(args.get("wait_seconds") or 0), MAX_POLL_WAIT_SECONDS))
+        except (TypeError, ValueError):
+            return typed_return(
+                structured_error("WAIT_SECONDS_INVALID", "wait_seconds must be an integer")
+            )
         job_id = str(args.get("job_id") or "").strip()
         if job_id:
             record = jobs.get_job(job_id)
             if record is None:
                 return typed_return(structured_error("JOB_UNKNOWN", f"unknown job_id: {job_id}"))
+            if wait_seconds:
+                record = _await_job(job_id, wait_seconds) or record
             compact = _annotate_silence(_bounded_poll(compact_job_record(record), limit))
             # The budget is a promise about one poll, not about one mode. A live
             # audit came back at 17,725 characters here because compaction is
@@ -1787,6 +1814,90 @@ def _jsonrpc_error(req_id: Any, code: int, message: str) -> dict[str, Any]:
     }
 
 
+#: How the serve loop writes a frame the client did not ask for. The loop is
+#: single-threaded and answers one request at a time, so a plain module global
+#: is the whole story; it is installed by the loop because only the loop knows
+#: which framing this transport uses.
+_NOTIFIER: "Callable[[dict[str, Any]], None] | None" = None
+#: Progress token of the tools/call being served right now, or None. Set for the
+#: duration of one call and cleared after, so a stale token can never be used to
+#: address a request that has already been answered.
+_PROGRESS_TOKEN: Any = None
+
+
+def _await_job(job_id: str, wait_seconds: int) -> "dict[str, Any] | None":
+    """Block until this job is terminal, telling the client it is still alive.
+
+    A job that runs for minutes had to be started and then polled, because a
+    silent call of that length is indistinguishable from a hung server. That
+    cost the operator every bit of visibility: nothing wakes a host when the
+    worker finishes, so the receipt sits in the registry until somebody asks.
+    Waiting here, with progress on the wire, is what makes one call enough.
+
+    The wait is bounded and gives up quietly: a caller that runs out of patience
+    gets the running record back, exactly as an ordinary poll would have.
+    """
+    deadline = time.monotonic() + wait_seconds
+    started = time.monotonic()
+    record = jobs.get_job(job_id)
+    while record is not None and record.get("state") == jobs.STATE_RUNNING:
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(min(POLL_PROGRESS_INTERVAL_SECONDS, max(0.05, deadline - time.monotonic())))
+        record = jobs.get_job(job_id)
+        waited = time.monotonic() - started
+        emit_progress(
+            round(waited, 1),
+            float(wait_seconds),
+            f"{job_id}: {(record or {}).get('phase') or 'running'} for {waited:.0f}s",
+        )
+    return record
+
+
+def set_notifier(send: "Callable[[dict[str, Any]], None] | None") -> None:
+    """Install the callable the serve loop uses to write unsolicited frames."""
+    global _NOTIFIER
+    _NOTIFIER = send
+
+
+def progress_token_of(params: Mapping[str, Any] | None) -> Any:
+    """The client's progressToken for this request, if it asked for progress.
+
+    MCP puts it in ``params._meta.progressToken``. A client that omits it does
+    not want progress, and a server that sends it anyway is talking to nobody.
+    """
+    meta = (params or {}).get("_meta")
+    if isinstance(meta, Mapping):
+        token = meta.get("progressToken")
+        if isinstance(token, (str, int)):
+            return token
+    return None
+
+
+def emit_progress(progress: float, total: float | None = None, message: str | None = None) -> bool:
+    """Tell the client a long call is still working. True if anything was sent.
+
+    A tool call that runs for minutes looks identical to a hung server from the
+    other side, which is the whole reason a job had to be started and polled
+    instead of simply awaited. Progress is what makes waiting legible; without a
+    token from the client there is nobody to tell, and that is not an error.
+    """
+    send = _NOTIFIER
+    token = _PROGRESS_TOKEN
+    if send is None or token is None:
+        return False
+    payload: dict[str, Any] = {"progressToken": token, "progress": progress}
+    if total is not None:
+        payload["total"] = total
+    if message:
+        payload["message"] = str(message)[:500]
+    try:
+        send({"jsonrpc": "2.0", "method": "notifications/progress", "params": payload})
+    except Exception:  # noqa: BLE001 -- progress is a courtesy, never a failure
+        return False
+    return True
+
+
 def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
     """Handle one JSON-RPC request; returns response or None for notifications."""
     if message.get("jsonrpc") != "2.0":
@@ -1824,7 +1935,15 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
         arguments = params.get("arguments") if isinstance(params, dict) else {}
         if not name:
             return _jsonrpc_error(req_id, -32602, "tools/call requires name")
-        tool_result = handle_tool_call(str(name), arguments or {})
+        global _PROGRESS_TOKEN
+        _PROGRESS_TOKEN = progress_token_of(params)
+        try:
+            tool_result = handle_tool_call(str(name), arguments or {})
+        finally:
+            # Cleared even on the way out of an exception: a token belongs to
+            # one request, and reusing it afterwards addresses a call the client
+            # has already had its answer to.
+            _PROGRESS_TOKEN = None
         payload = {
             "content": [
                 {
@@ -2175,6 +2294,16 @@ def _serve_binary_stdio(inn: Any, out: Any) -> None:
                 # to the dispatcher would be an unknown-method error.
                 apply_roots_response(message)
                 continue
+            # Progress leaves through the same framing the request arrived on,
+            # and only the loop knows which that was. Installed for the length
+            # of one dispatch so a tool can never write to a finished call.
+            def _emit(payload: dict[str, Any]) -> None:
+                blob = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                header = f"Content-Length: {len(blob)}\r\n\r\n".encode("ascii")
+                out.write(header + blob if framed else blob + b"\n")
+                out.flush()
+
+            set_notifier(_emit)
             try:
                 response = handle_jsonrpc(message)
             except Exception as exc:  # noqa: BLE001
@@ -2184,6 +2313,8 @@ def _serve_binary_stdio(inn: Any, out: Any) -> None:
                     f"internal error: {type(exc).__name__}",
                 )
                 traceback.print_exc(file=sys.stderr)
+            finally:
+                set_notifier(None)
             followup = _roots_followup(message)
         for payload in (response, followup):
             if payload is None:
