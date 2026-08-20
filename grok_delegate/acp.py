@@ -244,6 +244,7 @@ class StdioACPTransport:
         tool_state: dict[str, dict[str, Any]] = {}
         session_id: str | None = None
         output_bytes = 0
+        denied_tool_calls = 0
         malformed = 0
         request_id = 0
         cancelled = False
@@ -283,7 +284,7 @@ class StdioACPTransport:
                 raise ACPError("ACP_DISCONNECTED", "agent stdin closed") from exc
 
         def await_response(wanted: int, phase: str) -> dict[str, Any]:
-            nonlocal output_bytes, malformed, session_id, cancelled, timed_out, cancel_deadline
+            nonlocal output_bytes, malformed, session_id, cancelled, timed_out, cancel_deadline, denied_tool_calls
             while True:
                 if reader_overflow.is_set():
                     raise ACPError("ACP_OUTPUT_LIMIT", "agent output exceeded reader or queue cap")
@@ -339,6 +340,13 @@ class StdioACPTransport:
                         message.get("params") or {}, tool_state
                     )
                     decision = permission_decision(permission_params, task, cwd)
+                    # A refused call is the worker reaching for something the
+                    # role was never going to be allowed. The caller cannot see
+                    # that from a receipt that only says what landed, and on
+                    # this CLI a refused write ends the turn -- so the count is
+                    # often the only trace of why a job stopped early.
+                    if _is_refusal(permission_params, decision):
+                        denied_tool_calls += 1
                     written.update(approved_write_paths(permission_params, decision, cwd))
                     send({"jsonrpc": "2.0", "id": message["id"], "result": {"outcome": decision}})
                     tool = ((message.get("params") or {}).get("toolCall") or {})
@@ -446,6 +454,7 @@ class StdioACPTransport:
                 "session_id": session_id,
                 "stop_reason": stop_reason,
                 "worker_written_files": sorted(written),
+                "denied_tool_calls": denied_tool_calls,
                 "summary": _redact_text("".join(text_chunks))[:16_000],
                 "tests": tests,
                 "events": events,
@@ -661,6 +670,7 @@ class WebSocketACPTransport:
         tool_state: dict[str, dict[str, Any]] = {}
         session_id: str | None = None
         output_bytes = 0
+        denied_tool_calls = 0
         malformed = 0
         cancelled = False
         cancel_deadline: float | None = None
@@ -692,7 +702,7 @@ class WebSocketACPTransport:
             ws.send_text(json.dumps(dict(message), ensure_ascii=False, separators=(",", ":")))
 
         def await_response(wanted: int, phase: str) -> dict[str, Any]:
-            nonlocal output_bytes, malformed, session_id, cancelled, timed_out, cancel_deadline, reconnect_used, ws
+            nonlocal output_bytes, malformed, session_id, cancelled, timed_out, cancel_deadline, reconnect_used, ws, denied_tool_calls
             while True:
                 if external_overflow is not None and external_overflow.is_set():
                     raise ACPError("ACP_OUTPUT_LIMIT", "managed daemon stderr exceeded configured cap")
@@ -771,6 +781,13 @@ class WebSocketACPTransport:
                         message.get("params") or {}, tool_state
                     )
                     decision = permission_decision(permission_params, task, cwd)
+                    # A refused call is the worker reaching for something the
+                    # role was never going to be allowed. The caller cannot see
+                    # that from a receipt that only says what landed, and on
+                    # this CLI a refused write ends the turn -- so the count is
+                    # often the only trace of why a job stopped early.
+                    if _is_refusal(permission_params, decision):
+                        denied_tool_calls += 1
                     written.update(approved_write_paths(permission_params, decision, cwd))
                     send({"jsonrpc": "2.0", "id": message["id"], "result": {"outcome": decision}})
                     tool = ((message.get("params") or {}).get("toolCall") or {})
@@ -836,6 +853,7 @@ class WebSocketACPTransport:
             return {
                 "status": status, "session_id": session_id, "stop_reason": stop_reason,
                 "worker_written_files": sorted(written),
+                "denied_tool_calls": denied_tool_calls,
                 "summary": _redact_text("".join(text_chunks))[:16_000], "tests": tests, "events": events,
                 "agent_version": agent_version, "worker_pid": worker_pid, "agent_pid": worker_pid,
                 "started_at": started, "finished_at": _utc_now(),
@@ -1117,6 +1135,23 @@ def _acp_failure(
         "finished_at": _utc_now(), "blocked_reason": code, "error": _redact_text(message),
         "stderr_preview": stderr_preview, "worker_alive_after_shutdown": False,
     }
+
+
+def _is_refusal(params: Mapping[str, Any], decision: Mapping[str, Any]) -> bool:
+    """Did the gate say no to this call?
+
+    Read off the option the gate selected rather than re-deciding, so the count
+    can never disagree with what was actually sent back. `cancelled` counts too:
+    the client offered no way to refuse politely, and the worker still did not
+    get what it asked for.
+    """
+    if decision.get("outcome") == "cancelled":
+        return True
+    chosen = decision.get("optionId")
+    for option in (params or {}).get("options") or []:
+        if option.get("optionId") == chosen:
+            return str(option.get("kind") or "").startswith("reject")
+    return False
 
 
 def _read_or_search_allowed(kind: str, raw: Mapping[str, Any], cwd: Path) -> bool:

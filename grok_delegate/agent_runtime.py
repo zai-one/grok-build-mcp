@@ -704,8 +704,12 @@ def _run_bridge_tests(
         try:
             argv = validated_test_argv(str(command), cwd)
         except Exception as exc:
+            # A command the gate would not accept was never run. Reporting that
+            # as `passed: False` told an orchestrator the suite is red, and two
+            # of those in a row send finished work to `blocked`.
             results.append({
-                "command": str(command)[:1_000], "passed": False, "returncode": None,
+                "command": str(command)[:1_000], "outcome": "not_run",
+                "not_run_reason": "invalid_command", "returncode": None,
                 "output_preview": "", "error": type(exc).__name__, "source": "bridge-verifier",
             })
             continue
@@ -716,13 +720,34 @@ def _run_bridge_tests(
             cancel_event,
         )
         output = redact_text(str(run.get("stdout") or "") + str(run.get("stderr") or ""))
-        results.append({
+        # "The suite is red" and "the suite never finished" are different facts,
+        # and a single boolean could not tell them apart: a cancel or a timeout
+        # leaves returncode None, which read as `passed: False` -- identical to
+        # a genuine failure. A live job did exactly that: four files changed,
+        # 51 tests passing in the lane by hand, and the receipt said the
+        # verifier failed. An orchestrator counting two such failures sends
+        # finished work to `blocked`.
+        #
+        # `passed` stays for readers that already exist, but only where it means
+        # something. When the run did not happen there is no boolean to give,
+        # and the field is absent rather than false.
+        result: dict[str, Any] = {
             "command": str(command)[:1_000],
-            "passed": run.get("returncode") == 0 and not run.get("timedOut") and not run.get("cancelled"),
             "returncode": run.get("returncode"),
             "output_preview": output[-2_000:],
             "source": "bridge-verifier",
-        })
+        }
+        if run.get("cancelled"):
+            result["outcome"] = "not_run"
+            result["not_run_reason"] = "cancelled"
+        elif run.get("timedOut"):
+            result["outcome"] = "not_run"
+            result["not_run_reason"] = "timeout"
+        else:
+            passed = run.get("returncode") == 0
+            result["outcome"] = "passed" if passed else "failed"
+            result["passed"] = passed
+        results.append(result)
     return results
 
 

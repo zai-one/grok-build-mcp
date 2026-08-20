@@ -411,7 +411,13 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
             if any(
                 isinstance(test, Mapping)
                 and str(test.get("command") or "") in expected_tests
-                and not bool(test.get("passed"))
+                # A run that never happened is not a run that failed. `passed`
+                # is now absent when the verifier was cancelled or timed out,
+                # and treating an absent boolean as False would turn "we never
+                # got to it" into a red suite -- the very confusion the
+                # outcome field was added to end.
+                and test.get("outcome", "failed" if not test.get("passed") else "passed")
+                == "failed"
                 for test in out["tests"]
             ):
                 status = "failed"

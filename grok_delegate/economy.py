@@ -126,6 +126,7 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
         "artifacts",
         "tests",
         "tests_skipped_reason",
+        "denied_tool_calls",
         "diffstat",
         "unified_diff",
         "started_at",
@@ -144,7 +145,8 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
         # that separates "what this run did" from "what is sitting in the lane".
         for key in ("status", "blocked_reason", "summary", "worktree_path", "branch",
                     "changed_files", "full_changed_files", "artifacts", "tests",
-                    "tests_skipped_reason", "diffstat", "unified_diff"):
+                    "tests_skipped_reason", "denied_tool_calls", "diffstat",
+                    "unified_diff"):
             if record.get(key) in (None, "", [], {}) and nested.get(key) not in (None, "", [], {}):
                 record[key] = nested[key]
 
@@ -170,14 +172,22 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
             for item in value[:16]:
                 if not isinstance(item, Mapping):
                     continue
-                slim.append(
-                    {
-                        "command": _clip(item.get("command"), 200),
-                        "passed": item.get("passed"),
-                        "returncode": item.get("returncode"),
-                        "source": item.get("source"),
-                    }
-                )
+                # `outcome` travels or the distinction it exists for dies here:
+                # a compact poll that kept only `passed` would hand the host
+                # `passed: None` for a run that never happened, which is the
+                # same ambiguity in a new place. `passed` is copied only when
+                # the row has one.
+                row = {
+                    "command": _clip(item.get("command"), 200),
+                    "returncode": item.get("returncode"),
+                    "source": item.get("source"),
+                }
+                for field in ("outcome", "not_run_reason"):
+                    if item.get(field) is not None:
+                        row[field] = item[field]
+                if "passed" in item:
+                    row["passed"] = item["passed"]
+                slim.append(row)
             out[key] = slim
         elif key == "diffstat":
             out[key] = _clip(value, 800)

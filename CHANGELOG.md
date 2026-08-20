@@ -30,6 +30,32 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ## Unreleased
 
+### A verifier run that never happened is no longer reported as a failure
+
+`passed` was computed as `returncode == 0 and not timedOut and not cancelled`. A
+cancel or a timeout leaves `returncode` None, so both arrived as `passed: false`
+— indistinguishable on the wire from a suite that genuinely failed. A live job
+did exactly that: four files changed, fifty-one tests passing in the lane when
+run by hand, and a receipt saying the verifier failed. An orchestrator counting
+two such failures sends finished work to `blocked`.
+
+A verifier row now carries `outcome`: `passed`, `failed`, or `not_run`, with
+`not_run_reason` naming `cancelled`, `timeout` or `invalid_command`. `passed`
+stays for existing readers but only where it means something — when the run did
+not happen the field is **absent**, not false. The acceptance gate reads
+`outcome`, so a cancelled verifier is `TEST_EVIDENCE_MISSING` (which it is)
+rather than `TEST_FAILED` (which it is not), and a receipt written before this
+field judges exactly as it did.
+
+### `denied_tool_calls` says the worker reached for something it could not have
+
+A refused call is the only trace of a worker going somewhere its role was never
+allowed, and on this CLI a refused write ends the turn — so the count is often
+the only explanation for a job that stopped early with nothing to show. Both
+transports now report it, and it survives a compact poll. It is read off the
+option the gate actually selected, so the number cannot disagree with what was
+sent back.
+
 ### One call can now wait, and say that it is waiting
 
 A job runs for minutes on a thread inside this server, finishes, runs its
