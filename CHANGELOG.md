@@ -35,10 +35,17 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 `GIT_TIMEOUT` on `git --version` read as a broken git, and the search went to
 antivirus. Spawn is what costs 500× under GIL contention (`Popen(['git','--version'])`
 median of 8: idle 7.1ms vs 3258.7ms with 16 bytecode threads; sleeping threads
-6.5ms). Probes now retry once before failing, the structured error carries
-`spawn_seconds` and names that measurement, and `git --version` is cached for
-the process lifetime so every lane does not pay a spawn for a binary that has
-not changed. Checkout (`git worktree add`) is not retried.
+6.5ms). Probes now retry once before failing. The structured error carries
+`spawn_seconds` and names that measurement only when spawn itself was slow
+enough to match it (1s floor; a hung git that spawned in milliseconds is a
+timeout without a cause). A successful `git --version` is cached for the
+process lifetime so every lane does not pay a spawn for a binary that has
+not changed; a failed probe is not cached, because installing git after
+startup, or one transient error, used to pin `GIT_MISSING` for the rest of a
+long-lived server. Checkout (`git worktree add`) is not retried, and the
+settle loop that watches a timed-out checkout does not retry either — it is
+already a loop. `_spawn_git` kills the child on any exception from
+`communicate`, not only `TimeoutExpired`.
 
 ---
 

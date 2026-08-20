@@ -8,15 +8,19 @@ GIL-holding threads (sleeping threads 6.5ms). Spawn, not the child.
 
 from __future__ import annotations
 
+import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Sequence
 
 import pytest
 
-from grok_delegate import runner
+from grok_delegate import agent_runtime, runner
+from grok_delegate.contracts import validate_task_packet
 
 
 STARVED_SPAWN_SECONDS = 3.2587
+IDLE_SPAWN_SECONDS = 0.0071
 
 
 class ProbeGit:
@@ -239,3 +243,270 @@ def test_version_cache_returns_without_spawning_twice(tmp_path: Path) -> None:
     third = runner.cached_git_version(fake, None, 5.0, binary=binary)
     assert third["stdout"] == "git version 2.45.0\n"
     assert calls == [["--version"], ["--version"]]
+
+
+def _ok_version() -> dict[str, Any]:
+    return {
+        "args": ["--version"],
+        "returncode": 0,
+        "stdout": "git version 2.45.0\n",
+        "stderr": "",
+        "timedOut": False,
+        "spawn_seconds": IDLE_SPAWN_SECONDS,
+    }
+
+
+def _scripted_spawn(responses: list[dict[str, Any]]):
+    calls: list[list[str]] = []
+
+    def fake(
+        args: Sequence[str], cwd: Path | None, timeout: float
+    ) -> dict[str, Any]:
+        argv = [str(a) for a in args]
+        calls.append(argv)
+        if not responses:
+            raise AssertionError(f"spawned past the scripted responses: {argv}")
+        return responses.pop(0)
+
+    return fake, calls
+
+
+def test_version_cache_does_not_remember_a_failure(tmp_path: Path) -> None:
+    """A long-lived server must retry a failed probe; git can appear after startup."""
+    missing_bin = str(tmp_path / "missing" / "git")
+    fake, calls = _scripted_spawn(
+        [
+            {
+                "args": ["--version"],
+                "returncode": 127,
+                "stdout": "",
+                "stderr": "git not found",
+                "timedOut": False,
+                "missing": True,
+                "spawn_seconds": 0.001,
+            },
+            _ok_version(),
+        ]
+    )
+    first = runner.cached_git_version(fake, None, 5.0, binary=missing_bin)
+    second = runner.cached_git_version(fake, None, 5.0, binary=missing_bin)
+    third = runner.cached_git_version(fake, None, 5.0, binary=missing_bin)
+    assert first.get("missing") is True
+    assert second.get("returncode") == 0
+    assert third.get("stdout") == "git version 2.45.0\n"
+    assert calls == [["--version"], ["--version"]]
+
+    nonzero_bin = str(tmp_path / "broken" / "git")
+    fake2, calls2 = _scripted_spawn(
+        [
+            {
+                "args": ["--version"],
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "fatal: broken",
+                "timedOut": False,
+                "spawn_seconds": 0.001,
+            },
+            _ok_version(),
+        ]
+    )
+    assert runner.cached_git_version(fake2, None, 5.0, binary=nonzero_bin).get(
+        "returncode"
+    ) == 1
+    assert runner.cached_git_version(fake2, None, 5.0, binary=nonzero_bin).get(
+        "returncode"
+    ) == 0
+    assert calls2 == [["--version"], ["--version"]]
+
+
+def test_probe_timeout_twice_without_slow_spawn_does_not_claim_starvation(
+    tmp_path: Path,
+) -> None:
+    """A hung git that spawned in milliseconds is a timeout, not GIL starvation."""
+    git = ProbeGit(
+        timeout_remaining={"--version": 2},
+        spawn_seconds=IDLE_SPAWN_SECONDS,
+        branch="grok/probe",
+    )
+    result = _prepare(tmp_path, git)
+    assert result.get("ok") is False
+    assert result.get("error") == "GIT_TIMEOUT"
+    assert result.get("retried") is True
+    assert result.get("spawn_seconds") == IDLE_SPAWN_SECONDS
+    assert "known_cause" not in result
+    assert "spawn_measurement" not in result
+    assert IDLE_SPAWN_SECONDS < runner.GIT_SPAWN_STARVATION_MIN_SECONDS
+    assert STARVED_SPAWN_SECONDS >= runner.GIT_SPAWN_STARVATION_MIN_SECONDS
+
+
+def _settle_poll_count() -> int:
+    waited = 0.0
+    polls = 0
+    while True:
+        polls += 1
+        if waited >= runner.CHECKOUT_SETTLE_GRACE_SECONDS:
+            break
+        waited += runner.CHECKOUT_SETTLE_POLL_SECONDS
+    return polls
+
+
+def test_settle_loop_does_not_retry_probes(tmp_path: Path) -> None:
+    """Settle is already a loop; retrying inside it multiplies a hung git past the job budget."""
+    git = ProbeGit(
+        timeout_remaining={"add": 1, "list": 10_000},
+        branch="grok/probe",
+        locked=True,
+        create_target=True,
+    )
+    result = _prepare(tmp_path, git)
+    assert result.get("error") == "GIT_TIMEOUT"
+    assert result.get("step") == "worktree add"
+    list_calls = sum(
+        1 for argv in git.calls if "worktree" in argv and "list" in argv
+    )
+    polls = _settle_poll_count()
+    assert list_calls == polls
+    assert _count(git.calls, "add") == 1
+
+
+@pytest.mark.parametrize("exc_type", [OSError, KeyboardInterrupt])
+def test_spawn_git_kills_the_child_when_communicate_raises(
+    monkeypatch: pytest.MonkeyPatch, exc_type: type[BaseException]
+) -> None:
+    """subprocess.run killed on any exception; TimeoutExpired was not the only path."""
+
+    class Child:
+        def __init__(self) -> None:
+            self.killed = False
+            self.returncode = None
+            self.pid = 4242
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            raise exc_type("pipe closed" if exc_type is OSError else "")
+
+        def kill(self) -> None:
+            self.killed = True
+
+    child = Child()
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: child)
+    with pytest.raises(exc_type):
+        runner._spawn_git(["status"], None, 5.0)
+    assert child.killed is True
+
+
+def test_default_git_runner_does_not_cache_a_failed_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """default_git_runner is the production cache path; injected ProbeGit never reaches it."""
+    binary = str(tmp_path / "prod-git.exe")
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: binary)
+    fake, calls = _scripted_spawn(
+        [
+            {
+                "args": ["--version"],
+                "returncode": 127,
+                "stdout": "",
+                "stderr": "git not found",
+                "timedOut": False,
+                "missing": True,
+                "spawn_seconds": 0.001,
+            },
+            _ok_version(),
+        ]
+    )
+    monkeypatch.setattr(runner, "_spawn_git", fake)
+    first = runner.default_git_runner(["--version"], None, 5.0)
+    second = runner.default_git_runner(["--version"], None, 5.0)
+    third = runner.default_git_runner(["--version"], None, 5.0)
+    assert first.get("missing") is True
+    assert second.get("returncode") == 0
+    assert third.get("stdout") == "git version 2.45.0\n"
+    assert calls == [["--version"], ["--version"]]
+
+
+def test_agent_runtime_git_runner_does_not_cache_a_failed_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The write-role runner in agent_runtime is the other production cache path."""
+    captured: dict[str, Any] = {}
+
+    def fake_ensure(root: Path, git_runner=None, timeout: float = 30.0):
+        captured["git"] = git_runner
+        return {
+            "ok": True,
+            "ignored": True,
+            "written": False,
+            "reason": "ALREADY_IGNORED",
+        }
+
+    def fake_prepare(**kwargs: Any) -> dict[str, Any]:
+        captured["git"] = kwargs.get("git_runner") or captured.get("git")
+        return {"ok": False, "error": "STOP_FOR_TEST", "message": "stop"}
+
+    monkeypatch.setattr(agent_runtime, "ensure_lane_dir_ignored", fake_ensure)
+    monkeypatch.setattr(agent_runtime, "prepare_worktree", fake_prepare)
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    task = validate_task_packet(
+        {
+            "objective": "capture the write-role git runner",
+            "role": "execute",
+            "project_root": str(root),
+            "permission_profile": "workspace",
+            "max_turns": 5,
+            "timeout_seconds": 30,
+            "inputs": [],
+            "constraints": [],
+            "acceptance_criteria": [],
+            "expected_artifacts": ["expected.txt"],
+            "correlation_id": "cache-wiring",
+            "test_commands": ["python -m pytest -q"],
+        },
+        allowed_roots=[root],
+    )
+    agent_runtime.run_task(
+        task,
+        transport="stdio",
+        lane="cache-wiring",
+        router=agent_runtime.TransportRouter(
+            grok_bin="grok", adapters={"stdio": object()}
+        ),
+        cancel_event=threading.Event(),
+    )
+    git = captured.get("git")
+    assert git is not None
+
+    responses = [
+        {
+            "returncode": 127,
+            "stdout": "",
+            "stderr": "binary not found",
+            "timedOut": False,
+            "missing": True,
+            "spawn_seconds": 0.001,
+        },
+        {
+            "returncode": 0,
+            "stdout": "git version 2.45.0\n",
+            "stderr": "",
+            "timedOut": False,
+            "spawn_seconds": IDLE_SPAWN_SECONDS,
+        },
+    ]
+    owned_calls: list[list[str]] = []
+
+    def fake_owned(argv, cwd, timeout, cancel_event):
+        owned_calls.append([str(a) for a in argv])
+        if not responses:
+            raise AssertionError("spawned past the scripted responses")
+        return responses.pop(0)
+
+    monkeypatch.setattr(agent_runtime, "_run_owned_process", fake_owned)
+    first = git(["--version"], root, 5.0)
+    second = git(["--version"], root, 5.0)
+    third = git(["--version"], root, 5.0)
+    assert first.get("missing") is True
+    assert second.get("returncode") == 0
+    assert third.get("stdout") == "git version 2.45.0\n"
+    assert len(owned_calls) == 2

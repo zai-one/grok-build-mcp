@@ -28,7 +28,6 @@ from .contracts import build_prompt, finalize_receipt, redact_text, validate_tas
 from .guard import GuardError, normalize_lane, structured_error, validate_grok_bin
 from .runner import (
     GitRunner,
-    cached_git_version,
     collect_diff,
     commit_lane_work,
     delegate,
@@ -37,6 +36,7 @@ from .runner import (
     is_hidden_inside,
     is_path_inside,
     prepare_worktree,
+    spawn_or_cached_version,
 )
 
 _CONCURRENCY = max(1, min(int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "1") or "1"), 2))
@@ -338,16 +338,16 @@ def run_task(
         def git_runner(
             args: Sequence[str], process_cwd: Path | str | None, timeout: float
         ) -> dict[str, Any]:
-            argv = [str(value) for value in args]
-            cwd_path = Path(process_cwd or root)
-            if argv == ["--version"]:
-                # git.exe does not change while this process lives. Skip a
-                # spawn that is 500x slower when other threads hold the GIL
-                # (measured: idle 7.1ms vs 3258.7ms, 16 bytecode threads).
-                return cached_git_version(
-                    _spawn_owned_git, cwd_path, float(timeout), binary=git_exe
-                )
-            return _spawn_owned_git(args, cwd_path, float(timeout))
+            # Same cache+spawn entry as default_git_runner: a successful
+            # --version is 500x cheaper than a GIL-starved Popen (idle
+            # 7.1ms vs 3258.7ms); a failed probe must not stick forever.
+            return spawn_or_cached_version(
+                _spawn_owned_git,
+                args,
+                Path(process_cwd or root),
+                float(timeout),
+                binary=git_exe,
+            )
 
         # The lane lives under the project's dot-directory, so git has to be
         # told to ignore it before the checkout appears -- otherwise the
