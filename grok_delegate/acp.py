@@ -1119,6 +1119,13 @@ def _acp_failure(
     }
 
 
+def _read_or_search_allowed(kind: str, raw: Mapping[str, Any], cwd: Path) -> bool:
+    """A read must name a file; a search may name only what it is looking for."""
+    if kind == "search":
+        return _search_scoped_to_cwd(raw, cwd)
+    return _paths_confined(raw, cwd)
+
+
 def permission_decision(
     params: Mapping[str, Any],
     task: Mapping[str, Any],
@@ -1147,11 +1154,11 @@ def permission_decision(
             and _command_allowed(command, cwd)
         )
     elif task.get("permission_profile") == "read-only":
-        permitted = kind in {"read", "search"} and _paths_confined(raw, cwd)
+        permitted = kind in {"read", "search"} and _read_or_search_allowed(kind, raw, cwd)
     elif kind in {"edit", "write"}:
         permitted = _paths_confined(raw, cwd)
     elif kind in {"read", "search"}:
-        permitted = _paths_confined(raw, cwd)
+        permitted = _read_or_search_allowed(kind, raw, cwd)
 
     choice = allow if permitted else reject
     if choice is None:
@@ -1195,21 +1202,37 @@ def assert_safe_acp_argv(argv: Sequence[str]) -> None:
 
 
 _FORBIDDEN_COMMAND = re.compile(
-    r"(?i)(?:^|[;&|]\s*)git\s+(?:push|merge|pull|rebase|reset|clean|checkout)|"
-    r"(?:remove-item|del|erase|rmdir|rm)\b|"
-    r"(?:auth\.json|credentials?|oauth|api[_-]?key)|"
+    # A command name is only a command where a command can start. Unanchored,
+    # `rm\b` also matched `tests/test_form.py`, `del\b` matched `src/model.py`,
+    # and `ssh\b` matched `tests/test_ssh.py` -- so a declared test command with
+    # an ordinary filename was denied, and a denial can end the worker's turn.
+    # `;&|` never survive `_command_allowed`, but they stay here because this
+    # pattern is also read on its own.
+    r"(?i)(?:^|[;&|]\s*)(?:"
+    r"git\s+(?:push|merge|pull|rebase|reset|clean|checkout)|"
+    r"remove-item|rmdir|rm|del|erase|"
+    r"invoke-webrequest|curl|wget|ssh|scp"
+    r")\b|"
     # Secret-bearing names, in whatever shape a reader can name them. Path
     # confinement does not help here: `.env` carries no separator, so it never
     # looked like a path at all, and `git show HEAD:.env` hides it behind a
     # revision. Both were accepted by every other check in this gate.
-    r"(?:^|[\s:=/\\\"'])\.env(?:\.|\b)|"
-    r"(?:id_[rd]sa|\.pem\b|\.pfx\b|\.p12\b|\.npmrc\b|\.pypirc\b)|"
-    r"(?:invoke-webrequest|curl|wget|ssh|scp)\b"
+    #
+    # These need a separator in front for the same reason the command names need
+    # an anchor: `oauth` and `credentials` are ordinary words inside ordinary
+    # test filenames, and `tests/test_oauth.py` is not a credential.
+    r"(?:^|[\s:=/\\\"'])(?:\.env(?:\.|\b)|auth\.json\b|credentials?\b|oauth\b|api[_-]?key)|"
+    # Suffixes and names that are never part of an innocent word, so they stay
+    # unanchored: nothing legitimate contains `.pem` or `id_rsa` by accident.
+    r"(?:id_[rd]sa|\.pem\b|\.pfx\b|\.p12\b|\.npmrc\b|\.pypirc\b)"
 )
 _ALLOWED_COMMAND = re.compile(
     r"(?i)^\s*(?:"
     # Absolute or bare Python launcher + module runner (posix + Windows).
-    r"(?:\S*[\\/])?(?:py(?:thon\d*)?(?:\.exe)?(?:\s+-\d+)?)\s+-m\s+(?:pytest|unittest)\b|"
+    # `py -3.12` is how the Windows launcher is told a minor version, and it was
+    # refused while `py -3` passed -- an operator pinning an interpreter got a
+    # denial with nothing to say why.
+    r"(?:\S*[\\/])?(?:py(?:thon\d*(?:\.\d+)?)?(?:\.exe)?(?:\s+-\d+(?:\.\d+)?)?)\s+-m\s+(?:pytest|unittest)\b|"
     r"pytest\b|npm(?:\.cmd)?\s+(?:test|run\s+test)\b|pnpm\s+test\b|"
     r"cargo\s+test\b|go\s+test\b|dotnet\s+test\b|"
     # Read-only git. `ls-files` is here because a real audit job died on it:
@@ -1263,7 +1286,10 @@ def _interpreter_inside_worktree(token: str, root: Path) -> bool:
         except (OSError, ValueError, RuntimeError):
             return False
         return True
-    return any((root / (text + suffix)).exists() for suffix in _EXECUTABLE_SUFFIXES)
+    # `is_file`, not `exists`: a *directory* named `go` or `py` cannot be run,
+    # and treating one as a planted interpreter refused `go test ./...` in a
+    # layout that has such a directory for entirely ordinary reasons.
+    return any((root / (text + suffix)).is_file() for suffix in _EXECUTABLE_SUFFIXES)
 
 
 def _command_paths_confined(command: str, cwd: Path) -> bool:
@@ -1280,8 +1306,13 @@ def _command_paths_confined(command: str, cwd: Path) -> bool:
         return False
     for raw in tokens[1:]:
         token = raw.strip("\"'")
-        if "=" in token:
+        # `-o addopts=--rootdir=../outside` splits once into another flag, and a
+        # value that still starts with `-` was skipped as "not a path" with the
+        # real path hidden one `=` further along. Keep unwrapping.
+        while "=" in token:
             token = token.split("=", 1)[1].strip("\"'")
+            if not token.startswith("-"):
+                break
         token = token.split("::", 1)[0]
         # `C:secret.py` is drive-relative: it names the process's own directory
         # on drive C, which is not the worktree and is nowhere near it. The
@@ -1397,6 +1428,55 @@ def _win_name(part: str) -> str:
     return head.rstrip(". ").casefold()
 
 
+#: Names a worker may not read even inside its own worktree. The command gate
+#: has refused `id_rsa` since it was written and this list did not, so the same
+#: private key was denied to `git show` and handed over by an ordinary read --
+#: while AGENTS.md promised both. Two lists for one rule is how that happened;
+#: they are still two lists, because one covers command strings and the other
+#: covers resolved paths, but they now agree on what a secret is.
+_SECRET_NAMES = frozenset({
+    "auth.json", "credentials.json", "credentials", ".env", ".npmrc", ".pypirc",
+    ".netrc", "_netrc", ".git-credentials", ".htpasswd", ".pgpass",
+})
+
+
+#: Where a search says *what* to look for rather than *where*. A grep or glob
+#: with no path operates in the session's own directory by definition.
+_SEARCH_KEYS = ("pattern", "glob", "query", "regex", "search", "include", "globs")
+
+#: A pattern that reaches out of the directory it is run in, in any spelling.
+_PATTERN_ESCAPE = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)|^[A-Za-z]:|^[\\/]|^~")
+
+
+def _search_scoped_to_cwd(raw: Mapping[str, Any], cwd: Path) -> bool:
+    """Judge a search that names a pattern instead of a path.
+
+    `build_prompt` tells every worker that "reading and searching files is
+    always allowed", and then `_paths_confined` refused any request carrying no
+    path key at all -- which is what a repo-wide grep or glob looks like. The
+    worker was denied the one operation it had been promised, and a denial the
+    client cannot offer a way past ends the turn: the job comes back
+    `ACP_STOP_cancelled` after a single opening sentence.
+
+    A pattern still has to stay in the worktree. `../` in any spelling, a drive
+    letter, a UNC prefix and `~` are refused, and a pattern that goes looking for
+    a secret by name is refused for the same reason reading one is.
+    """
+    if any(raw.get(key) for key in _PATH_KEYS):
+        return _paths_confined(raw, cwd)
+    values = [str(raw.get(key)) for key in _SEARCH_KEYS if raw.get(key)]
+    if not values:
+        return False
+    for text in values:
+        if _PATTERN_ESCAPE.search(text.strip().strip("\"'")):
+            return False
+        tail = _win_name(re.split(r"[\\/]", text.strip().strip("\"'"))[-1])
+        if tail in _SECRET_NAMES or tail.startswith((".env", "id_rsa", "id_dsa", "id_ecdsa",
+                                                     "id_ed25519")):
+            return False
+    return True
+
+
 def _paths_confined(raw: Mapping[str, Any], cwd: Path) -> bool:
     candidates = [raw.get(key) for key in _PATH_KEYS if raw.get(key)]
     if not candidates:
@@ -1413,8 +1493,9 @@ def _paths_confined(raw: Mapping[str, Any], cwd: Path) -> bool:
         # pathlib suffix that is not `.pem`, and Windows opens the key anyway.
         normalised_name = _win_name(candidate.name)
         if (
-            lowered_parts & {"auth.json", "credentials.json", ".env", ".npmrc", ".pypirc"}
-            or normalised_name.startswith(".env.")
+            lowered_parts & _SECRET_NAMES
+            or normalised_name.startswith((".env.", "id_rsa", "id_dsa", "id_ecdsa",
+                                           "id_ed25519"))
             or normalised_name.endswith((".pem", ".p12", ".pfx", ".key"))
         ):
             return False

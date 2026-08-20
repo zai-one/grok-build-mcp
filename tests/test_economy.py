@@ -60,7 +60,11 @@ def test_compact_job_record(monkeypatch: pytest.MonkeyPatch) -> None:
     assert compact["economy_compact"] is True
     assert len(compact["summary"]) <= 1501
     assert len(compact["changed_files"]) == 24
-    assert len(compact["events"]) == 4
+    # Per-field caps keep the four newest events; the record budget then takes
+    # them back first, because on the poll that is fat enough to need trimming --
+    # the final one, the only one carrying a diff -- events are the field a host
+    # can most afford to lose and the diff is what it came for.
+    assert 1 <= len(compact["events"]) <= 4
     assert "output_preview" not in compact["tests"][0]
     assert "secret_field" not in compact
     assert compact["worktree_path"] == "/tmp/grok/lane"

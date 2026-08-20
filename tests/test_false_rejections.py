@@ -225,3 +225,140 @@ def test_a_created_file_arrives_with_its_contents(monkeypatch, tmp_path) -> None
     assert receipt["status"] == "completed", receipt.get("blocked_reason")
     assert receipt["lane_commit"]["committed"] is True
     assert "BRAND NEW CONTENT" in receipt["unified_diff"], "the host must be able to read the work"
+
+
+# --- what the 2026-08-20 audit routine found in the command gate ----------------
+#
+# `py -3 scripts/routines.py --only audit.security` handed Grok the gate and
+# asked it to find a spelling that gets past it, and a legitimate operation it
+# refuses by mistake. Everything below is the second kind, reproduced before it
+# was believed. A denied test command is not a harmless no: the denial can end
+# the worker's turn, so the job pays for the whole cycle and returns nothing.
+
+
+@pytest.fixture()
+def worktree(tmp_path: Path) -> Path:
+    (tmp_path / "tests").mkdir()
+    for name in ("test_app.py", "test_form.py", "test_transform.py", "model.py",
+                 "test_ssh.py", "test_oauth.py", "test_curl.py", "test_credentials.py"):
+        (tmp_path / "tests" / name).write_text("", encoding="utf-8")
+    return tmp_path.resolve()
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["tests/test_form.py", "tests/test_transform.py", "tests/model.py",
+     "tests/test_ssh.py", "tests/test_oauth.py", "tests/test_curl.py",
+     "tests/test_credentials.py"],
+)
+def test_an_ordinary_filename_is_not_a_forbidden_command(path: str, worktree: Path) -> None:
+    """`rm`, `del`, `ssh` and `oauth` were matched anywhere in the string.
+
+    So `pytest tests/test_form.py` was refused for containing `rm`, and
+    `tests/model.py` for containing `del`. Both are names any repository has.
+    """
+    from grok_delegate.acp import _command_allowed
+
+    assert _command_allowed(f"py -3 -m pytest {path}", worktree) is True, path
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["rm -rf tests", "rmdir tests", "del tests", "ssh user@host", "curl http://x",
+     "wget http://x", "git push origin main", "git reset --hard"],
+)
+def test_a_forbidden_command_is_still_forbidden(command: str, worktree: Path) -> None:
+    from grok_delegate.acp import _command_allowed
+
+    assert _command_allowed(command, worktree) is False, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["git show HEAD:.env", "Get-Content id_rsa", "Get-Content key.pem",
+     "Get-Content auth.json", "Get-Content credentials.json", "Get-Content .npmrc"],
+)
+def test_a_secret_by_name_is_still_refused(command: str, worktree: Path) -> None:
+    """Anchoring the command names must not loosen the file names beside them."""
+    from grok_delegate.acp import _command_allowed
+
+    assert _command_allowed(command, worktree) is False, command
+
+
+def test_the_windows_launcher_may_name_a_minor_version(worktree: Path) -> None:
+    """`py -3` passed and `py -3.12` did not, which is how an operator pins one."""
+    from grok_delegate.acp import _command_allowed
+
+    assert _command_allowed("py -3.12 -m pytest tests", worktree) is True
+
+
+def test_a_directory_is_not_a_planted_interpreter(worktree: Path) -> None:
+    """argv[0] is refused when the worker could have written that file.
+
+    The check asked whether the name `exists`, and a *directory* named `go` --
+    which no operating system will execute -- made `go test ./...` look like a
+    worker handing the verifier its own binary.
+    """
+    from grok_delegate.acp import _command_allowed
+
+    (worktree / "go").mkdir()
+    assert _command_allowed("go test ./...", worktree) is True
+
+
+def test_a_real_planted_interpreter_is_still_refused(worktree: Path) -> None:
+    """The inverted rule that matters: argv[0] must stay OUT of the worktree."""
+    from grok_delegate.acp import _command_allowed
+
+    (worktree / "go").write_text("#!/bin/sh\n", encoding="utf-8")
+    assert _command_allowed("go test ./...", worktree) is False
+
+
+def test_a_path_hidden_one_equals_further_along_is_still_confined(worktree: Path) -> None:
+    """`-o addopts=--rootdir=../outside` split once into another flag.
+
+    The value still started with `-`, so it was skipped as "not a path" while the
+    real path sat one `=` further along.
+    """
+    from grok_delegate.acp import _command_allowed
+
+    assert _command_allowed(
+        "py -3 -m pytest -o addopts=--rootdir=../outside", worktree
+    ) is False
+
+
+# --- the turn a refused write costs -----------------------------------------------
+
+
+def test_a_read_only_worker_is_told_it_cannot_write() -> None:
+    """The one failure no gate change can prevent, so the prompt has to.
+
+    `evidence/live-acp/session-permission-cancel.jsonl`, captured on the
+    operator's own machine: the worker asked to edit a file, the bridge answered
+    `reject_once` -- the correct, non-fatal answer -- and the CLI sent
+    `session/cancel` regardless. `stopReason` came back `cancelled`, the receipt
+    said `ACP_STOP_cancelled`, and the job delivered one opening sentence while
+    the CLI's own log recorded a successful inference.
+
+    A read-only role can never legally write, so every write it attempts costs
+    the whole turn. The only defence is that it never reaches for one.
+    """
+    from grok_delegate.contracts import build_prompt
+
+    for role in ("consult", "skeptic"):
+        prompt = build_prompt({
+            "objective": "Review this.", "role": role, "permission_profile": "read-only",
+        })
+        assert "cannot create, modify" in prompt, role
+        assert "ends the whole turn" in prompt, role
+        assert "IS the deliverable" in prompt, role
+
+
+def test_a_write_role_is_not_told_it_cannot_write() -> None:
+    from grok_delegate.contracts import build_prompt
+
+    prompt = build_prompt({
+        "objective": "Add mul.", "role": "execute", "permission_profile": "workspace",
+        "expected_artifacts": ["app.py"], "test_commands": ["py -3 -m pytest tests -q"],
+    })
+    assert "cannot create, modify" not in prompt
+    assert "Make the requested file change now." in prompt

@@ -194,3 +194,46 @@ def test_a_poll_does_not_get_more_expensive_the_longer_a_job_runs() -> None:
 def test_the_ceiling_is_low_enough_to_poll_in_a_loop() -> None:
     """A navigator polls repeatedly; the unit of cost is one poll, not one job."""
     assert _size(1_000) < 16_384, "a single poll should not eat a page of context"
+
+
+# --- one poll, one budget, in every mode ----------------------------------------
+
+
+def test_a_typed_poll_is_held_to_the_same_budget_as_a_compact_one() -> None:
+    """Compaction is opt-in; the budget was written as if it were not.
+
+    A live audit came back at 17,725 characters in a single typed poll against a
+    documented ceiling of 16 KiB, because `compact_job_record` only runs for
+    hosts that asked for it and nothing else bounded the record.
+    """
+    import json
+
+    from grok_delegate.economy import ECONOMY_MAX_RECORD, fit_poll_budget
+
+    record = {
+        "ok": True, "job_id": "j", "state": "done",
+        "result": {
+            "status": "completed", "summary": "s" * 20_000,
+            "unified_diff": "+padding\n" * 4_000,
+            "changed_files": [f"file{i}.py" for i in range(300)],
+        },
+    }
+    out = fit_poll_budget(record)
+    assert len(json.dumps(out, ensure_ascii=False, default=str)) <= ECONOMY_MAX_RECORD
+    assert out["result"]["status"] == "completed", "the verdict must survive the trim"
+
+
+def test_the_budget_says_what_it_took_away() -> None:
+    from grok_delegate.economy import fit_poll_budget
+
+    out = fit_poll_budget({"ok": True, "job_id": "j", "state": "done",
+                           "result": {"status": "completed", "summary": "s" * 40_000}})
+    assert out["result"]["economy_trimmed"], "a silent trim reads as 'that is all there was'"
+
+
+def test_an_ordinary_poll_is_not_touched() -> None:
+    from grok_delegate.economy import fit_poll_budget
+
+    record = {"ok": True, "job_id": "j", "state": "running",
+              "result": {"status": "running", "summary": "working"}}
+    assert fit_poll_budget(dict(record)) == record

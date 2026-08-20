@@ -99,6 +99,7 @@ try:
         compact_job_record,
         economy_enabled,
         economy_playbook,
+        fit_poll_budget,
     )
 except ImportError:  # flat import when package dir is on sys.path
     from host_roots import (  # noqa: E402
@@ -167,6 +168,7 @@ except ImportError:  # flat import when package dir is on sys.path
         compact_job_record,
         economy_enabled,
         economy_playbook,
+        fit_poll_budget,
     )
 
 SERVER_NAME = "grok-delegate"
@@ -1246,6 +1248,10 @@ def handle_tool_call(
             if record is None:
                 return typed_return(structured_error("JOB_UNKNOWN", f"unknown job_id: {job_id}"))
             compact = _annotate_silence(_bounded_poll(compact_job_record(record), limit))
+            # The budget is a promise about one poll, not about one mode. A live
+            # audit came back at 17,725 characters here because compaction is
+            # opt-in and the typed path had no ceiling of its own.
+            compact = fit_poll_budget(compact)
             return typed_return({"ok": True, **compact})
         listed = [compact_job_record(j) for j in jobs.list_jobs(limit=limit)]
         return typed_return({"ok": True, "jobs": listed, "economy": economy_enabled()})

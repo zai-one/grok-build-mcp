@@ -15,6 +15,7 @@ immediately, which is the property the old tests did not have.
 
 from __future__ import annotations
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -59,6 +60,16 @@ MATRIX = [
     ("read", "empty", "REJECT", "REJECT"),
     ("search", "inside", "ALLOW", "ALLOW"),
     ("search", "outside", "REJECT", "REJECT"),
+    # A grep or glob names what to look for, not where. Every row above gave
+    # search a path, so the shape a worker actually sends had no cell at all --
+    # and it was refused, against a prompt that promises searching is always
+    # allowed. A denial the client cannot offer a way past ends the turn.
+    ("search", "pattern", "ALLOW", "ALLOW"),
+    ("search", "query", "ALLOW", "ALLOW"),
+    ("search", "pattern_escape", "REJECT", "REJECT"),
+    ("search", "pattern_absolute", "REJECT", "REJECT"),
+    ("search", "pattern_secret", "REJECT", "REJECT"),
+    ("search", "empty", "REJECT", "REJECT"),
     ("edit", "inside", "REJECT", "ALLOW"),
     ("edit", "outside", "REJECT", "REJECT"),
     ("edit", "secret", "REJECT", "REJECT"),
@@ -80,6 +91,11 @@ def _raw(shape: str, cwd: Path) -> dict:
         "outside": {"path": str(cwd.parent / "elsewhere" / "app.py")},
         "secret": {"path": str(cwd / ".env")},
         "empty": {},
+        "pattern": {"pattern": "**/*.py"},
+        "query": {"query": "permission_decision"},
+        "pattern_escape": {"pattern": "../../**/*.py"},
+        "pattern_absolute": {"pattern": "/etc/*"},
+        "pattern_secret": {"glob": "**/.env*"},
         "declared": {"command": DECLARED},
         "undeclared": {"command": "py -3 -c \"print(1)\""},
         "decorated": {"command": DECLARED + "; echo EXIT=$LASTEXITCODE"},
@@ -105,12 +121,14 @@ def test_the_matrix_covers_every_kind_the_gate_names(cwd: Path) -> None:
     from grok_delegate import acp
 
     source = inspect.getsource(acp.permission_decision)
+    # Quoted literals only. Splitting on the last brace also swept up bare
+    # argument names once the branch grew a helper call, and the test failed for
+    # a refactor that changed nothing about which kinds the gate names.
     named = {
-        token.strip("\"' ")
+        match
         for line in source.splitlines()
         if "kind ==" in line or "kind in" in line
-        for token in line.split("{")[-1].replace("}", "").split(",")
-        if token.strip("\"' ").isalpha()
+        for match in re.findall(r"[\"']([A-Za-z_]+)[\"']", line)
     }
     covered = {row[0] for row in MATRIX}
     assert named <= covered, f"gate names kinds with no matrix row: {sorted(named - covered)}"

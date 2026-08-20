@@ -30,9 +30,73 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ## 0.21.0 — One poll, one budget
 
+### A read-only worker that reached for a write lost its whole turn
+
+Reported from a live session: `grok_agent_review` under the project's own preset
+came back `status: cancelled`, `blocked_reason: ACP_STOP_cancelled`, with one
+opening sentence and no verdict — twice — while the CLI's log recorded a
+successful inference in under thirty seconds.
+
+The preset is not the cause; the same call completes here. The capture in
+`evidence/live-acp/session-permission-cancel.jsonl` shows what is: the worker
+asked to edit a file, the bridge answered `reject_once` — the correct, non-fatal
+answer — and the CLI sent `session/cancel` regardless. A refused write ends the
+turn no matter how politely the bridge refuses, and a read-only role can never
+legally write, so any write it reaches for costs everything.
+
+No gate change can prevent that, so `build_prompt` now tells every read-only
+worker plainly that it cannot write, that a refused write ends the turn, and
+that its answer in the message is the deliverable. Previously a `consult` or
+`review` call with no `test_commands` was told none of this.
+
+### A search the bridge promised was allowed
+
+`build_prompt` tells every worker that "reading and searching files is always
+allowed". The gate then refused any request carrying no path key — which is
+exactly what a repo-wide grep or glob looks like, since a search names *what* to
+look for rather than *where*. The worker was denied the one operation it had
+been promised, and a denial the client cannot offer a way past ends the turn:
+the job comes back `ACP_STOP_cancelled` after a single opening sentence, with no
+verdict and the CLI's own log showing a perfectly successful inference.
+
+A search with no path is now judged as scoped to the session directory. It still
+may not escape: `../` in any spelling, a leading slash, a drive letter, a UNC
+prefix and `~` are refused, as is a pattern that goes hunting for a secret by
+name. The permission matrix gained the shape it never had a row for.
+
+### `id_rsa` was refused to a command and handed to a read
+
+`AGENTS.md` promises `.env`, `id_rsa` and `*.pem` are refused in any form. The
+command gate did refuse all three; the path denylist behind `read` and `search`
+named `.env`, `auth.json`, `credentials.json` and the certificate suffixes — and
+not `id_rsa`, `id_ed25519`, `.git-credentials`, `.netrc`, `.htpasswd` or
+`.pgpass`. A private key sitting in the worktree was readable. Both lists now
+agree on what a secret is.
+
+### Ordinary filenames read as forbidden commands
+
+`rm`, `del`, `ssh`, `curl` and `oauth` were matched anywhere in a command
+string, not where a command can start. So a declared `pytest tests/test_form.py`
+was refused for containing `rm`, `src/model.py` for containing `del`, and
+`tests/test_oauth.py` for looking like a credential. A denied test command is
+not a harmless no — the denial can end the worker's turn, so the job pays for
+the whole cycle and returns nothing. Command names are now anchored where a
+command can appear; secret *file* names still match anywhere they can appear as
+a path.
+
+Two smaller refusals went with them: `py -3.12 -m pytest` was rejected while
+`py -3` passed, which is how an operator pins an interpreter; and a *directory*
+named `go` or `py` made `go test ./...` look like a worker handing the verifier
+its own binary, because the check asked whether the name existed rather than
+whether it was a file.
+
 ### One poll now has one budget
 
-`ECONOMY_MAX_UNIFIED_DIFF` is 16 KiB and so was the whole promise — "one poll
+Found by the audit routine on its first live run: a single poll came back at
+17,725 characters against a documented ceiling of 16 KiB. Two causes, both real.
+`compact_job_record` only runs for hosts that asked for compaction, so the typed
+path had no ceiling of its own; and inside compaction, `ECONOMY_MAX_UNIFIED_DIFF`
+is 16 KiB and so was the whole promise — "one poll
 stays under 16 KiB whatever the job did". Every per-field cap was respected and
 a compact record still came back at 22 KB, because the caps bound fields, not
 the record. The host paid for it on the poll that matters most: the last one,

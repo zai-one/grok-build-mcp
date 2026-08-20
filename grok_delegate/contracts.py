@@ -258,6 +258,26 @@ def build_prompt(task: Mapping[str, Any]) -> str:
                 " command and nothing.",
             ]
         )
+    if task["permission_profile"] == "read-only":
+        lines.extend(
+            [
+                "",
+                # A live capture on the operator's machine shows what this
+                # paragraph is buying. The worker asked to edit a file, the
+                # bridge answered `reject_once` -- the correct, non-fatal answer
+                # -- and the CLI sent `session/cancel` anyway. The turn ended on
+                # `stopReason: cancelled` with nothing delivered but an opening
+                # sentence, while the CLI's own log recorded a perfectly
+                # successful inference. No gate change can prevent that; the
+                # only defence is the worker never reaching for the write.
+                "You cannot create, modify, move or delete any file in this session, and you"
+                " must not try. A write is refused, and this CLI ends the whole turn on a"
+                " refused write -- you would deliver nothing at all.",
+                "Your answer in this message IS the deliverable. Nothing you leave on disk"
+                " will be collected, so put the whole result here.",
+            ]
+        )
+
     if task["role"] in {"execute", "fix"}:
         lines.extend(
             [

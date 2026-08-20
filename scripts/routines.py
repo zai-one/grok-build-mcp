@@ -140,7 +140,9 @@ def run_job(tool: str, task: dict, root: Path, lane: str, row: Row,
 def receipt_of(row: Row, polled: dict, keep: tuple[str, ...]) -> dict:
     """Pull the receipt out, record the slice that will decide the verdict."""
     receipt = polled.get("result") or {}
-    row.evidence = {k: receipt.get(k) for k in keep}
+    # update, not replace: a routine that recorded its setup before starting the
+    # job would otherwise lose it here, and the evidence is the whole product.
+    row.evidence.update({k: receipt.get(k) for k in keep})
     if polled.get("error"):
         row.fail(f"transport error: {polled['error']}")
     if row.max_poll_chars > POLL_BUDGET_CHARS:

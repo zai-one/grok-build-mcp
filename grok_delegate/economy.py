@@ -180,6 +180,36 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
     return _fit_record_budget(out, ECONOMY_MAX_RECORD)
 
 
+#: field -> the smallest length worth keeping, in the order a reader can most
+#: afford to lose them. Events are already bounded and purely informational, a
+#: summary is the agent's prose about work the diff shows anyway, and the diff
+#: is the last thing to give because it is what the host came for.
+_TRIM_ORDER: tuple[tuple[str, int], ...] = (
+    ("events", 1), ("summary", 300), ("diffstat", 200),
+    ("unified_diff", 512), ("full_changed_files", 4), ("changed_files", 4),
+)
+
+
+def fit_poll_budget(record: dict[str, Any], cap: int = 0) -> dict[str, Any]:
+    """Hold one poll under the budget whether or not compaction is on.
+
+    `compact_job_record` only runs for hosts that asked for it, so the typed
+    path had no ceiling at all: a live audit came back at 17,725 characters in a
+    single poll against a promise of 16 KiB. The fat fields sit under `result`
+    there and at the top level in compact mode, so both are fitted.
+    """
+    cap = cap or ECONOMY_MAX_RECORD
+    if len(json.dumps(record, ensure_ascii=False, default=str)) <= cap:
+        return record
+    nested = record.get("result")
+    if isinstance(nested, dict):
+        # Budget the nested receipt against what the envelope leaves it.
+        envelope = len(json.dumps({k: v for k, v in record.items() if k != "result"},
+                                  ensure_ascii=False, default=str))
+        _fit_record_budget(nested, max(1_024, cap - envelope))
+    return _fit_record_budget(record, cap)
+
+
 def _fit_record_budget(out: dict[str, Any], cap: int) -> dict[str, Any]:
     """Hold the whole record under one budget, not each field under its own.
 
@@ -199,13 +229,7 @@ def _fit_record_budget(out: dict[str, Any], cap: int) -> dict[str, Any]:
         return out
 
     trimmed: list[str] = []
-    #: field -> the smallest length worth keeping. A diff cut to nothing tells
-    #: the reader less than a diff cut to its first hunk.
-    order: tuple[tuple[str, int], ...] = (
-        ("unified_diff", 512), ("events", 1), ("diffstat", 200),
-        ("summary", 300), ("full_changed_files", 4), ("changed_files", 4),
-    )
-    for key, floor in order:
+    for key, floor in _TRIM_ORDER:
         for _ in range(8):  # halving converges; the bound stops a pathological value
             over = size() - cap
             if over <= 0:
