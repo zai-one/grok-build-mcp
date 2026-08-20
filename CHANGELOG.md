@@ -28,6 +28,44 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## Unreleased
+
+### The read gate is not reachable on this CLI, so it stopped being a promise
+
+`AGENTS.md` said `.env`, `id_rsa` and `*.pem` were refused in any form. True for
+commands. For reads it was never true here, and now it is measured rather than
+assumed: an instrumented run recorded **zero** permission calls for a read, and
+the worker read `.env` and returned its contents. Neither `--deny Read(*)` nor
+`--sandbox strict` changed that — both were tried through a live job.
+
+So against a secret sitting in the working directory the bridge gives one thing:
+the outbound redactor, and only for what looks like a secret.
+`XAI_API_KEY=xai-…` is cut; `deployment_region=<string>` arrives whole. The path
+denylist stays in the code — another client or a later CLI may ask — but the
+documentation no longer describes it as protection you have.
+
+Worth knowing which roles are exposed: a read-only role runs in the operator's
+own checkout, where a gitignored `.env` really is on disk. A write role runs in a
+lane worktree built from a git ref, where it is not there at all.
+
+### A `.netrc` password now gets redacted
+
+`.netrc` writes credentials with a space and no delimiter — `machine host login
+user password hunter2` — so every assignment pattern walked past it. That mattered
+little while the read gate was believed to work and matters a great deal now that
+the redactor is the only defence. Gated on the file's own marker so the word
+`password` in ordinary prose is left alone, and the username beside it is not
+touched.
+
+### `soak.py` stopped failing on a string that means two things
+
+Running out of turns lands on `ACP_STOP_cancelled` exactly like a gate refusal
+that killed the turn, and the first is a documented success — the verifier still
+runs and the lane still commits. It now judges whether the work was verified and
+committed, and reports turn exhaustion as a note rather than a failure.
+
+---
+
 ## 0.21.0 — One poll, one budget
 
 ### A read-only worker that reached for a write lost its whole turn

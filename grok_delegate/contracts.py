@@ -533,6 +533,19 @@ _AUTHORIZATION_PATTERN = re.compile(
     r"(?:bearer|basic|digest|token|negotiate|apikey)?\s*(?:[^\s,;}\]]+)"
 )
 
+#: `.netrc` writes credentials with a space and no delimiter --
+#: `machine host login user password hunter2` -- so every assignment pattern
+#: above walks straight past it. It matters more than the format's age suggests:
+#: the outbound redactor is the *only* defence the bridge actually has against a
+#: secret in the working directory, because this CLI never asks the gate about a
+#: read (Service/Research/2026-08-20-read-gate-reachability.md).
+#:
+#: Gated on the file's own marker word rather than applied to every `password`
+#: in every diff, and deliberately not redacting `login`: a username is not the
+#: secret, and replacing it would make ordinary prose unreadable for nothing.
+_NETRC_MARKER = re.compile(r"(?im)^\s*(?:machine\s+\S+|default\s*$)")
+_NETRC_PASSWORD = re.compile(r"(?i)(\bpassword\s+)(\S+)")
+
 _SECRET_TEXT_PATTERNS = (
     # Quoted value: to the closing quote, so a passphrase does not survive from
     # its second word onwards.
@@ -651,6 +664,8 @@ def redact_text(value: str) -> str:
     out = _URL_USERINFO_PATTERN.sub(r"\1\2:<REDACTED>@", out)
     out = _VENDOR_UNDERSCORE_KEY.sub("<REDACTED>", out)
     out = _AUTHORIZATION_PATTERN.sub(r"\1<REDACTED>", out)
+    if _NETRC_MARKER.search(out):
+        out = _NETRC_PASSWORD.sub(r"\1<REDACTED>", out)
     for pattern, build in _SECRET_TEXT_PATTERNS:
         out = _redact_assignments(out, pattern, build)
     return out

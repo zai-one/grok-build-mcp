@@ -139,3 +139,44 @@ def test_redaction_cost_grows_with_the_input_not_faster() -> None:
 
     small, large = cost(50), cost(400)
     assert large < small * 40, f"8x the input cost {large / max(small, 1e-9):.0f}x the time"
+
+
+# --- the format that walks past every assignment pattern -------------------------
+
+
+def test_a_netrc_password_does_not_reach_the_host() -> None:
+    """`.netrc` uses a space and no delimiter, so no assignment pattern sees it.
+
+    It matters more than the format's age suggests. This CLI never asks the gate
+    about a read -- measured, see
+    Service/Research/2026-08-20-read-gate-reachability.md -- so the outbound
+    redactor is the only defence the bridge actually has against a credential
+    file sitting in the working directory.
+    """
+    from grok_delegate.contracts import redact_text
+
+    one_line = "machine api.example.com login deploy password hunter2hunter2"
+    assert "hunter2hunter2" not in redact_text(one_line)
+
+    spread = "machine api.example.com\n  login deploy\n  password s3cr3tvalue\n"
+    assert "s3cr3tvalue" not in redact_text(spread)
+
+    anonymous = "default\n  login anon\n  password anonymous-pass\n"
+    assert "anonymous-pass" not in redact_text(anonymous)
+
+
+def test_the_username_beside_it_is_left_alone() -> None:
+    """A login name is not the secret, and redacting it makes receipts unreadable."""
+    from grok_delegate.contracts import redact_text
+
+    assert "deploy" in redact_text("machine api.example.com login deploy password hunter2x")
+
+
+def test_the_word_password_in_ordinary_prose_survives() -> None:
+    """Gated on the file's own marker, so a diff that merely says the word is safe."""
+    from grok_delegate.contracts import redact_text
+
+    for text in ("the password field was empty in the form",
+                 "reset password flow needs a test",
+                 "def check_password(user, given):"):
+        assert redact_text(text) == text, text
