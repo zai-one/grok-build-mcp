@@ -285,12 +285,38 @@ def start_job(
         finally:
             _bind_progress_sink(None)
 
-    if thread_starter is not None:
-        thread_starter(_run)
-    else:
-        threading.Thread(target=_run, name=f"grok-delegate-{jid}", daemon=True).start()
+    # The record is already `running` by the time the work is handed off, so a
+    # handoff that fails leaves a job that never finishes: `_evict_locked` drops
+    # only terminal records, `LANE_BUSY` keeps seeing it, and cancel answers
+    # JOB_NOT_OWNED because no cancel event was ever registered. It survives
+    # until the process restarts. Reproduced by handing `start_job` a starter
+    # that raises -- the executor refusing after `shutdown_runtime` does exactly
+    # this.
+    try:
+        if thread_starter is not None:
+            thread_starter(_run)
+        else:
+            threading.Thread(target=_run, name=f"grok-delegate-{jid}", daemon=True).start()
+    except BaseException as exc:
+        _finish(
+            STATE_ERROR,
+            result=None,
+            error=f"{type(exc).__name__}: {exc}"[:400],
+        )
+        raise
 
     return snapshot(jid) or dict(record)
+
+
+def forget_job(job_id: str) -> bool:
+    """Drop a record entirely. Only for tombstones nothing can finish.
+
+    A record rehydrated from a dead server incarnation reads as ``unknown``: no
+    thread owns it and no path leads to a terminal state, so it sat in the way
+    of retrying the same packet until eviction happened to reach it.
+    """
+    with _LOCK:
+        return _JOBS.pop(str(job_id), None) is not None
 
 
 def _with_elapsed(rec: "dict[str, Any]") -> "dict[str, Any]":

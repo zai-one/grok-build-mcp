@@ -28,6 +28,63 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.19.0 — Five that survived being checked
+
+Ten claims came out of the 2026-08-19 skeptic sweep unverified. Reproducing them
+one at a time left five, and the discards matter as much as the fixes: one of
+them had been carried as known backlog since the previous audit, and acting on
+it would have meant changing working code on the strength of a plausible story.
+
+Two of the first verdicts were wrong the other way. A probe that called
+`start_job` with the wrong signature caught its own `TypeError` and reported
+"not reproduced" for a real bug; another compared the first textual occurrence
+of two names in a function with a dozen early returns, and got the ordering
+backwards. A verification harness is as capable of being wrong as the claim it
+checks.
+
+### A decorated secret name was still that secret
+
+Windows strips trailing dots and spaces from a path component, and everything
+after `::` names an alternate data stream of the same file. The denylist
+compared the string as typed, so `auth.json.`, `auth.json ` and `.env::$DATA`
+all reached exactly the files it exists to refuse. It now compares the name
+Windows would open. `key.pem.` is caught too -- the suffix is taken from the
+normalised name, because pathlib does not consider that one a `.pem`.
+
+### A failed handoff left a job that could never finish
+
+`start_job` marked the record `running` before handing the work to a thread. If
+that handoff raised -- an executor refusing after shutdown does exactly this --
+the record stayed `running` forever: `_evict_locked` drops only terminal
+records, `LANE_BUSY` kept seeing it, and cancel answered `JOB_NOT_OWNED`. It now
+terminalises, and the caller still gets the exception.
+
+### Work nobody can review is not delivered work
+
+The gate judged artifacts and tests and never looked at whether the lane commit
+succeeded. A rejecting hook or a read-only checkout came back `completed` with
+`sha: None` and nothing on the branch to merge. That is now
+`LANE_COMMIT_MISSING`, carrying the reason.
+
+### `C:secret.py` is not a local file
+
+A drive-relative path names the process's own directory on that drive, which is
+not the worktree. The revision-splitting rule skipped `C:\` and `C:/` only, so
+the bare-colon form was reduced to `secret.py` and judged as an ordinary name.
+
+### A tombstone is not work in progress
+
+A record rehydrated from a dead server incarnation reads as `unknown`: no thread
+owns it, nothing will finish it. Treating it as an idempotent replay meant the
+same packet could not be retried until eviction happened to reach it.
+
+### Not fixed, and why
+
+`.. \out.txt` does not escape: `resolve()` strips the trailing space exactly as
+Win32 does, and the gate refuses it. The lane is still committed before the
+verdict, deliberately -- work stopped early costs review time, never the work,
+and since 0.18.0 only attributed paths are staged.
+
 ## 0.18.0 — What the skeptics found, and what the clock found
 
 Five skeptic jobs, five lenses, run through this bridge against this repository.

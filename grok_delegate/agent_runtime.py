@@ -134,6 +134,13 @@ def start_agent_job(
 
     with _START_LOCK:
         existing = jobs.get_job(jid)
+        # `unknown` is what a record rehydrated from a dead incarnation reads as:
+        # the thread that owned it is gone and nothing will ever finish it. It is
+        # a tombstone, not work in progress, and treating it as a replay meant
+        # the same packet could not be retried until it happened to be evicted.
+        if existing is not None and str(existing.get("state") or "") == "unknown":
+            jobs.forget_job(jid)
+            existing = None
         if existing is not None:
             return {
                 "ok": True,

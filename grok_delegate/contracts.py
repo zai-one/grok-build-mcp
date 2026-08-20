@@ -396,6 +396,17 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
             ):
                 status = "failed"
                 out["blocked_reason"] = "TEST_FAILED"
+            # Work the operator cannot review is not delivered work. The gate
+            # judged artifacts and tests and never looked at whether the lane
+            # commit succeeded, so a COMMIT_FAILED -- a rejecting hook, a
+            # read-only checkout -- came back `completed` with `sha: None` and
+            # nothing on the branch to merge.
+            commit = out.get("lane_commit")
+            if isinstance(commit, Mapping) and not commit.get("sha"):
+                reason = str(commit.get("reason") or "UNKNOWN")
+                if reason not in {"NOT_A_WRITE_ROLE"}:
+                    status = "blocked"
+                    out["blocked_reason"] = "LANE_COMMIT_MISSING: " + reason
     out["status"] = status
     # jobs.start_job owns transport-independent lifecycle state and keys it from
     # this boolean.  A terminal receipt without it was incorrectly persisted as

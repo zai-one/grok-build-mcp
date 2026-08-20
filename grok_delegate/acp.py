@@ -1283,6 +1283,12 @@ def _command_paths_confined(command: str, cwd: Path) -> bool:
         if "=" in token:
             token = token.split("=", 1)[1].strip("\"'")
         token = token.split("::", 1)[0]
+        # `C:secret.py` is drive-relative: it names the process's own directory
+        # on drive C, which is not the worktree and is nowhere near it. The
+        # revision-splitting rule below only skipped `C:\` and `C:/`, so the
+        # bare-colon form was reduced to `secret.py` and read as a plain name.
+        if re.match(r"^[A-Za-z]:(?![\\/])", token):
+            return False
         # `git show <rev>:<path>` names a path behind a revision; judge the path.
         if ":" in token and not re.match(r"^[A-Za-z]:[\\/]", token):
             token = token.rsplit(":", 1)[-1]
@@ -1377,6 +1383,20 @@ def approved_write_paths(params: Mapping[str, Any], decision: Mapping[str, Any],
     return out
 
 
+def _win_name(part: str) -> str:
+    """The name Windows will actually open, not the one that was typed.
+
+    Win32 strips trailing dots and spaces from a component, and everything after
+    a colon names an alternate data stream rather than a different file. So
+    `auth.json.`, `auth.json ` and `.env::$DATA` all reach exactly the file this
+    denylist exists to refuse, while comparing the raw string let all three
+    through. Verified against the live gate before and after.
+    """
+    text = str(part or "")
+    head = text.split(":", 1)[0] if len(text) > 2 or ":" not in text else text
+    return head.rstrip(". ").casefold()
+
+
 def _paths_confined(raw: Mapping[str, Any], cwd: Path) -> bool:
     candidates = [raw.get(key) for key in _PATH_KEYS if raw.get(key)]
     if not candidates:
@@ -1388,11 +1408,14 @@ def _paths_confined(raw: Mapping[str, Any], cwd: Path) -> bool:
             candidate.relative_to(cwd)
         except ValueError:
             return False
-        lowered_parts = {part.casefold() for part in candidate.parts}
+        lowered_parts = {_win_name(part) for part in candidate.parts}
+        # The suffix has to come off the *normalised* name: `key.pem.` has a
+        # pathlib suffix that is not `.pem`, and Windows opens the key anyway.
+        normalised_name = _win_name(candidate.name)
         if (
             lowered_parts & {"auth.json", "credentials.json", ".env", ".npmrc", ".pypirc"}
-            or candidate.name.casefold().startswith(".env.")
-            or candidate.suffix.casefold() in {".pem", ".p12", ".pfx", ".key"}
+            or normalised_name.startswith(".env.")
+            or normalised_name.endswith((".pem", ".p12", ".pfx", ".key"))
         ):
             return False
     return True
