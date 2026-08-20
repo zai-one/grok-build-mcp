@@ -339,6 +339,47 @@ def test_probe_timeout_twice_without_slow_spawn_does_not_claim_starvation(
     assert STARVED_SPAWN_SECONDS >= runner.GIT_SPAWN_STARVATION_MIN_SECONDS
 
 
+def test_starved_first_attempt_still_names_starvation_when_retry_is_fast(
+    tmp_path: Path,
+) -> None:
+    """First Popen starved, retry spawned in milliseconds; both timed out.
+
+    ``_run_git_probe`` used to return only the second result, so
+    ``_git_timeout_error`` read spawn_seconds=0.0071 and omitted
+    known_cause — the starvation this change exists to name, and the
+    antivirus turn it exists to prevent.
+    """
+    class MixedSpawnGit(ProbeGit):
+        def __init__(self) -> None:
+            super().__init__(
+                timeout_remaining={"--version": 2}, branch="grok/probe"
+            )
+            self._timeout_spawns = [STARVED_SPAWN_SECONDS, IDLE_SPAWN_SECONDS]
+
+        def _timeout(self, argv: list[str], timeout: float) -> dict[str, Any]:
+            result = super()._timeout(argv, timeout)
+            if self._timeout_spawns:
+                result["spawn_seconds"] = self._timeout_spawns.pop(0)
+            return result
+
+    git = MixedSpawnGit()
+    result = _prepare(tmp_path, git)
+    assert result.get("ok") is False
+    assert result.get("error") == "GIT_TIMEOUT"
+    assert result.get("retried") is True
+    assert result.get("known_cause") == runner.GIT_SPAWN_STARVATION_CAUSE
+    assert result.get("spawn_seconds") == STARVED_SPAWN_SECONDS
+    assert result.get("spawn_seconds") != IDLE_SPAWN_SECONDS
+    assert result.get("attempt_spawn_seconds") == [
+        STARVED_SPAWN_SECONDS,
+        IDLE_SPAWN_SECONDS,
+    ]
+    assert result.get("spawn_covers") == runner.GIT_SPAWN_COVERS
+    assert "3258.7" in str(result.get("spawn_measurement"))
+    assert _count(git.calls, "--version") == 2
+    assert _count(git.calls, "add") == 0
+
+
 def _settle_poll_count() -> int:
     waited = 0.0
     polls = 0
@@ -392,6 +433,40 @@ def test_spawn_git_kills_the_child_when_communicate_raises(
     with pytest.raises(exc_type):
         runner._spawn_git(["status"], None, 5.0)
     assert child.killed is True
+
+
+def test_spawn_git_kill_failure_does_not_hide_original_or_hang(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """kill() raising used to replace KeyboardInterrupt; unbounded drain hung."""
+
+    class Child:
+        def __init__(self) -> None:
+            self.kill_calls = 0
+            self.communicate_calls = 0
+            self.returncode = None
+            self.pid = 4242
+
+        def communicate(self, timeout: float | None = None) -> tuple[str, str]:
+            self.communicate_calls += 1
+            if self.communicate_calls == 1:
+                raise KeyboardInterrupt()
+            if timeout is None:
+                raise AssertionError(
+                    "drain communicate() had no timeout; would hang"
+                )
+            return ("", "")
+
+        def kill(self) -> None:
+            self.kill_calls += 1
+            raise OSError("kill failed")
+
+    child = Child()
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: child)
+    with pytest.raises(KeyboardInterrupt):
+        runner._spawn_git(["status"], None, 5.0)
+    assert child.kill_calls == 1
+    assert child.communicate_calls == 2
 
 
 def test_default_git_runner_does_not_cache_a_failed_version(

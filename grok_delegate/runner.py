@@ -100,6 +100,17 @@ GIT_SPAWN_STARVATION_MEASUREMENT = (
 # not GIL starvation, and must not send the next reader looking there.
 GIT_SPAWN_STARVATION_MIN_SECONDS = 1.0
 
+# After kill, drain must be bounded. communicate() with no timeout hung
+# the long-lived server when kill() itself failed and the child was still
+# running. This is a hang cap, not a probe budget — do not raise it toward
+# DEFAULT_GIT_TIMEOUT_SECONDS.
+_GIT_KILL_DRAIN_TIMEOUT_SECONDS = 1.0
+
+# spawn_seconds is Popen only (the 7.1ms vs 3258.7ms measurement). A
+# pipe-read stall leaves it at 0.0; wait_seconds is that interval. Named
+# so a 0.0 is not read as "no starvation happened".
+GIT_SPAWN_COVERS = "popen"
+
 # One budget for every git call was wrong in both directions. A probe
 # (`--version`, `rev-parse`, `status`) does milliseconds of work and only ever
 # needs slack for a starved background thread; a checkout lays out the whole
@@ -352,6 +363,36 @@ class DelegationResult:
         return d
 
 
+def _float_seconds(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _reap_git_child(proc: Any) -> tuple[str, str]:
+    """Kill *proc* and drain pipes. Never raises.
+
+    Why: unguarded ``kill()`` replaced KeyboardInterrupt with OSError /
+    ProcessLookupError; ``communicate()`` with no timeout hung the
+    long-lived server on an unkilled child. The original exception is
+    the caller's to re-raise. Drain is bounded by
+    ``_GIT_KILL_DRAIN_TIMEOUT_SECONDS`` (hang cap, not a probe budget).
+    """
+    try:
+        proc.kill()
+    except BaseException:  # noqa: BLE001 — never replace the original error
+        pass
+    try:
+        stdout, stderr = proc.communicate(timeout=_GIT_KILL_DRAIN_TIMEOUT_SECONDS)
+    except BaseException:  # noqa: BLE001 — drain is best-effort
+        return "", ""
+    return (
+        stdout if isinstance(stdout, str) else "",
+        stderr if isinstance(stderr, str) else "",
+    )
+
+
 def _spawn_git(
     args: Sequence[str],
     cwd: Path | None,
@@ -363,13 +404,25 @@ def _spawn_git(
     with 16 bytecode threads); the child still finishes in milliseconds.
     ``subprocess.run`` does not expose the split, so this is Popen then
     communicate, with the same UTF-8 decoding as before.
+
+    ``spawn_seconds`` is Popen only (that measurement). ``wait_seconds`` is
+    communicate(); a GIL stall while reading the pipe leaves spawn at 0.0
+    and must not be reported as "no starvation". ``spawn_covers`` names
+    the split so the two are not interchangeable.
     """
     import subprocess
 
     cmd = ["git", *[str(a) for a in args]]
     report_progress(last_step=_step_label(cmd), last_step_at=time.time())
+    proc = None
     spawn_started = time.monotonic()
+    spawn_seconds = 0.0
+    wait_started = spawn_started
     try:
+        # Popen lives in this try so a failure between a successful spawn
+        # and communicate still reaps the child. The remaining leak is
+        # inside Popen itself (child created, then Popen raises) — not
+        # closable here without wrapping the constructor.
         proc = subprocess.Popen(  # noqa: S603 — argv is filtered by the caller
             cmd,
             cwd=str(cwd) if cwd else None,
@@ -382,18 +435,8 @@ def _spawn_git(
             encoding="utf-8",
             errors="replace",
         )
-    except FileNotFoundError:
-        return {
-            "args": cmd,
-            "returncode": 127,
-            "stdout": "",
-            "stderr": "git not found",
-            "timedOut": False,
-            "missing": True,
-            "spawn_seconds": time.monotonic() - spawn_started,
-        }
-    spawn_seconds = time.monotonic() - spawn_started
-    try:
+        spawn_seconds = time.monotonic() - spawn_started
+        wait_started = time.monotonic()
         stdout, stderr = proc.communicate(timeout=timeout)
         return {
             "args": cmd,
@@ -402,13 +445,25 @@ def _spawn_git(
             "stderr": stderr or "",
             "timedOut": False,
             "spawn_seconds": spawn_seconds,
+            "wait_seconds": time.monotonic() - wait_started,
+            "spawn_covers": GIT_SPAWN_COVERS,
+        }
+    except FileNotFoundError:
+        if proc is not None:
+            _reap_git_child(proc)
+            raise
+        return {
+            "args": cmd,
+            "returncode": 127,
+            "stdout": "",
+            "stderr": "git not found",
+            "timedOut": False,
+            "missing": True,
+            "spawn_seconds": time.monotonic() - spawn_started,
+            "spawn_covers": GIT_SPAWN_COVERS,
         }
     except subprocess.TimeoutExpired:
-        proc.kill()
-        try:
-            stdout, stderr = proc.communicate()
-        except Exception:  # noqa: BLE001 — never lose the timeout verdict itself
-            stdout, stderr = "", ""
+        stdout, stderr = _reap_git_child(proc) if proc is not None else ("", "")
         return {
             "args": cmd,
             "returncode": 124,
@@ -416,16 +471,15 @@ def _spawn_git(
             "stderr": f"timeout after {timeout}s",
             "timedOut": True,
             "spawn_seconds": spawn_seconds,
+            "wait_seconds": time.monotonic() - wait_started,
+            "spawn_covers": GIT_SPAWN_COVERS,
         }
     except BaseException:
         # subprocess.run killed the child on any exception, not only
         # TimeoutExpired. OSError or KeyboardInterrupt from communicate
         # used to leave git running for the rest of a long-lived server.
-        proc.kill()
-        try:
-            proc.communicate()
-        except Exception:  # noqa: BLE001 — never hide the original error
-            pass
+        if proc is not None:
+            _reap_git_child(proc)
         raise
 
 
@@ -512,6 +566,27 @@ def _run_git_probe(
         return first
     second = _call_git(git, args, cwd, timeout)
     second["retried_after_timeout"] = True
+    if not second.get("timedOut"):
+        return second
+    # Keep the last attempt's stdout/stderr/returncode: that is the
+    # outcome of this call (the retry is what failed last). Spawn
+    # evidence is the worst Popen seen across both (idle 7.1ms vs
+    # 3258.7ms with 16 GIL-holding threads). The first attempt can
+    # starve at 3s and the retry spawn in 7ms; reporting only the last
+    # left spawn_seconds=0.0071 and no known_cause — the antivirus
+    # turn this retry exists to prevent.
+    first_spawn = _float_seconds(first.get("spawn_seconds"))
+    second_spawn = _float_seconds(second.get("spawn_seconds"))
+    second["attempt_spawn_seconds"] = [first_spawn, second_spawn]
+    second["spawn_seconds"] = max(first_spawn, second_spawn)
+    if "wait_seconds" in first or "wait_seconds" in second:
+        first_wait = _float_seconds(first.get("wait_seconds"))
+        second_wait = _float_seconds(second.get("wait_seconds"))
+        second["attempt_wait_seconds"] = [first_wait, second_wait]
+        second["wait_seconds"] = max(first_wait, second_wait)
+    covers = first.get("spawn_covers") or second.get("spawn_covers")
+    if covers:
+        second["spawn_covers"] = covers
     return second
 
 
@@ -707,17 +782,27 @@ def _git_timeout_error(
     over a day: `git --version` returning in 0.13s from a shell was reported as
     GIT_MISSING because the same call was starved to 60s inside the server.
     """
-    extra.setdefault("spawn_seconds", result.get("spawn_seconds"))
+    attempts = result.get("attempt_spawn_seconds")
+    spawn_n = _float_seconds(result.get("spawn_seconds"))
+    if isinstance(attempts, (list, tuple)) and attempts:
+        spawn_n = max(spawn_n, *(_float_seconds(item) for item in attempts))
+        extra.setdefault(
+            "attempt_spawn_seconds",
+            [_float_seconds(item) for item in attempts],
+        )
+    extra.setdefault("spawn_seconds", spawn_n)
+    # spawn_seconds is Popen only (idle 7.1ms vs 3258.7ms). Pipe-read
+    # stalls do not move it; wait_seconds is that interval when present.
+    extra.setdefault("spawn_covers", result.get("spawn_covers") or GIT_SPAWN_COVERS)
+    if "wait_seconds" in result:
+        extra.setdefault("wait_seconds", result.get("wait_seconds"))
     if result.get("retried_after_timeout"):
         extra.setdefault("retried", True)
-        try:
-            spawn_n = float(result.get("spawn_seconds") or 0.0)
-        except (TypeError, ValueError):
-            spawn_n = 0.0
         # Claim starved_wrapper only when spawn itself was slow enough to
         # match the measurement (idle 7.1 ms vs starved 3258.7 ms). A spawn
         # that took milliseconds did not starve; labelling it GIL contention
-        # sends the next reader looking in the wrong place.
+        # sends the next reader looking in the wrong place. The number is
+        # the worst Popen across both attempts, not the last.
         if spawn_n >= GIT_SPAWN_STARVATION_MIN_SECONDS:
             extra.setdefault("known_cause", GIT_SPAWN_STARVATION_CAUSE)
             extra.setdefault(

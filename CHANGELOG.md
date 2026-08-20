@@ -36,16 +36,22 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 antivirus. Spawn is what costs 500× under GIL contention (`Popen(['git','--version'])`
 median of 8: idle 7.1ms vs 3258.7ms with 16 bytecode threads; sleeping threads
 6.5ms). Probes now retry once before failing. The structured error carries
-`spawn_seconds` and names that measurement only when spawn itself was slow
-enough to match it (1s floor; a hung git that spawned in milliseconds is a
-timeout without a cause). A successful `git --version` is cached for the
-process lifetime so every lane does not pay a spawn for a binary that has
-not changed; a failed probe is not cached, because installing git after
-startup, or one transient error, used to pin `GIT_MISSING` for the rest of a
-long-lived server. Checkout (`git worktree add`) is not retried, and the
-settle loop that watches a timed-out checkout does not retry either — it is
-already a loop. `_spawn_git` kills the child on any exception from
-`communicate`, not only `TimeoutExpired`.
+`spawn_seconds` (Popen only — a pipe-read stall leaves that field at 0.0, so
+`wait_seconds` and `spawn_covers=popen` name the split) and reports the worst
+Popen across both attempts, not the last: a starved first try at 3s with a
+7ms retry used to land as `spawn_seconds=0.0071` and no cause, which sent
+the next reader looking at antivirus. The starvation label is applied only
+when that worst spawn matches the measurement (1s floor; a hung git that
+spawned in milliseconds is a timeout without a cause). A successful
+`git --version` is cached for the process lifetime so every lane does not
+pay a spawn for a binary that has not changed; a failed probe is not
+cached, because installing git after startup, or one transient error, used
+to pin `GIT_MISSING` for the rest of a long-lived server. Checkout
+(`git worktree add`) is not retried, and the settle loop that watches a
+timed-out checkout does not retry either — it is already a loop.
+`_spawn_git` kills the child on any exception from `communicate`, not only
+`TimeoutExpired`; `kill()` is guarded and the drain is bounded, so a failed
+kill cannot replace `KeyboardInterrupt` or hang the server.
 
 ---
 
