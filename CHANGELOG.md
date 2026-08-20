@@ -30,6 +30,40 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ## Unreleased
 
+### **Breaking:** the compat tools now honour the project opt-in
+
+`grok_delegate_start` started a live worker in a directory carrying no
+`.grok-mcp.json`, while `grok_agent_execute` refused the same directory with
+`PROJECT_NOT_ENABLED`. The opt-in is described as the whole security model — a
+project has to say yes before the bridge runs anything in it — and one
+advertised tool walked straight past it. `grok_delegate` did too; only an
+unrelated `BASE_UNREACHABLE` check happened to stop it first.
+
+An existing setup calling the compat tools against a project with no config will
+now get `PROJECT_NOT_ENABLED` with the usual `fix_with` hint instead of a running
+job. `grok_delegate_plan` stays exempt: a plan reads and reports, and refusing it
+would leave the caller unable to see what the gate is objecting to.
+
+Found by the `audit.wiring` routine and reproduced before it was believed.
+
+### A compact poll shortened the file list without saying so
+
+Eighty changed files arrived as twenty-four with no count beside them, which
+reads as "that is all this job touched" — the one thing a reviewer must not be
+wrong about. `changed_files_omitted` and `changed_files_total` now say what was
+left out. Separately, `full_changed_files` sat in the keep list and in no lift
+list, so a finished job's compact poll dropped it entirely; it is the field that
+separates this run's work from everything already in the lane.
+
+### The poll budget was measured in the wrong unit
+
+Every write in `server.py` serialises `ensure_ascii=False` and encodes UTF-8, but
+the budget counted characters of the escaped form. For a Cyrillic receipt that
+reads about three times the real size — three live audits failed a promise they
+were inside — while counting unescaped characters would undercount it, since
+Cyrillic is two bytes each. Both the budget and the harnesses now measure bytes
+on the wire, which is the thing the host actually pays for.
+
 ### The read gate is not reachable on this CLI, so it stopped being a promise
 
 `AGENTS.md` said `.env`, `id_rsa` and `*.pem` were refused in any form. True for

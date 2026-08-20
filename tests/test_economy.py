@@ -179,3 +179,87 @@ def test_a_small_receipt_is_left_exactly_as_it_was(monkeypatch) -> None:
     )
     assert "economy_trimmed" not in out
     assert out["unified_diff"] == "+x\n"
+
+
+def test_the_budget_is_measured_in_what_the_wire_actually_carries() -> None:
+    """Characters of an escaped dump are not bytes on the wire, and it matters.
+
+    Every write in `server.py` serialises `ensure_ascii=False` and encodes UTF-8.
+    A harness measuring `json.dumps(...)` with the default escaping read a
+    Cyrillic receipt at roughly three times its real size and failed three live
+    audits that were inside the promise; measuring characters of the unescaped
+    form would undercount it instead, because Cyrillic is two bytes each.
+    """
+    import json as _json
+
+    from grok_delegate.economy import ECONOMY_MAX_RECORD, fit_poll_budget, wire_size
+
+    record = {
+        "ok": True, "job_id": "j", "state": "done",
+        "result": {"status": "completed",
+                   "summary": "Мост отвечает reject_once, а CLI шлёт cancel сам. " * 400},
+    }
+    escaped = len(_json.dumps(record, default=str))
+    assert escaped > wire_size(record), "escaping inflates non-ASCII; the wire does not"
+    assert wire_size(record) > len(_json.dumps(record, ensure_ascii=False, default=str)), \
+        "and characters undercount it, because these are two bytes each"
+
+    out = fit_poll_budget(record)
+    assert wire_size(out) <= ECONOMY_MAX_RECORD
+    assert out["result"]["status"] == "completed"
+
+
+def test_an_ascii_receipt_measures_the_same_either_way() -> None:
+    """The distinction must not move the answer for the common case."""
+    import json as _json
+
+    from grok_delegate.economy import wire_size
+
+    record = {"ok": True, "summary": "plain ascii summary", "state": "done"}
+    assert wire_size(record) == len(_json.dumps(record, ensure_ascii=False, default=str))
+
+
+def test_a_shortened_file_list_says_how_much_was_left_out(monkeypatch) -> None:
+    """Eighty changed files arriving as twenty-four with no count is a lie.
+
+    It reads as "that is all this job touched", which is the one thing a reviewer
+    must not be wrong about. Found by the audit routine reading its own bridge.
+    """
+    from grok_delegate.economy import ECONOMY_MAX_CHANGED_FILES, compact_job_record
+
+    monkeypatch.setenv("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    out = compact_job_record({
+        "ok": True, "job_id": "j", "state": "done",
+        "result": {"status": "completed", "summary": "ok",
+                   "changed_files": [f"f{i}.py" for i in range(80)]},
+    })
+    assert len(out["changed_files"]) == ECONOMY_MAX_CHANGED_FILES
+    assert out["changed_files_omitted"] == 80 - ECONOMY_MAX_CHANGED_FILES
+    assert out["changed_files_total"] == 80
+
+
+def test_a_short_list_gains_no_bookkeeping(monkeypatch) -> None:
+    from grok_delegate.economy import compact_job_record
+
+    monkeypatch.setenv("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    out = compact_job_record({
+        "ok": True, "job_id": "j", "state": "done",
+        "result": {"status": "completed", "changed_files": ["a.py", "b.py"]},
+    })
+    assert "changed_files_omitted" not in out
+    assert "changed_files_total" not in out
+
+
+def test_the_lane_wide_file_list_reaches_a_compact_poll(monkeypatch) -> None:
+    """`full_changed_files` sat in keep_keys and in no lift list, so a finished
+    job's compact poll dropped it -- and it is what separates this run's work
+    from everything already sitting in the lane."""
+    from grok_delegate.economy import compact_job_record
+
+    monkeypatch.setenv("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    out = compact_job_record({
+        "ok": True, "job_id": "j", "state": "done",
+        "result": {"status": "completed", "changed_files": ["a.py"],
+                   "full_changed_files": ["a.py", "older.py"]},
+    })
+    assert out["full_changed_files"] == ["a.py", "older.py"]

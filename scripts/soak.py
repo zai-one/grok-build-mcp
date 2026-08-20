@@ -39,9 +39,14 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from grok_delegate import server  # noqa: E402
+from grok_delegate.economy import wire_size  # noqa: E402
 
 POLL_SECONDS = 5.0
-POLL_BUDGET_CHARS = 16_384
+#: Bytes on the wire, not characters of an escaped dump: the server
+#: serialises `ensure_ascii=False` and encodes UTF-8, so a Cyrillic
+#: summary measured the other way reads three times its real cost and
+#: fails a poll that was inside the promise.
+POLL_BUDGET_BYTES = 16_384
 
 
 @dataclass
@@ -57,7 +62,7 @@ class Row:
     notes: list[str] = field(default_factory=list)
     receipt: dict[str, Any] = field(default_factory=dict)
     elapsed_s: float = 0.0
-    max_poll_chars: int = 0
+    max_poll_bytes: int = 0
 
     def fail(self, why: str) -> None:
         self.reasons.append(why)
@@ -100,7 +105,7 @@ def run_job(tool: str, task: dict, root: Path, lane: str, row: Row, timeout_s: f
     while True:
         time.sleep(POLL_SECONDS)
         polled = call("grok_agent_poll", {"job_id": job_id, "limit": 5}, root)
-        row.max_poll_chars = max(row.max_poll_chars, len(json.dumps(polled, default=str)))
+        row.max_poll_bytes = max(row.max_poll_bytes, wire_size(polled))
         state = polled.get("state")
         if state in {"done", "error", "cancelled"}:
             row.elapsed_s = time.monotonic() - started
@@ -142,8 +147,8 @@ def check_common(row: Row, polled: dict) -> dict:
             row.fail("the turn died and left nothing verified or committed behind it")
     if receipt.get("blocked_reason") == "ACP_OUTPUT_LIMIT":
         row.fail("output cap truncated the job instead of bounding it")
-    if row.max_poll_chars > POLL_BUDGET_CHARS:
-        row.fail(f"a single poll cost the host {row.max_poll_chars} chars")
+    if row.max_poll_bytes > POLL_BUDGET_BYTES:
+        row.fail(f"a single poll cost the host {row.max_poll_bytes} bytes")
     return receipt
 
 
@@ -262,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
             row.fail(f"harness raised {type(exc).__name__}: {exc}")
         rows.append(row)
         print(f"   {'PASS' if row.passed else 'FAIL'} in {row.elapsed_s:.0f}s"
-              f" · worst poll {row.max_poll_chars} chars", flush=True)
+              f" · worst poll {row.max_poll_bytes} bytes", flush=True)
         for reason in row.reasons:
             print(f"     - {reason}", flush=True)
         for note in row.notes:
@@ -271,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
     print("\n" + "=" * 66)
     for row in rows:
         print(f"  {'PASS' if row.passed else 'FAIL'}  {row.role:<9}"
-              f" {row.elapsed_s:>6.0f}s  poll<={row.max_poll_chars:>6}  "
+              f" {row.elapsed_s:>6.0f}s  poll<={row.max_poll_bytes:>6}  "
               f"{'; '.join(row.reasons)[:70]}")
     print("=" * 66)
 
@@ -286,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
                 "turns": args.turns,
                 "rows": [
                     {"role": r.role, "passed": r.passed, "reasons": r.reasons,
-                     "elapsed_s": round(r.elapsed_s, 1), "max_poll_chars": r.max_poll_chars,
+                     "elapsed_s": round(r.elapsed_s, 1), "max_poll_bytes": r.max_poll_bytes,
                      "notes": r.notes,
                      "receipt": r.receipt}
                     for r in rows

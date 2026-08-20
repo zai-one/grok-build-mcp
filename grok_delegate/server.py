@@ -1382,6 +1382,25 @@ def handle_tool_call(
         )
         return err
 
+    # **Breaking:** the compat tools now honour the project opt-in like every
+    # other job tool. `grok_delegate_start` started a real worker in a directory
+    # carrying no `.grok-mcp.json` while `grok_agent_execute` refused the same
+    # directory with PROJECT_NOT_ENABLED -- so the opt-in the documentation calls
+    # the whole security model was defeated by one advertised tool. `plan_only`
+    # is exempt: planning reads and reports, and refusing it would leave a caller
+    # with no way to see what the gate is objecting to.
+    if not plan_only:
+        gate_error, _ = _apply_project_gate({"project_root": str(root)})
+        if gate_error is not None:
+            _audit_failure(
+                principal=principal,
+                tool=name,
+                args=args,
+                result=gate_error,
+                stream=audit_stream,
+            )
+            return gate_error
+
     base_ref = str(args.get("base_ref") or "origin/dev")
     max_turns = args.get("max_turns")
 

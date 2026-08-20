@@ -139,9 +139,12 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
     record = dict(record)
     nested = record.get("result")
     if isinstance(nested, Mapping):
+        # `full_changed_files` was in keep_keys and not in this list, so a
+        # finished job's compact poll dropped it entirely -- and it is the field
+        # that separates "what this run did" from "what is sitting in the lane".
         for key in ("status", "blocked_reason", "summary", "worktree_path", "branch",
-                    "changed_files", "artifacts", "tests", "tests_skipped_reason",
-                    "diffstat", "unified_diff"):
+                    "changed_files", "full_changed_files", "artifacts", "tests",
+                    "tests_skipped_reason", "diffstat", "unified_diff"):
             if record.get(key) in (None, "", [], {}) and nested.get(key) not in (None, "", [], {}):
                 record[key] = nested[key]
 
@@ -153,7 +156,13 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
         if key == "summary":
             out[key] = _clip(value, ECONOMY_MAX_SUMMARY)
         elif key in {"changed_files", "full_changed_files", "artifacts"} and isinstance(value, list):
+            # Say what was left out. Eighty changed files arriving as twenty-four
+            # with no count reads as "that is all this job touched", which is the
+            # one thing a reviewer must not be wrong about.
             out[key] = value[:ECONOMY_MAX_CHANGED_FILES]
+            if len(value) > ECONOMY_MAX_CHANGED_FILES:
+                out[key + "_omitted"] = len(value) - ECONOMY_MAX_CHANGED_FILES
+                out[key + "_total"] = len(value)
         elif key == "events" and isinstance(value, list):
             out[key] = value[-ECONOMY_MAX_EVENTS:]
         elif key == "tests" and isinstance(value, list):
@@ -190,6 +199,20 @@ _TRIM_ORDER: tuple[tuple[str, int], ...] = (
 )
 
 
+def wire_size(value: Any) -> int:
+    """What this payload actually costs on the wire, in bytes.
+
+    Every stdio and HTTP write in `server.py` serialises with
+    `ensure_ascii=False` and encodes UTF-8, so that is the only measurement the
+    budget may use. Counting characters of the escaped form inflates Cyrillic
+    roughly threefold and fails a poll that was inside the promise; counting
+    characters of the unescaped form undercounts it, because Cyrillic is two
+    bytes each. A live audit run tripped over both directions of that in one
+    afternoon.
+    """
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+
+
 def fit_poll_budget(record: dict[str, Any], cap: int = 0) -> dict[str, Any]:
     """Hold one poll under the budget whether or not compaction is on.
 
@@ -199,13 +222,12 @@ def fit_poll_budget(record: dict[str, Any], cap: int = 0) -> dict[str, Any]:
     there and at the top level in compact mode, so both are fitted.
     """
     cap = cap or ECONOMY_MAX_RECORD
-    if len(json.dumps(record, ensure_ascii=False, default=str)) <= cap:
+    if wire_size(record) <= cap:
         return record
     nested = record.get("result")
     if isinstance(nested, dict):
         # Budget the nested receipt against what the envelope leaves it.
-        envelope = len(json.dumps({k: v for k, v in record.items() if k != "result"},
-                                  ensure_ascii=False, default=str))
+        envelope = wire_size({k: v for k, v in record.items() if k != "result"})
         _fit_record_budget(nested, max(1_024, cap - envelope))
     return _fit_record_budget(record, cap)
 
@@ -223,7 +245,7 @@ def _fit_record_budget(out: dict[str, Any], cap: int) -> dict[str, Any]:
     that quietly drops half a diff is worse than one that admits it.
     """
     def size() -> int:
-        return len(json.dumps(out, ensure_ascii=False, default=str))
+        return wire_size(out)
 
     if size() <= cap:
         return out

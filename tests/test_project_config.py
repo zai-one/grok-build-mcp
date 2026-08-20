@@ -267,3 +267,59 @@ def test_an_injected_allowlist_still_excludes_everything_else(tmp_path) -> None:
     assert out["ok"] is False
     assert out["error"] == "PROJECT_ROOT_NOT_ALLOWED"
     assert not (stranger / CONFIG_FILENAME).exists()
+
+
+# --- the opt-in the compat tools were exempt from --------------------------------
+
+
+def _bare_repo(tmp_path):
+    import subprocess
+
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    for args in (["init", "-q", "-b", "main"], ["add", "-A"],
+                 ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "s"]):
+        subprocess.run(["git", *args], cwd=str(tmp_path), check=True, capture_output=True)
+    return tmp_path.resolve()
+
+
+def test_the_compat_start_tool_honours_the_project_opt_in(tmp_path) -> None:
+    """`grok_delegate_start` started a real worker where `grok_agent_execute` refused.
+
+    The opt-in is described as the whole security model -- a project has to say
+    yes before the bridge runs anything in it -- and one advertised tool walked
+    straight past it. Found by the audit routine, reproduced before it was
+    believed: the same directory answered PROJECT_NOT_ENABLED to the typed tool
+    and ok=True with a live job_id to this one.
+    """
+    root = _bare_repo(tmp_path)
+    out = handle_tool_call(
+        "grok_delegate_start",
+        {"goal": "anything", "lane": "gate-probe", "cwd": str(root)},
+        allowed_roots=[root],
+    )
+    assert out["ok"] is False
+    assert out["error"] == "PROJECT_NOT_ENABLED"
+    assert out.get("job_id") is None
+
+
+def test_the_compat_delegate_tool_honours_it_too(tmp_path) -> None:
+    root = _bare_repo(tmp_path)
+    out = handle_tool_call(
+        "grok_delegate",
+        {"goal": "anything", "lane": "gate-probe", "cwd": str(root)},
+        allowed_roots=[root],
+    )
+    assert out["ok"] is False
+    assert out["error"] == "PROJECT_NOT_ENABLED"
+
+
+def test_planning_is_still_allowed_without_a_config(tmp_path) -> None:
+    """A plan reads and reports. Refusing it would leave a caller unable to see
+    what the gate is objecting to, which is the opposite of actionable."""
+    root = _bare_repo(tmp_path)
+    out = handle_tool_call(
+        "grok_delegate_plan",
+        {"goal": "anything", "lane": "gate-probe", "cwd": str(root)},
+        allowed_roots=[root],
+    )
+    assert out.get("error") != "PROJECT_NOT_ENABLED", out

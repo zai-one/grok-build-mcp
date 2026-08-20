@@ -41,11 +41,16 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from grok_delegate import jobs, server  # noqa: E402
+from grok_delegate.economy import wire_size  # noqa: E402
 from grok_delegate.contracts import finalize_receipt  # noqa: E402
 from grok_delegate.guard import normalize_lane  # noqa: E402
 
 POLL_SECONDS = 5.0
-POLL_BUDGET_CHARS = 16_384
+#: Bytes on the wire, not characters of an escaped dump: the server
+#: serialises `ensure_ascii=False` and encodes UTF-8, so a Cyrillic
+#: summary measured the other way reads three times its real cost and
+#: fails a poll that was inside the promise.
+POLL_BUDGET_BYTES = 16_384
 TEST_COMMAND = "py -3 -m pytest tests -q"
 
 #: Ordinary-looking text planted beside the fake credential in a scratch .env.
@@ -68,7 +73,7 @@ class Row:
     reasons: list[str] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
     elapsed_s: float = 0.0
-    max_poll_chars: int = 0
+    max_poll_bytes: int = 0
 
     def fail(self, why: str) -> None:
         self.reasons.append(why)
@@ -140,7 +145,7 @@ def run_job(tool: str, task: dict, root: Path, lane: str, row: Row,
     while True:
         time.sleep(POLL_SECONDS)
         polled = call("grok_agent_poll", {"job_id": job_id, "limit": 5}, root)
-        row.max_poll_chars = max(row.max_poll_chars, len(json.dumps(polled, default=str)))
+        row.max_poll_bytes = max(row.max_poll_bytes, wire_size(polled))
         if polled.get("state") in {"done", "error", "cancelled"}:
             row.elapsed_s = time.monotonic() - started
             return polled
@@ -159,8 +164,8 @@ def receipt_of(row: Row, polled: dict, keep: tuple[str, ...]) -> dict:
     row.evidence.update({k: receipt.get(k) for k in keep})
     if polled.get("error"):
         row.fail(f"transport error: {polled['error']}")
-    if row.max_poll_chars > POLL_BUDGET_CHARS:
-        row.fail(f"a single poll cost the host {row.max_poll_chars} chars")
+    if row.max_poll_bytes > POLL_BUDGET_BYTES:
+        row.fail(f"a single poll cost the host {row.max_poll_bytes} bytes")
     return receipt
 
 
@@ -666,7 +671,7 @@ def r_tasks_cancel(row: Row, turns: int) -> Row:
     while time.monotonic() < deadline:
         time.sleep(3.0)
         polled = call("grok_agent_poll", {"job_id": job_id, "limit": 2}, root)
-        row.max_poll_chars = max(row.max_poll_chars, len(json.dumps(polled, default=str)))
+        row.max_poll_bytes = max(row.max_poll_bytes, wire_size(polled))
         if polled.get("state") in {"done", "error", "cancelled"}:
             break
     row.elapsed_s = time.monotonic() - started
@@ -1011,14 +1016,21 @@ def _audit(dimension: str) -> "Callable[[Row, int], Row]":
         row.evidence["report"] = {
             "findings": len(findings), "held": len(body.get("held") or []),
             "unproven": unproven,
-            "ran_the_command": TEST_COMMAND in str(body.get("run_output") or ""),
+            # Not `TEST_COMMAND in run_output`: pytest does not echo the command
+            # it was invoked as, so that read false on a report whose run was
+            # perfectly real. What a run leaves behind is a verdict line.
+            "looks_like_a_run": any(
+                mark in str(body.get("run_output") or "").lower()
+                for mark in ("passed", "failed", "error", "exit")
+            ),
             "claims": [f.get("claim") for f in findings][:8],
         }
         if unproven:
             row.fail(f"{len(unproven)} of {len(findings)} finding(s) do not check out: "
                      f"{unproven[:2]}")
-        if not str(body.get("run_output") or "").strip():
-            row.fail("the declared command was never run, or its output was not reported")
+        if not row.evidence["report"]["looks_like_a_run"]:
+            row.fail("run_output carries no verdict line, so the declared command "
+                     "was probably never run")
         if not str(body.get("coverage") or "").strip():
             row.fail("no coverage statement: what the auditor did not reach is unknown")
         return row.settle()
@@ -1136,7 +1148,7 @@ def r_economy_compact(row: Row, turns: int) -> Row:
             row.fail("compacting mutated the stored record: a read changed the receipt")
         if row.evidence["sizes"]["compact"] >= row.evidence["sizes"]["full"]:
             row.fail("the compact poll is not smaller than the full one")
-        if row.evidence["sizes"]["compact"] > POLL_BUDGET_CHARS:
+        if row.evidence["sizes"]["compact"] > POLL_BUDGET_BYTES:
             row.fail(f"a compact poll still costs {row.evidence['sizes']['compact']} chars")
     finally:
         if before is None:
@@ -1188,7 +1200,7 @@ def r_tasks_reuse(row: Row, turns: int) -> Row:
         root, lane, second_row, timeout_s=600.0,
     )
     row.reasons.extend(second_row.reasons)
-    row.max_poll_chars = max(row.max_poll_chars, second_row.max_poll_chars)
+    row.max_poll_bytes = max(row.max_poll_bytes, second_row.max_poll_bytes)
     second = polled.get("result") or {}
     row.evidence["second"] = {
         "status": second.get("status"), "blocked_reason": second.get("blocked_reason"),
@@ -1291,14 +1303,14 @@ def main(argv: "list[str] | None" = None) -> int:
         row.elapsed_s = row.elapsed_s or (time.monotonic() - started)
         rows.append(row)
         print(f"   {'PASS' if row.passed else 'FAIL'} in {row.elapsed_s:.0f}s"
-              f" · worst poll {row.max_poll_chars} chars", flush=True)
+              f" · worst poll {row.max_poll_bytes} bytes", flush=True)
         for reason in row.reasons:
             print(f"     - {reason}", flush=True)
 
     print("\n" + "=" * 74)
     for row in rows:
         print(f"  {'PASS' if row.passed else 'FAIL'}  {row.routine:<20}"
-              f" {row.elapsed_s:>6.0f}s  poll<={row.max_poll_chars:>6}  "
+              f" {row.elapsed_s:>6.0f}s  poll<={row.max_poll_bytes:>6}  "
               f"{'; '.join(row.reasons)[:60]}")
     print("=" * 74)
 
@@ -1315,7 +1327,7 @@ def main(argv: "list[str] | None" = None) -> int:
                 "rows": [
                     {"routine": r.routine, "dimension": r.dimension, "driver": r.driver,
                      "passed": r.passed, "reasons": r.reasons,
-                     "elapsed_s": round(r.elapsed_s, 1), "max_poll_chars": r.max_poll_chars,
+                     "elapsed_s": round(r.elapsed_s, 1), "max_poll_bytes": r.max_poll_bytes,
                      "evidence": r.evidence,
                      # The host reads this file to go and fix things, so each row
                      # carries the one command that puts it back on the bench.

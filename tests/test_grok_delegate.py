@@ -501,6 +501,7 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(result.get("ok"))
         self.assertEqual(result.get("error"), "LANE_RESERVED")
 
+
     def test_prepare_success_creates_external_worktree(self) -> None:
         git = MockGit()
         result = runner.prepare_worktree(
@@ -760,6 +761,10 @@ class ServerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name) / "repo"
         self.repo.mkdir()
+        # The compat tools honour the project opt-in like every other job tool,
+        # so a scratch project has to say yes before these tests can exercise
+        # the delegate path they are actually about.
+        (self.repo / ".grok-mcp.json").write_text('{"preset": "standard"}', encoding="utf-8")
         self.lanes = Path(self.tmp.name) / "pcp-lanes"
         self.lanes.mkdir()
 
@@ -1566,6 +1571,10 @@ class SandboxAndFlagsTests(unittest.TestCase):
             lanes = Path(td) / "pcp-lanes"
             repo.mkdir()
             lanes.mkdir()
+            # This test is about a resume flag, not about the opt-in the compat
+            # tools now honour, so the scratch project says yes and gets out of
+            # the way.
+            (repo / ".grok-mcp.json").write_text('{"preset": "standard"}', encoding="utf-8")
             sp = MockSubprocess(ok=True)
             result = server.handle_tool_call(
                 "grok_delegate",
@@ -1757,6 +1766,9 @@ class RoundSixBackgroundJobTests(unittest.TestCase):
         self.jobs = jobs_mod
         self.jobs.reset_jobs_for_tests()
         self.repo = Path(tempfile.mkdtemp())
+        # Same reason as ServerTests: the compat start tool is gated on the
+        # project opting in, and these tests are about background jobs.
+        (self.repo / ".grok-mcp.json").write_text('{"preset": "standard"}', encoding="utf-8")
         self.lanes = Path(tempfile.mkdtemp())
 
     def _sync_starter(self, fn: Any) -> None:
