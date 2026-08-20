@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -70,7 +71,28 @@ DEFAULT_TIMEOUT_SECONDS = 900
 # 2026-07-26, a `git --version` inside the MCP server took as long as the
 # client's poll interval, and `git worktree add` hit this ceiling three times
 # over. Configurable so a slow host is a slow lane, not a failed one.
+#
+# Raising this ceiling is not the fix. Spawn, not the git child, is what the
+# budget actually pays for inside a busy long-lived server. Measured on this
+# host, ``subprocess.Popen(['git', '--version'])`` median of 8:
+#   idle process ....................................    7.1 ms
+#   16 threads running Python bytecode .............. 3258.7 ms
+#   16 threads sleeping (same count, no GIL held) ...    6.5 ms
+# Same machine, same binary, same thread count. GIL contention — not
+# antivirus, sandboxing, or CPU load. A timed-out probe is retried once so a
+# starved wrapper is a slow lane; a hung git fails twice and still fails.
+# Checkout (``worktree add``) is not retried: it has its own budget and can
+# legitimately run for minutes.
 DEFAULT_GIT_TIMEOUT_SECONDS = 60.0
+
+# Structured GIT_TIMEOUT fields for a probe that failed after that retry.
+# The message text stays the "wrapper stopped waiting" wording; these name
+# the measurement so the next person does not go looking at antivirus.
+GIT_SPAWN_STARVATION_CAUSE = "starved_wrapper"
+GIT_SPAWN_STARVATION_MEASUREMENT = (
+    "Popen(['git','--version']) median of 8: "
+    "idle 7.1ms; 16 GIL-holding threads 3258.7ms; 16 sleeping threads 6.5ms"
+)
 
 # One budget for every git call was wrong in both directions. A probe
 # (`--version`, `rev-parse`, `status`) does milliseconds of work and only ever
@@ -117,6 +139,66 @@ def git_checkout_timeout_seconds() -> float:
         DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS,
     )
     return max(value, git_timeout_seconds())
+
+
+# Process-lifetime cache of ``git --version``. Keyed on the resolved binary
+# because the binary does not change while this process lives, and spawning it
+# is the expensive part under GIL contention (idle 7.1ms vs 3258.7ms with 16
+# bytecode threads). The lock is the whole thread-safety story;
+# clear_git_version_cache exists so tests are not order-dependent.
+_GIT_VERSION_LOCK = threading.Lock()
+_GIT_VERSION_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _git_version_cache_key(binary: str) -> str:
+    located = str(binary or "git")
+    if not os.path.dirname(located):
+        found = shutil.which(located)
+        if found:
+            located = found
+    try:
+        located = str(Path(located).resolve())
+    except OSError:
+        located = os.path.abspath(located)
+    return os.path.normcase(located)
+
+
+def clear_git_version_cache() -> None:
+    """Drop the process-lifetime ``git --version`` cache.
+
+    Production never needs this: the binary does not change. Tests do, or a
+    cached hit from an earlier case would leak into the next.
+    """
+    with _GIT_VERSION_LOCK:
+        _GIT_VERSION_CACHE.clear()
+
+
+def cached_git_version(
+    git: GitRunner,
+    cwd: Path | None,
+    timeout: float,
+    *,
+    binary: str = "git",
+) -> dict[str, Any]:
+    """Return ``git --version``, spawning at most once per resolved binary.
+
+    Timeouts are not cached: a GIL-starved spawn is transient, and the retry
+    in ``_run_git_probe`` must be allowed to try again.
+    """
+    key = _git_version_cache_key(binary)
+    with _GIT_VERSION_LOCK:
+        hit = _GIT_VERSION_CACHE.get(key)
+        if hit is not None:
+            return dict(hit)
+    result = dict(git(["--version"], cwd, timeout))
+    if not result.get("timedOut"):
+        with _GIT_VERSION_LOCK:
+            existing = _GIT_VERSION_CACHE.get(key)
+            if existing is not None:
+                return dict(existing)
+            _GIT_VERSION_CACHE[key] = dict(result)
+    return result
+
 
 # Cap on captured stdout/stderr size (chars) before truncation in result.
 DEFAULT_OUTPUT_CHAR_CAP = 200_000
@@ -257,46 +339,36 @@ class DelegationResult:
         return d
 
 
-def default_git_runner(
+def _spawn_git(
     args: Sequence[str],
     cwd: Path | None,
     timeout: float,
 ) -> dict[str, Any]:
-    """Real git subprocess (production path). Tests inject a mock instead."""
+    """One git subprocess. Records how long ``Popen`` itself took.
+
+    Under GIL contention that spawn is the 500x cost (idle 7.1ms vs 3258.7ms
+    with 16 bytecode threads); the child still finishes in milliseconds.
+    ``subprocess.run`` does not expose the split, so this is Popen then
+    communicate, with the same UTF-8 decoding as before.
+    """
     import subprocess
 
-    _reject_forbidden_git_args(args)
     cmd = ["git", *[str(a) for a in args]]
     report_progress(last_step=_step_label(cmd), last_step_at=time.time())
+    spawn_started = time.monotonic()
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(  # noqa: S603 — argv is filtered by the caller
             cmd,
             cwd=str(cwd) if cwd else None,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             # Decode as UTF-8, never the Windows locale codepage: git output can
             # carry non-cp1252 bytes (branch/file names), which would raise
             # UnicodeDecodeError in the reader thread and lose the result.
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
-            check=False,
         )
-        return {
-            "args": cmd,
-            "returncode": proc.returncode,
-            "stdout": proc.stdout or "",
-            "stderr": proc.stderr or "",
-            "timedOut": False,
-        }
-    except subprocess.TimeoutExpired as exc:
-        return {
-            "args": cmd,
-            "returncode": 124,
-            "stdout": (exc.stdout or "") if isinstance(exc.stdout, str) else "",
-            "stderr": f"timeout after {timeout}s",
-            "timedOut": True,
-        }
     except FileNotFoundError:
         return {
             "args": cmd,
@@ -305,7 +377,115 @@ def default_git_runner(
             "stderr": "git not found",
             "timedOut": False,
             "missing": True,
+            "spawn_seconds": time.monotonic() - spawn_started,
         }
+    spawn_seconds = time.monotonic() - spawn_started
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return {
+            "args": cmd,
+            "returncode": proc.returncode,
+            "stdout": stdout or "",
+            "stderr": stderr or "",
+            "timedOut": False,
+            "spawn_seconds": spawn_seconds,
+        }
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            stdout, stderr = proc.communicate()
+        except Exception:  # noqa: BLE001 — never lose the timeout verdict itself
+            stdout, stderr = "", ""
+        return {
+            "args": cmd,
+            "returncode": 124,
+            "stdout": stdout if isinstance(stdout, str) else "",
+            "stderr": f"timeout after {timeout}s",
+            "timedOut": True,
+            "spawn_seconds": spawn_seconds,
+        }
+
+
+def default_git_runner(
+    args: Sequence[str],
+    cwd: Path | None,
+    timeout: float,
+) -> dict[str, Any]:
+    """Real git subprocess (production path). Tests inject a mock instead."""
+    _reject_forbidden_git_args(args)
+    argv = [str(a) for a in args]
+    if argv == ["--version"]:
+        # The binary does not change while this process lives; skip a spawn
+        # that is 500x slower when other threads hold the GIL.
+        return cached_git_version(
+            _spawn_git, cwd, timeout, binary=shutil.which("git") or "git"
+        )
+    return _spawn_git(args, cwd, timeout)
+
+
+def _is_worktree_add(args: Sequence[str]) -> bool:
+    tokens = [str(a) for a in args]
+    return "worktree" in tokens and "add" in tokens
+
+
+def _call_git(
+    git: GitRunner,
+    args: Sequence[str],
+    cwd: Path | None,
+    timeout: float,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    result = git(args, cwd, timeout)
+    if not isinstance(result, dict):
+        result = {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "",
+            "timedOut": False,
+        }
+    else:
+        result = dict(result)
+    if "spawn_seconds" not in result:
+        result["spawn_seconds"] = time.monotonic() - started
+    return result
+
+
+def _run_git_probe(
+    git: GitRunner,
+    args: Sequence[str],
+    cwd: Path | None,
+    timeout: float,
+) -> dict[str, Any]:
+    """Run a git probe; retry once on timeout.
+
+    Process spawn, not the child, is what blows the budget inside a busy
+    server: measured on this host, ``Popen(['git', '--version'])`` median of 8
+    is 7.1 ms idle, 3258.7 ms with 16 threads holding the GIL, and 6.5 ms with
+    16 sleeping threads. One retry turns a starved probe into a slow lane; a
+    genuinely hung git fails twice and still fails the dispatch. Checkout
+    (``worktree add``) is not a probe and is not retried here.
+    """
+    first = _call_git(git, args, cwd, timeout)
+    if not first.get("timedOut"):
+        return first
+    second = _call_git(git, args, cwd, timeout)
+    second["retried_after_timeout"] = True
+    return second
+
+
+def _with_probe_retry(git: GitRunner) -> GitRunner:
+    """Retry timed-out probes once; never retry ``git worktree add``."""
+
+    def wrapped(
+        args: Sequence[str],
+        cwd: Path | None,
+        timeout: float,
+    ) -> dict[str, Any]:
+        if _is_worktree_add(args):
+            return git(args, cwd, timeout)
+        return _run_git_probe(git, args, cwd, timeout)
+
+    return wrapped
 
 
 def default_subprocess_runner(
@@ -485,6 +665,16 @@ def _git_timeout_error(
     over a day: `git --version` returning in 0.13s from a shell was reported as
     GIT_MISSING because the same call was starved to 60s inside the server.
     """
+    extra.setdefault("spawn_seconds", result.get("spawn_seconds"))
+    if result.get("retried_after_timeout"):
+        # A probe already got its one retry. Name the measurement: spawn is
+        # what timed out (idle 7.1ms vs 3258.7ms with 16 GIL-holding threads),
+        # not a broken git binary and not antivirus.
+        extra.setdefault("retried", True)
+        extra.setdefault("known_cause", GIT_SPAWN_STARVATION_CAUSE)
+        extra.setdefault(
+            "spawn_measurement", GIT_SPAWN_STARVATION_MEASUREMENT
+        )
     return structured_error(
         "GIT_TIMEOUT",
         f"git {step} exceeded its {timeout:g}s budget (the command was not "
@@ -680,7 +870,7 @@ def prepare_worktree(
     ``timeout`` budgets the probes; ``checkout_timeout`` (default: the same
     value, so direct callers keep the old behaviour) budgets ``worktree add``.
     """
-    git = git_runner or default_git_runner
+    git = _with_probe_retry(git_runner or default_git_runner)
     root = Path(repo_root).resolve()
 
     try:
@@ -1612,6 +1802,8 @@ __all__ = [
     "CHECKOUT_SETTLE_POLL_SECONDS",
     "DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS",
     "DEFAULT_GIT_TIMEOUT_SECONDS",
+    "GIT_SPAWN_STARVATION_CAUSE",
+    "GIT_SPAWN_STARVATION_MEASUREMENT",
     "PHASE_ANCHORS",
     "PHASE_COLLECT",
     "PHASE_EXECUTOR",
@@ -1620,6 +1812,8 @@ __all__ = [
     "PHASE_WORKTREE",
     "DelegationResult",
     "RunnerConfig",
+    "cached_git_version",
+    "clear_git_version_cache",
     "collect_diff",
     "default_git_runner",
     "default_subprocess_runner",

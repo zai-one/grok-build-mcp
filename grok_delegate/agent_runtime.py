@@ -28,6 +28,7 @@ from .contracts import build_prompt, finalize_receipt, redact_text, validate_tas
 from .guard import GuardError, normalize_lane, structured_error, validate_grok_bin
 from .runner import (
     GitRunner,
+    cached_git_version,
     collect_diff,
     commit_lane_work,
     delegate,
@@ -324,13 +325,29 @@ def run_task(
     if write_role:
         git_exe = shutil.which("git") or "git"
 
-        def git_runner(args: Sequence[str], process_cwd: Path | str | None, timeout: float) -> dict[str, Any]:
+        def _spawn_owned_git(
+            args: Sequence[str], process_cwd: Path | str | None, timeout: float
+        ) -> dict[str, Any]:
             return _run_owned_process(
                 [git_exe, *[str(value) for value in args]],
                 Path(process_cwd or root),
                 float(timeout),
                 cancel_event,
             )
+
+        def git_runner(
+            args: Sequence[str], process_cwd: Path | str | None, timeout: float
+        ) -> dict[str, Any]:
+            argv = [str(value) for value in args]
+            cwd_path = Path(process_cwd or root)
+            if argv == ["--version"]:
+                # git.exe does not change while this process lives. Skip a
+                # spawn that is 500x slower when other threads hold the GIL
+                # (measured: idle 7.1ms vs 3258.7ms, 16 bytecode threads).
+                return cached_git_version(
+                    _spawn_owned_git, cwd_path, float(timeout), binary=git_exe
+                )
+            return _spawn_owned_git(args, cwd_path, float(timeout))
 
         # The lane lives under the project's dot-directory, so git has to be
         # told to ignore it before the checkout appears -- otherwise the
@@ -806,6 +823,11 @@ def _run_owned_process(
     cancel_event: threading.Event,
 ) -> dict[str, Any]:
     output_cap = 1_000_000
+    # Spawn, not the child, is the 500x cost under GIL contention: measured
+    # Popen(['git','--version']) median of 8 is 7.1ms idle vs 3258.7ms with
+    # 16 bytecode threads (sleeping threads 6.5ms). Record that so a later
+    # GIT_TIMEOUT does not read as "git is broken / check antivirus".
+    spawn_started = time.monotonic()
     try:
         proc = subprocess.Popen(
             [str(value) for value in argv], cwd=str(cwd), stdin=subprocess.DEVNULL,
@@ -815,7 +837,12 @@ def _run_owned_process(
             start_new_session=os.name != "nt",
         )
     except FileNotFoundError:
-        return {"returncode": 127, "stdout": "", "stderr": "binary not found", "missing": True, "timedOut": False}
+        return {
+            "returncode": 127, "stdout": "", "stderr": "binary not found",
+            "missing": True, "timedOut": False,
+            "spawn_seconds": time.monotonic() - spawn_started,
+        }
+    spawn_seconds = time.monotonic() - spawn_started
     process_job = _WindowsKillJob(proc)
     deadline = time.monotonic() + max(0.1, timeout)
     cancelled = False
@@ -885,6 +912,7 @@ def _run_owned_process(
         "returncode": 130 if cancelled else (124 if timed_out or output_limited.is_set() else proc.returncode),
         "stdout": stdout or "", "stderr": stderr or "", "timedOut": timed_out,
         "cancelled": cancelled, "output_limited": output_limited.is_set(),
+        "spawn_seconds": spawn_seconds,
     }
 
 

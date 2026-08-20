@@ -28,6 +28,20 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## Unreleased
+
+### A GIL-starved git probe is a slow lane, not a failed dispatch
+
+`GIT_TIMEOUT` on `git --version` read as a broken git, and the search went to
+antivirus. Spawn is what costs 500× under GIL contention (`Popen(['git','--version'])`
+median of 8: idle 7.1ms vs 3258.7ms with 16 bytecode threads; sleeping threads
+6.5ms). Probes now retry once before failing, the structured error carries
+`spawn_seconds` and names that measurement, and `git --version` is cached for
+the process lifetime so every lane does not pay a spawn for a binary that has
+not changed. Checkout (`git worktree add`) is not retried.
+
+---
+
 ## 0.22.0 — Promises the bridge can keep
 
 ### **Breaking:** the compat tools now honour the project opt-in
