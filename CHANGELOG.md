@@ -28,7 +28,7 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
-## Unreleased
+## 0.23.0 — A wait you can watch
 
 ### A verifier run that never happened is no longer reported as a failure
 
