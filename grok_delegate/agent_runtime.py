@@ -36,6 +36,7 @@ from .runner import (
     is_hidden_inside,
     is_path_inside,
     prepare_worktree,
+    spawn_or_cached_version,
 )
 
 _CONCURRENCY = max(1, min(int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "1") or "1"), 2))
@@ -324,12 +325,28 @@ def run_task(
     if write_role:
         git_exe = shutil.which("git") or "git"
 
-        def git_runner(args: Sequence[str], process_cwd: Path | str | None, timeout: float) -> dict[str, Any]:
+        def _spawn_owned_git(
+            args: Sequence[str], process_cwd: Path | str | None, timeout: float
+        ) -> dict[str, Any]:
             return _run_owned_process(
                 [git_exe, *[str(value) for value in args]],
                 Path(process_cwd or root),
                 float(timeout),
                 cancel_event,
+            )
+
+        def git_runner(
+            args: Sequence[str], process_cwd: Path | str | None, timeout: float
+        ) -> dict[str, Any]:
+            # Same cache+spawn entry as default_git_runner: a successful
+            # --version is 500x cheaper than a GIL-starved Popen (idle
+            # 7.1ms vs 3258.7ms); a failed probe must not stick forever.
+            return spawn_or_cached_version(
+                _spawn_owned_git,
+                args,
+                Path(process_cwd or root),
+                float(timeout),
+                binary=git_exe,
             )
 
         # The lane lives under the project's dot-directory, so git has to be
@@ -831,6 +848,11 @@ def _run_owned_process(
     cancel_event: threading.Event,
 ) -> dict[str, Any]:
     output_cap = 1_000_000
+    # Spawn, not the child, is the 500x cost under GIL contention: measured
+    # Popen(['git','--version']) median of 8 is 7.1ms idle vs 3258.7ms with
+    # 16 bytecode threads (sleeping threads 6.5ms). Record that so a later
+    # GIT_TIMEOUT does not read as "git is broken / check antivirus".
+    spawn_started = time.monotonic()
     try:
         proc = subprocess.Popen(
             [str(value) for value in argv], cwd=str(cwd), stdin=subprocess.DEVNULL,
@@ -840,7 +862,12 @@ def _run_owned_process(
             start_new_session=os.name != "nt",
         )
     except FileNotFoundError:
-        return {"returncode": 127, "stdout": "", "stderr": "binary not found", "missing": True, "timedOut": False}
+        return {
+            "returncode": 127, "stdout": "", "stderr": "binary not found",
+            "missing": True, "timedOut": False,
+            "spawn_seconds": time.monotonic() - spawn_started,
+        }
+    spawn_seconds = time.monotonic() - spawn_started
     process_job = _WindowsKillJob(proc)
     deadline = time.monotonic() + max(0.1, timeout)
     cancelled = False
@@ -910,6 +937,7 @@ def _run_owned_process(
         "returncode": 130 if cancelled else (124 if timed_out or output_limited.is_set() else proc.returncode),
         "stdout": stdout or "", "stderr": stderr or "", "timedOut": timed_out,
         "cancelled": cancelled, "output_limited": output_limited.is_set(),
+        "spawn_seconds": spawn_seconds,
     }
 
 
