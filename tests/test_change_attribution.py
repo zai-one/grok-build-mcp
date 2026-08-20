@@ -48,6 +48,9 @@ def _receipt(**over) -> dict:
         "artifacts": ["app.py"],
         "tests": [{"source": "bridge-verifier", "command": "pytest -q",
                    "passed": True, "returncode": 0}],
+        # A write receipt that reports no lane commit is no longer complete;
+        # this fixture is about something else, so it carries one.
+        "lane_commit": {"ok": True, "committed": True, "reason": None, "sha": "0ba5e1"},
     }
     receipt.update(over)
     return receipt

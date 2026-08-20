@@ -422,7 +422,20 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
             # read-only checkout -- came back `completed` with `sha: None` and
             # nothing on the branch to merge.
             commit = out.get("lane_commit")
-            if isinstance(commit, Mapping) and not commit.get("sha"):
+            if not isinstance(commit, Mapping):
+                # An absent field is not an exemption. `{}` was caught and a
+                # missing key was not, so a transport that never fills this in
+                # -- `transport: legacy` is exactly one -- came back `completed`
+                # with nothing on any branch to merge. The gate must not depend
+                # on some other gate happening to catch the same receipt.
+                #
+                # Last, and only when nothing else objected: "no commit" is the
+                # least informative thing that can be wrong with a receipt, and
+                # it must not displace a reason that names the actual defect.
+                if status == "completed":
+                    status = "blocked"
+                    out["blocked_reason"] = "LANE_COMMIT_MISSING: NOT_REPORTED"
+            elif not commit.get("sha"):
                 reason = str(commit.get("reason") or "UNKNOWN")
                 if reason not in {"NOT_A_WRITE_ROLE"}:
                     status = "blocked"

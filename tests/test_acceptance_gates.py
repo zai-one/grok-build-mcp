@@ -46,6 +46,11 @@ def _receipt(**overrides):
                 "source": "bridge-verifier",
             }
         ],
+        # A write role that reports no lane commit is no longer complete: work
+        # nobody can review is not delivered work, and an absent field is not an
+        # exemption from saying so. The fixture is "passes every gate", so it
+        # carries one.
+        "lane_commit": {"ok": True, "committed": True, "reason": None, "sha": "0ba5e1"},
     }
     value.update(overrides)
     return value
@@ -371,3 +376,67 @@ def test_end_to_end_a_test_that_creates_the_artifact_does_not_pass_the_job(monke
         assert receipt["status"] == "blocked"
         assert receipt["blocked_reason"] == "ARTIFACT_WRITTEN_BY_VERIFIER: b.txt"
         assert receipt["ok"] is False
+
+
+# --- an absent field is not an exemption -----------------------------------------
+
+
+def _write_task():
+    return {"role": "execute", "objective": "x", "expected_artifacts": ["app.py"],
+            "test_commands": ["py -3 -m pytest tests -q"]}
+
+
+def _proven_receipt(**over):
+    receipt = {
+        "status": "completed", "changed_files": ["app.py"], "full_changed_files": ["app.py"],
+        "artifacts": ["app.py"], "worker_written_files": ["app.py"],
+        "tests": [{"source": "bridge-verifier", "command": "py -3 -m pytest tests -q",
+                   "passed": True, "returncode": 0}],
+    }
+    receipt.update(over)
+    return receipt
+
+
+def test_a_receipt_with_no_lane_commit_field_is_not_completed() -> None:
+    """`{}` was caught and a missing key was not.
+
+    So a transport that never fills the field in -- `transport: legacy` is
+    exactly one -- came back `completed` with nothing on any branch to merge.
+    The previous round called that harmless because TEST_EVIDENCE_MISSING would
+    catch the same receipt; a gate that depends on another gate catching its
+    misses is not a gate. Found by the audit routine reading its own bridge.
+    """
+    from grok_delegate.contracts import finalize_receipt
+
+    out = finalize_receipt(_proven_receipt(), _write_task())
+    assert out["status"] == "blocked"
+    assert out["blocked_reason"] == "LANE_COMMIT_MISSING: NOT_REPORTED"
+
+
+def test_a_null_lane_commit_is_the_same_absence() -> None:
+    from grok_delegate.contracts import finalize_receipt
+
+    out = finalize_receipt(_proven_receipt(lane_commit=None), _write_task())
+    assert out["status"] == "blocked"
+    assert out["blocked_reason"] == "LANE_COMMIT_MISSING: NOT_REPORTED"
+
+
+def test_a_real_commit_still_passes_the_widened_check() -> None:
+    from grok_delegate.contracts import finalize_receipt
+
+    out = finalize_receipt(
+        _proven_receipt(lane_commit={"ok": True, "committed": True, "sha": "abc1234"}),
+        _write_task(),
+    )
+    assert out["status"] == "completed", out.get("blocked_reason")
+
+
+def test_a_read_only_role_is_still_not_asked_for_one() -> None:
+    """The gate only runs for write roles; widening it must not change that."""
+    from grok_delegate.contracts import finalize_receipt
+
+    out = finalize_receipt(
+        {"status": "completed", "changed_files": [], "tests": []},
+        {"role": "consult", "objective": "x", "expected_artifacts": [], "test_commands": []},
+    )
+    assert out["status"] == "completed"

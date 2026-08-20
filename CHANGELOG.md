@@ -28,7 +28,7 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
-## Unreleased
+## 0.22.0 — Promises the bridge can keep
 
 ### **Breaking:** the compat tools now honour the project opt-in
 
@@ -45,6 +45,18 @@ job. `grok_delegate_plan` stays exempt: a plan reads and reports, and refusing i
 would leave the caller unable to see what the gate is objecting to.
 
 Found by the `audit.wiring` routine and reproduced before it was believed.
+
+### A receipt that never mentioned a lane commit read as finished
+
+`lane_commit: {}` was caught and a missing key was not, so a write receipt from a
+transport that never fills the field in — `transport: legacy` is exactly one —
+came back `completed` with nothing on any branch to merge. The previous round
+called that harmless because `TEST_EVIDENCE_MISSING` catches the same receipts;
+a gate that relies on another gate catching its misses is not a gate.
+
+The check runs last and only when nothing else objected, because "no commit" is
+the least informative thing that can be wrong with a receipt and must not
+displace a reason that names the actual defect.
 
 ### A compact poll shortened the file list without saying so
 

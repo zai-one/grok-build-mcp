@@ -144,6 +144,9 @@ def _receipt(**overrides):
                 "source": "bridge-verifier",
             }
         ],
+        # A write receipt that reports no lane commit is no longer complete;
+        # this fixture is about something else, so it carries one.
+        "lane_commit": {"ok": True, "committed": True, "reason": None, "sha": "0ba5e1"},
     }
     value.update(overrides)
     return value
