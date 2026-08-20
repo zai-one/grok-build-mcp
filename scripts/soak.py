@@ -51,6 +51,10 @@ class Row:
     role: str
     passed: bool = False
     reasons: list[str] = field(default_factory=list)
+    #: Things worth reporting that are not failures. Kept apart from
+    #: `reasons` because `passed` is computed from that list, and a note
+    #: appended there would fail a row for being informative.
+    notes: list[str] = field(default_factory=list)
     receipt: dict[str, Any] = field(default_factory=dict)
     elapsed_s: float = 0.0
     max_poll_chars: int = 0
@@ -122,7 +126,20 @@ def check_common(row: Row, polled: dict) -> dict:
     if polled.get("error"):
         row.fail(f"transport error: {polled['error']}")
     if receipt.get("blocked_reason") == "ACP_STOP_cancelled":
-        row.fail("the gate refused something and the turn died with it")
+        # Judge the substance, not the string. `ACP_STOP_cancelled` is what a
+        # gate refusal that killed the turn looks like -- and also what simply
+        # running out of turns looks like, which is a documented success:
+        # the verifier still runs and the lane still commits
+        # (`agent_runtime.py:675`). These jobs are small and get forty turns, so
+        # exhaustion here would itself be news; but a row that fails must say
+        # which of the two happened rather than assuming.
+        verified = [t for t in (receipt.get("tests") or [])
+                    if t.get("source") == "bridge-verifier"]
+        committed = bool((receipt.get("lane_commit") or {}).get("sha"))
+        if verified and committed:
+            row.notes.append("stopped on turns, but verified and committed")
+        else:
+            row.fail("the turn died and left nothing verified or committed behind it")
     if receipt.get("blocked_reason") == "ACP_OUTPUT_LIMIT":
         row.fail("output cap truncated the job instead of bounding it")
     if row.max_poll_chars > POLL_BUDGET_CHARS:
@@ -248,6 +265,8 @@ def main(argv: list[str] | None = None) -> int:
               f" · worst poll {row.max_poll_chars} chars", flush=True)
         for reason in row.reasons:
             print(f"     - {reason}", flush=True)
+        for note in row.notes:
+            print(f"     . {note}", flush=True)
 
     print("\n" + "=" * 66)
     for row in rows:
@@ -268,6 +287,7 @@ def main(argv: list[str] | None = None) -> int:
                 "rows": [
                     {"role": r.role, "passed": r.passed, "reasons": r.reasons,
                      "elapsed_s": round(r.elapsed_s, 1), "max_poll_chars": r.max_poll_chars,
+                     "notes": r.notes,
                      "receipt": r.receipt}
                     for r in rows
                 ],
