@@ -15,6 +15,7 @@ as "confirmed".
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -79,7 +80,15 @@ def test_a_drive_relative_path_in_a_command_is_refused(root: Path) -> None:
     assert _command_allowed("py -3 -m pytest C:secret.py", root) is False
 
 
+@pytest.mark.skipif(os.name != "nt", reason="a drive letter only means a drive on Windows")
 def test_an_absolute_drive_path_is_still_judged_as_a_path(root: Path) -> None:
+    """Windows-only on purpose, and CI is why.
+
+    `C:\\outside\\secret.py` is an absolute path on Windows and an ordinary
+    relative filename on POSIX, where a backslash is just a character. Asserting
+    the Windows answer everywhere failed on Linux against code that was right --
+    the test was making a claim about the platform, not about the gate.
+    """
     assert _command_allowed("py -3 -m pytest C:\\outside\\secret.py", root) is False
 
 
