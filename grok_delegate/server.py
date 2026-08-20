@@ -54,6 +54,7 @@ try:
         SERVER_VERSION as _guard_server_version,
         GuardError,
         host_provided_roots,
+        normalize_lane,
         parse_allowed_roots_env,
         path_in_allowlist,
         paths_equal,
@@ -121,6 +122,7 @@ except ImportError:  # flat import when package dir is on sys.path
         SERVER_VERSION as _guard_server_version,
         GuardError,
         host_provided_roots,
+        normalize_lane,
         parse_allowed_roots_env,
         path_in_allowlist,
         paths_equal,
@@ -1389,7 +1391,11 @@ def handle_tool_call(
     if name == TOOL_START:
         # R6: detached lane — validation above already ran, so a bad request still
         # fails fast; only the long executor spawn moves off the request path.
-        job = jobs.start_job(_run_delegation, lane=str(lane), tool=name)
+        # The registry is what `lane_is_busy` consults, and the agent tools ask
+        # it with a normalised name. Recording the raw one meant `foo` and
+        # `grok/foo` were two different lanes to the check and one worktree on
+        # disk, so both could run at once in the same checkout.
+        job = jobs.start_job(_run_delegation, lane=str(normalize_lane(str(lane))), tool=name)
         started = {
             "ok": True,
             "job_id": job.get("job_id"),

@@ -308,6 +308,25 @@ def start_job(
     return snapshot(jid) or dict(record)
 
 
+def lane_is_busy(lane: str) -> "dict[str, Any] | None":
+    """The running job holding this lane, or None. Scans every record.
+
+    The caller used to ask `list_jobs(limit=64)` and look through the answer,
+    which is a newest-first page: with more running jobs than that, the oldest
+    fell off the end and its worktree read as free. Two workers in one checkout
+    is the one thing this check exists to prevent, so it cannot be answered from
+    a page.
+    """
+    target = str(lane or "")
+    if not target:
+        return None
+    with _LOCK:
+        for record in _JOBS.values():
+            if record.get("state") == STATE_RUNNING and str(record.get("lane") or "") == target:
+                return dict(record)
+    return None
+
+
 def forget_job(job_id: str) -> bool:
     """Drop a record entirely. Only for tombstones nothing can finish.
 

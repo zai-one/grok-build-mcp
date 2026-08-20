@@ -150,11 +150,7 @@ def start_agent_job(
                 "idempotent_replay": True,
                 "poll_with": "grok_agent_poll",
             }
-        busy = next(
-            (record for record in jobs.list_jobs(limit=64)
-             if record.get("state") == jobs.STATE_RUNNING and record.get("lane") == lane_name),
-            None,
-        )
+        busy = jobs.lane_is_busy(lane_name)
         if busy is not None:
             return structured_error("LANE_BUSY", f"lane {lane_name} already has a running job")
         if not _ADMISSION.acquire(blocking=False):

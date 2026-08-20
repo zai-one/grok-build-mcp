@@ -28,6 +28,44 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.20.0 — One lane, one worker
+
+The four claims the previous round left unverified, taken one at a time. Two
+were real and are fixed, one is real and turns out to be harmless, and one had
+no honest probe behind it.
+
+### A busy lane could read as free
+
+The check asked `jobs.list_jobs(limit=64)` and looked through the answer -- a
+newest-first page. Past sixty-four running jobs the oldest fell off the end and
+its worktree read as available, which is the one outcome the check exists to
+prevent: two workers in one checkout. It now scans the whole registry under the
+lock instead of a page of it.
+
+### One lane, spelled two ways
+
+`grok_delegate_start` recorded the lane exactly as the caller wrote it, while
+the agent tools ask for the normalised name. So `foo` and `grok/foo` were two
+different lanes to the busy check and one directory on disk, and both could run
+at once. The legacy tool now records what the check will look for.
+
+### `transport: legacy` is missing the evidence fields, and it does not matter
+
+The legacy write path sets none of `verifier_touched_files`, `lane_commit` or
+`worker_written_files`. Confirmed by reading the branch that handles write
+roles, not the read-only one next to it. It cannot produce a false success
+anyway: a write role with no `bridge-verifier` test is already refused with
+`TEST_EVIDENCE_MISSING`, and a test the agent says it ran is not evidence. Two
+tests pin that, so the harmlessness stays deliberate rather than accidental.
+
+### Not fixed
+
+The cancel-versus-completion race. Every probe for it so far went through
+`jobs.start_job`, which never registers a cancel event -- that happens a layer
+up in `start_agent_job` -- so nothing was actually tested. The window, if it is
+there, costs a wrong error message on a job that was finishing regardless.
+Checking it properly needs a live job through the agent layer.
+
 ## 0.19.0 — Five that survived being checked
 
 Ten claims came out of the 2026-08-19 skeptic sweep unverified. Reproducing them

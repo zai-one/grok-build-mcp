@@ -185,3 +185,79 @@ def test_a_read_only_role_is_not_asked_for_a_commit() -> None:
         _TASK,
     )
     assert out["status"] == "completed"
+
+
+# --- C2/C3: one lane, one worker, however many jobs the registry holds ----------
+
+
+def test_a_busy_lane_is_found_past_the_page_size() -> None:
+    """The check asked `list_jobs(limit=64)`, which is a newest-first page.
+
+    With more running jobs than that, the oldest fell off the end and its
+    worktree read as free -- and two workers in one checkout is the single thing
+    this check exists to prevent.
+    """
+    import time
+
+    jobs._JOBS.clear()
+    for i in range(70):
+        jobs._JOBS[f"j{i:03d}"] = {
+            "job_id": f"j{i:03d}", "lane": f"grok/lane-{i:03d}", "state": jobs.STATE_RUNNING,
+            "started_at": time.time() + i, "server_pid": 1, "tool": "x",
+        }
+    assert jobs.lane_is_busy("grok/lane-000") is not None, "the oldest lane is still taken"
+    assert jobs.lane_is_busy("grok/lane-069") is not None
+    assert jobs.lane_is_busy("grok/never-used") is None
+
+
+def test_a_finished_job_does_not_hold_its_lane() -> None:
+    jobs._JOBS.clear()
+    jobs._JOBS["j"] = {"job_id": "j", "lane": "grok/done", "state": "done", "server_pid": 1}
+    assert jobs.lane_is_busy("grok/done") is None
+
+
+def test_an_empty_lane_name_matches_nothing() -> None:
+    jobs._JOBS.clear()
+    jobs._JOBS["j"] = {"job_id": "j", "lane": "", "state": jobs.STATE_RUNNING, "server_pid": 1}
+    assert jobs.lane_is_busy("") is None
+
+
+def test_the_registry_records_the_name_the_agent_will_look_for() -> None:
+    """`grok_delegate_start` stored the raw lane and the agent tools ask for the
+    normalised one, so `foo` and `grok/foo` were two lanes to the check and one
+    worktree on disk."""
+    from grok_delegate.guard import normalize_lane
+
+    assert str(normalize_lane("foo")) == "grok/foo"
+    jobs._JOBS.clear()
+    jobs._JOBS["j"] = {"job_id": "j", "lane": str(normalize_lane("foo")),
+                       "state": jobs.STATE_RUNNING, "server_pid": 1}
+    assert jobs.lane_is_busy("grok/foo") is not None
+
+
+# --- G3: the legacy transport cannot produce a false success -------------------
+
+
+def test_a_write_receipt_with_no_verifier_evidence_is_blocked() -> None:
+    """`transport: legacy` sets none of verifier_touched_files, lane_commit or
+    worker_written_files. Confirmed -- and harmless, because a write role with no
+    bridge-verifier test is already refused. Pinned so it stays that way."""
+    out = finalize_receipt(
+        {"status": "completed", "changed_files": ["app.py"], "full_changed_files": ["app.py"],
+         "artifacts": ["app.py"], "tests": []},
+        _TASK,
+    )
+    assert out["status"] == "blocked"
+    assert out["blocked_reason"] == "TEST_EVIDENCE_MISSING"
+
+
+def test_a_test_the_agent_says_it_ran_is_not_evidence() -> None:
+    out = finalize_receipt(
+        {"status": "completed", "changed_files": ["app.py"], "full_changed_files": ["app.py"],
+         "artifacts": ["app.py"],
+         "tests": [{"source": "agent-reported", "command": "pytest -q",
+                    "passed": True, "returncode": 0}]},
+        _TASK,
+    )
+    assert out["status"] == "blocked"
+    assert out["blocked_reason"] == "TEST_EVIDENCE_MISSING"
