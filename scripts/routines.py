@@ -1044,6 +1044,72 @@ AUDITS = {
                  "tests/test_acceptance_gates.py, tests/test_change_attribution.py, "
                  "tests/test_redaction_coverage.py",
     },
+    "audit.protocol": {
+        "title": "The MCP surface: what a host sees on the wire.",
+        "body": "Everything a host knows about this bridge arrives over JSON-RPC. Promises: "
+                "`initialize` echoes a protocol version the client can accept and never "
+                "invents one; a notification is answered with nothing at all, because a "
+                "response to a notification is a protocol error; unknown methods get -32601 "
+                "and malformed params -32602 rather than a crash; `tools/list` schemas match "
+                "what the handlers actually accept, including `additionalProperties: false`; "
+                "a server-to-client request (`roots/list`) is correlated by id and its answer "
+                "is never fed back to the dispatcher; `notifications/progress` only ever goes "
+                "out for a request that carried a progressToken; every tool result is JSON the "
+                "client can parse, with `structuredContent` and `content[].text` agreeing. "
+                "Look for a method that answers when it must stay silent, a schema that "
+                "accepts what the handler rejects or rejects what it accepts, an id collision "
+                "between our requests and the client's, and any path where a malformed frame "
+                "takes the loop down instead of being answered.",
+        "files": "grok_delegate/server.py (handle_jsonrpc, serve_stdio, list_tools, "
+                 "_agent_task_schema, _roots_followup, emit_progress), "
+                 "tests/test_mcp_roots.py, tests/test_progress_and_wait.py, "
+                 "tests/test_protocol_version.py",
+    },
+    "audit.lifecycle": {
+        "title": "A job from dispatch to receipt: what survives, what leaks, what lies.",
+        "body": "One job at a time, in a worktree, with a verifier and a commit. Promises: a "
+                "lane runs one job at a time and the busy check uses the same name the rest "
+                "of the bridge uses; a cancel reaches the worker and its children and leaves "
+                "the tree judgeable; a lane that produced nothing is removed and one that "
+                "produced anything is kept with a reason; a mount is copied in before the "
+                "worker and taken out after; the base is pinned to a SHA before the worker "
+                "starts so a reused lane cannot hide what an earlier job left; nothing the "
+                "verifier wrote is counted as the worker's work. Look for two workers "
+                "reaching one worktree, a child process that outlives its job, a receipt that "
+                "names a tree the worker never stood in, and a path where work is deleted.",
+        "files": "grok_delegate/agent_runtime.py (run_task, start_agent_job, _lane_name, "
+                 "_run_owned_process), grok_delegate/runner.py (prepare_worktree, "
+                 "release_lane, mount_paths_into, commit_lane_work), grok_delegate/jobs.py, "
+                 "tests/test_lane_lifecycle.py, tests/test_mount_paths.py",
+    },
+    "audit.docs": {
+        "title": "Does the documentation still describe this code?",
+        "body": "README.md, AGENTS.md and CHANGELOG.md are read by people deciding whether to "
+                "trust this bridge, and a promise that is no longer true is worse than no "
+                "promise. Check the claims that are checkable: environment variables that are "
+                "named, defaults that are quoted, field names in receipts and task packets, "
+                "error codes, the version in the four places that must agree, the tools listed "
+                "against the tools the server actually registers, and any sentence saying "
+                "something is impossible or not implemented. For each, cite the documentation "
+                "line and the code line that contradicts it. A claim you cannot check from "
+                "the tree is not a finding; say so instead of guessing.",
+        "files": "README.md, AGENTS.md, CHANGELOG.md, docs/, grok_delegate/server.py "
+                 "(list_tools, main), grok_delegate/guard.py (SERVER_VERSION), pyproject.toml, "
+                 "schemas/",
+    },
+    "audit.tests": {
+        "title": "Would the tests notice if the code stopped working?",
+        "body": "A green suite is worth exactly as much as its ability to go red. Look for "
+                "tests that would pass with the mechanism they name removed: assertions on "
+                "values the test itself supplied, `assert x is not None` where the interesting "
+                "part is the value, try/except that swallows the failure, a fixture that makes "
+                "the subject unreachable, a skip that fires on every machine, an equality "
+                "against a constant computed the same way in the test and the code. Name the "
+                "single line you would change in the source to make each test still pass while "
+                "the behaviour is gone -- that line is the proof. Also name promises in "
+                "AGENTS.md with no test at all behind them.",
+        "files": "tests/ (all of it), scripts/routines.py, AGENTS.md",
+    },
     "audit.wiring": {
         "title": "Roots and opt-in: where the bridge is allowed to work at all.",
         "body": "Two independent gates decide whether a job may run: the directory has to be "

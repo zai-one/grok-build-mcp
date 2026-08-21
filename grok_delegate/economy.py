@@ -205,10 +205,23 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
 #: afford to lose them. Events are already bounded and purely informational, a
 #: summary is the agent's prose about work the diff shows anyway, and the diff
 #: is the last thing to give because it is what the host came for.
+#:
+#: `tests` and `artifacts` are in the list because leaving them out did not make
+#: them small: a job declaring many test commands carried a 2000-character
+#: preview for each, and a job producing many files carried every path, and
+#: neither could be cut -- so the record came back at 138 KB against a 16 KiB
+#: budget with nothing said about it.
 _TRIM_ORDER: tuple[tuple[str, int], ...] = (
     ("events", 1), ("summary", 300), ("diffstat", 200),
     ("unified_diff", 512), ("full_changed_files", 4), ("changed_files", 4),
+    ("artifacts", 4), ("tests", 1),
 )
+
+#: How much of one verifier run's output survives when the budget is tight. The
+#: exit status and the command are what acceptance reads; the preview is for a
+#: human, and a human can ask for the lane.
+_TEST_PREVIEW_FLOOR = 200
+
 
 
 def wire_size(value: Any) -> int:
@@ -241,6 +254,12 @@ def fit_poll_budget(record: dict[str, Any], cap: int = 0) -> dict[str, Any]:
         # Budget the nested receipt against what the envelope leaves it.
         envelope = wire_size({k: v for k, v in record.items() if k != "result"})
         _fit_record_budget(nested, max(1_024, cap - envelope))
+        # A trim inside `result` is a trim the reader has to know about, and the
+        # reader is looking at the envelope: without this, a poll came back at
+        # exactly the budget with nothing saying what had been cut to get there.
+        for key in ("economy_trimmed", "economy_dropped", "economy_budget_chars"):
+            if key in nested and key not in record:
+                record[key] = nested[key]
     return _fit_record_budget(record, cap)
 
 
@@ -263,6 +282,23 @@ def _fit_record_budget(out: dict[str, Any], cap: int) -> dict[str, Any]:
         return out
 
     trimmed: list[str] = []
+
+    def note(key: str) -> None:
+        if key not in trimmed:
+            trimmed.append(key)
+
+    # Test rows are mostly preview text, and the preview is the part a reader can
+    # lose. Shrink it before dropping whole rows, so a job with many declared
+    # commands still shows which ones ran and how they ended.
+    if wire_size(out) > cap and isinstance(out.get("tests"), list):
+        rows = out["tests"]
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get("output_preview"), str):
+                preview = row["output_preview"]
+                if len(preview) > _TEST_PREVIEW_FLOOR:
+                    row["output_preview"] = preview[:_TEST_PREVIEW_FLOOR] + "…(truncated)"
+                    note("tests")
+
     for key, floor in _TRIM_ORDER:
         for _ in range(8):  # halving converges; the bound stops a pathological value
             over = size() - cap
@@ -278,10 +314,43 @@ def _fit_record_budget(out: dict[str, Any], cap: int) -> dict[str, Any]:
                 out[key] = value[: max(floor, len(value) // 2)]
             else:
                 break
-            if key not in trimmed:
-                trimmed.append(key)
+            note(key)
         if size() <= cap:
             break
+
+    if size() > cap:
+        # Everything the order allows has been cut and the record is still too
+        # large. Names cannot help here -- each remaining field has a floor, and
+        # `result` has to stay because the verdict lives in it -- so this pass
+        # measures instead: drop the heaviest thing that is not an identifier,
+        # and repeat. It converges because every step removes bytes.
+        essential = {
+            "ok", "job_id", "state", "status", "lane", "branch", "correlation_id",
+            "blocked_reason", "error", "error_code", "worktree_path", "economy_compact",
+            "lane_commit", "output_truncated", "tests_skipped_reason", "result",
+        }
+        dropped: list[str] = []
+        for _ in range(64):
+            if size() <= cap:
+                break
+            nested = out.get("result") if isinstance(out.get("result"), dict) else {}
+            weights = [
+                (wire_size(value), key, out)
+                for key, value in out.items()
+                if key not in essential
+            ] + [
+                (wire_size(value), key, nested)
+                for key, value in nested.items()
+                if key not in essential
+            ]
+            if not weights:
+                break
+            _, key, owner = max(weights)
+            owner.pop(key, None)
+            dropped.append(key)
+            note(key)
+        if dropped:
+            out["economy_dropped"] = dropped
 
     if trimmed:
         out["economy_trimmed"] = trimmed

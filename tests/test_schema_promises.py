@@ -36,6 +36,7 @@ PROMISES: dict[str, str] = {
     "transport": "validate_transport; stdio/websocket/legacy routed in agent_runtime",
     "repo_root": "resolve_trusted_repo_root; allowlist tests",
     "project_root": "project_gate; PROJECT_NOT_ENABLED carries the path",
+    "cwd": "compat tools resolve it against the allowlist; tests/test_project_config.py::test_the_compat_start_tool_honours_the_project_opt_in",
     "base_ref": "pinned to a SHA before the worker starts; tests/test_base_ref_and_receipt_reason.py",
     # --- worker budget ---------------------------------------------------------
     "model": "argv omits --model when empty; tests/test_model_and_effort_defaults.py",

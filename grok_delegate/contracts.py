@@ -442,6 +442,11 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
                 and test.get("passed") is True
                 and test.get("returncode") == 0
                 and test.get("source") == "bridge-verifier"
+                # A row that says it never ran is not evidence, whatever else it
+                # carries. The bridge never writes `passed` on a cancelled run,
+                # but the gate must not depend on the producer being careful --
+                # a row claiming both was accepted as proof.
+                and test.get("outcome", "passed") == "passed"
             ]
             if len({test["command"] for test in valid_tests}) != len(set(expected_tests)):
                 status = "blocked"
@@ -480,10 +485,14 @@ def finalize_receipt(receipt: Mapping[str, Any], task: Mapping[str, Any]) -> dic
                     status = "blocked"
                     out["blocked_reason"] = "LANE_COMMIT_MISSING: NOT_REPORTED"
             elif not commit.get("sha"):
+                # No exemption here. This branch only runs for `execute` and
+                # `fix`, so a receipt claiming `NOT_A_WRITE_ROLE` is claiming
+                # something about a role it is not -- and it was accepted,
+                # which made the commit requirement optional for anyone who
+                # wrote that word into the field.
                 reason = str(commit.get("reason") or "UNKNOWN")
-                if reason not in {"NOT_A_WRITE_ROLE"}:
-                    status = "blocked"
-                    out["blocked_reason"] = "LANE_COMMIT_MISSING: " + reason
+                status = "blocked"
+                out["blocked_reason"] = "LANE_COMMIT_MISSING: " + reason
     out["status"] = status
     # jobs.start_job owns transport-independent lifecycle state and keys it from
     # this boolean.  A terminal receipt without it was incorrectly persisted as
@@ -602,6 +611,16 @@ _AUTHORIZATION_PATTERN = re.compile(
 #: secret, and replacing it would make ordinary prose unreadable for nothing.
 _NETRC_MARKER = re.compile(r"(?im)^\s*(?:machine\s+\S+|default\s*$)")
 _NETRC_PASSWORD = re.compile(r"(?i)(\bpassword\s+)(\S+)")
+#: Words that are a credential wherever they appear, used for the short-value
+#: rule above. Deliberately smaller than `_KEY`: `key` and `auth` are ordinary
+#: words in ordinary code, and a four-character floor under them would start
+#: eating identifiers again.
+_STRONG_KEY = (
+    r"(?<![A-Za-z0-9_])(?:password|passwd|pwd|secret|secret[_-]?key|api[_-]?key|"
+    r"access[_-]?key|private[_-]?key|client[_-]?secret|auth[_-]?token|"
+    r"access[_-]?token|refresh[_-]?token)"
+)
+
 
 _SECRET_TEXT_PATTERNS = (
     # Quoted value: to the closing quote, so a passphrase does not survive from
@@ -621,6 +640,21 @@ _SECRET_TEXT_PATTERNS = (
         # `ws://host?server-key=x` the key matched `ws` and its value swallowed
         # the rest of the URL, so the real `server-key=` was never examined.
         re.compile(r"(?P<key>" + _KEY + r")(\s*[:=]\s*)(?!//)([^\s\"'&,;}\]()\n]{8,})"),
+        lambda m: f"{m.group('key')}{m.group(2)}<REDACTED>",
+    ),
+    # Short values under a word that is never anything but a credential.
+    # `password=hunter2` (seven characters) and `SECRET_KEY=secret` (six) were
+    # reaching receipts intact. The two shapes that made the eight-character
+    # floor necessary are excluded here rather than lowering it everywhere: a
+    # value that is a language token, and a value that turns out to be a call.
+    (
+        re.compile(
+            r"(?P<key>" + _STRONG_KEY + r")(\s*[:=]\s*)(?!//)"
+            r"(?!(?:str|bytes|int|bool|dict|list|none|null|nil|true|false|self|env|os|"
+            r"input|value|required|optional|redacted)\b)"
+            r"(?!<)([^\s\"'&,;}\]()<>\n]{4,7})(?!\()",
+            re.IGNORECASE,
+        ),
         lambda m: f"{m.group('key')}{m.group(2)}<REDACTED>",
     ),
 )

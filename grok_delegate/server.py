@@ -299,6 +299,12 @@ _INPUT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "Lane slug or grok/<slug> (not dev/master/main)",
         },
+        # Honoured by the handler since this tool existed and declared nowhere,
+        # so a client reading tools/list could not discover it.
+        "cwd": {
+            "type": "string",
+            "description": "Project directory to work in; must be an allowlisted root",
+        },
         "base_ref": {
             "type": "string",
             "description": "Git base ref (default origin/dev)",
@@ -1093,6 +1099,93 @@ def _apply_project_gate(task: Mapping[str, Any]) -> tuple[dict[str, Any] | None,
     return None, out
 
 
+#: JSON Schema type name -> what Python calls it. `bool` is excluded from the
+#: numeric types on purpose: `isinstance(True, int)` is True in Python, and a
+#: boolean where an integer was declared is exactly the kind of confusion this
+#: check exists to catch.
+_JSON_TYPES: dict[str, Any] = {
+    "string": str,
+    "integer": int,
+    "number": (int, float),
+    "boolean": bool,
+    "array": list,
+    "object": Mapping,
+}
+
+_TOOL_SCHEMAS: "dict[str, Any] | None" = None
+
+
+def _tool_schemas() -> dict[str, Any]:
+    """The published input schemas, by tool name, built once."""
+    global _TOOL_SCHEMAS
+    if _TOOL_SCHEMAS is None:
+        _TOOL_SCHEMAS = {
+            str(entry.get("name")): entry.get("inputSchema") or {}
+            for entry in list_tools()
+        }
+    return _TOOL_SCHEMAS
+
+
+#: Fields the handler refuses with a better message than this checker could.
+#: `grok_bin` is undeclared deliberately -- a client may not choose the binary --
+#: and its refusal names that rule.
+_HANDLER_OWNED_ARGUMENTS = frozenset({"grok_bin"})
+
+
+def _container_for_scalar(value: Any, declared: Any) -> bool:
+    """True when an object or array arrived where a scalar was declared.
+
+    Deliberately not a full type check. A numeric string for an integer is
+    lenient but harmless -- bounds are enforced after coercion, so `"999"` is
+    still refused -- and several fields already have refusals that say more than
+    a type name would. What nothing caught was a container being stringified:
+    `job_id: {"a": 1}` was looked up as `"{'a': 1}"`, and `lane: {"a": 1}`
+    started a job on a lane named after a dict's repr.
+    """
+    names = [declared] if not isinstance(declared, list) else list(declared)
+    scalars = {"string", "integer", "number", "boolean"}
+    if not names or not all(str(name) in scalars for name in names):
+        return False
+    return isinstance(value, (Mapping, list, tuple))
+
+
+def _schema_violation(schema: Any, arguments: Mapping[str, Any], prefix: str = "") -> "str | None":
+    """The first way *arguments* disagrees with *schema*, or None.
+
+    Deliberately shallow-but-recursive: it descends into declared objects, which
+    is what `task` is, and stops caring below that. The point is to make the
+    published schema mean something at the boundary, not to reimplement a
+    validator.
+    """
+    if not isinstance(schema, Mapping) or not isinstance(arguments, Mapping):
+        return None
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return None
+    if schema.get("additionalProperties") is False:
+        unknown = sorted(set(arguments) - set(properties) - _HANDLER_OWNED_ARGUMENTS)
+        if unknown:
+            named = ", ".join(prefix + name for name in unknown)
+            return f"unknown arguments: {named}"
+    for key, value in arguments.items():
+        declared = properties.get(key)
+        if not isinstance(declared, Mapping) or value is None:
+            # A null means "not provided" everywhere in this surface.
+            continue
+        expected = declared.get("type")
+        if expected is not None and _container_for_scalar(value, expected):
+            names = expected if isinstance(expected, list) else [expected]
+            return (
+                f"{prefix}{key} must be {' or '.join(str(name) for name in names)}, "
+                f"got {type(value).__name__}"
+            )
+        if isinstance(value, Mapping):
+            nested = _schema_violation(declared, value, prefix=f"{prefix}{key}.")
+            if nested:
+                return nested
+    return None
+
+
 def handle_tool_call(
     name: str,
     arguments: Mapping[str, Any] | None,
@@ -1107,6 +1200,7 @@ def handle_tool_call(
 ) -> dict[str, Any]:
     """Transport-independent tool handler (callable without stdio)."""
     args = dict(arguments or {})
+    violation = _schema_violation(_tool_schemas().get(name), args)
 
     def typed_return(result: dict[str, Any], task: Mapping[str, Any] | None = None) -> dict[str, Any]:
         packet = task if isinstance(task, Mapping) else {}
@@ -1130,6 +1224,12 @@ def handle_tool_call(
         except Exception:
             pass
         return result
+
+    if violation is not None:
+        # The schema is published in `tools/list`; a call that contradicts it is
+        # refused here rather than coerced by whichever handler sees it first.
+        code = "ARGUMENTS_UNKNOWN" if violation.startswith("unknown arguments") else "ARGUMENTS_INVALID"
+        return typed_return(structured_error(code, violation))
 
     # Round 8 primary typed surface.  The old grok_delegate_* names below stay
     # as compatibility aliases over the legacy backend and diagnostics.
@@ -2226,6 +2326,13 @@ def serve_stdio(
                 length = int(line.split(":", 1)[1].strip())
             except ValueError:
                 continue
+            if length < 0 or length > MAX_FRAME_BYTES:
+                # Same reasoning as the binary loop: a negative length reads to
+                # EOF and takes the session with it.
+                raw = json.dumps(_jsonrpc_error(None, -32700, "invalid Content-Length"))
+                out.write(f"Content-Length: {len(raw.encode('utf-8'))}\r\n\r\n{raw}")
+                out.flush()
+                continue
             inn.readline()  # blank line after headers
             body = inn.read(length)
             try:
@@ -2273,6 +2380,21 @@ def serve_stdio(
             out.flush()
 
 
+#: The largest frame this server will assemble. A header asking for more is a
+#: broken client or a hostile one, and either way the answer is the same.
+MAX_FRAME_BYTES = 16 * 1024 * 1024
+
+
+def _write_frame(out: Any, payload: dict[str, Any], *, framed: bool) -> None:
+    """One response, in whichever framing the request arrived in."""
+    blob = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if framed:
+        out.write(f"Content-Length: {len(blob)}\r\n\r\n".encode("ascii") + blob)
+    else:
+        out.write(blob + b"\n")
+    out.flush()
+
+
 def _serve_binary_stdio(inn: Any, out: Any) -> None:
     """Byte-correct MCP framing; Content-Length always counts UTF-8 bytes."""
     while True:
@@ -2286,6 +2408,12 @@ def _serve_binary_stdio(inn: Any, out: Any) -> None:
             try:
                 length = int(first.split(b":", 1)[1].strip())
             except ValueError:
+                continue
+            if length < 0 or length > MAX_FRAME_BYTES:
+                # Not `read(length)`: a negative length drains the pipe and ends
+                # the session, and an absurd one would wait forever for bytes
+                # that are not coming. Answer and keep listening.
+                _write_frame(out, _jsonrpc_error(None, -32700, "invalid Content-Length"), framed=True)
                 continue
             while True:
                 header = inn.readline()

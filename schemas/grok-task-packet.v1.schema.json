@@ -3,23 +3,92 @@
   "$id": "grok-task-packet.v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["objective", "role", "project_root", "correlation_id"],
+  "required": [
+    "objective",
+    "project_root",
+    "correlation_id"
+  ],
   "properties": {
-    "schema_version": {"const": "grok-task-packet.v1"},
-    "objective": {"type": "string", "minLength": 1, "maxLength": 12000},
-    "role": {"enum": ["consult", "execute", "skeptic", "fix"]},
-    "project_root": {"type": "string", "minLength": 1, "maxLength": 1024},
-    "base_ref": {"type": "string", "minLength": 1, "maxLength": 256, "default": "HEAD"},
-    "model": {"type": ["string", "null"], "minLength": 1, "maxLength": 128, "description": "Model id, or null to let the Grok CLI use its own default"},
-    "reasoning_effort": {"enum": ["low", "medium", "high", "xhigh", "max"], "default": "high"},
-    "permission_profile": {"enum": ["read-only", "workspace"]},
-    "max_turns": {"type": "integer", "minimum": 1, "maximum": 60, "default": 40},
-    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 1800},
-    "inputs": {"$ref": "#/$defs/boundedStringArray"},
-    "constraints": {"$ref": "#/$defs/boundedStringArray"},
-    "acceptance_criteria": {"$ref": "#/$defs/boundedStringArray"},
-    "expected_artifacts": {"$ref": "#/$defs/boundedStringArray"},
-    "test_commands": {"$ref": "#/$defs/boundedStringArray"},
+    "schema_version": {
+      "const": "grok-task-packet.v1"
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 12000
+    },
+    "role": {
+      "enum": [
+        "consult",
+        "execute",
+        "skeptic",
+        "fix"
+      ],
+      "description": "Role for this packet. Role-specific tools (grok_agent_consult, _review, _execute, _fix) set it themselves, so a caller of those omits it."
+    },
+    "project_root": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "base_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "default": "HEAD"
+    },
+    "model": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Model id, or null to let the Grok CLI use its own default"
+    },
+    "reasoning_effort": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "default": "high"
+    },
+    "permission_profile": {
+      "enum": [
+        "read-only",
+        "workspace"
+      ]
+    },
+    "max_turns": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60,
+      "default": 40
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3600,
+      "default": 1800
+    },
+    "inputs": {
+      "$ref": "#/$defs/boundedStringArray"
+    },
+    "constraints": {
+      "$ref": "#/$defs/boundedStringArray"
+    },
+    "acceptance_criteria": {
+      "$ref": "#/$defs/boundedStringArray"
+    },
+    "expected_artifacts": {
+      "$ref": "#/$defs/boundedStringArray"
+    },
+    "test_commands": {
+      "$ref": "#/$defs/boundedStringArray"
+    },
     "review_lane": {
       "type": "string",
       "minLength": 1,
@@ -29,26 +98,56 @@
     "mount_paths": {
       "type": "array",
       "maxItems": 16,
-      "items": {"type": "string", "minLength": 1, "maxLength": 1024},
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      },
       "description": "Project-relative, git-ignored, non-credential paths copied read-only into the lane before the worker starts"
     },
-    "correlation_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
+    "correlation_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    }
   },
   "$defs": {
     "boundedStringArray": {
       "type": "array",
       "maxItems": 64,
-      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
     }
   },
   "allOf": [
     {
-      "if": {"properties": {"role": {"enum": ["execute", "fix"]}}, "required": ["role"]},
-      "then": {
-        "required": ["expected_artifacts", "test_commands"],
+      "if": {
         "properties": {
-          "expected_artifacts": {"minItems": 1},
-          "test_commands": {"minItems": 1}
+          "role": {
+            "enum": [
+              "execute",
+              "fix"
+            ]
+          }
+        },
+        "required": [
+          "role"
+        ]
+      },
+      "then": {
+        "required": [
+          "expected_artifacts",
+          "test_commands"
+        ],
+        "properties": {
+          "expected_artifacts": {
+            "minItems": 1
+          },
+          "test_commands": {
+            "minItems": 1
+          }
         }
       }
     }

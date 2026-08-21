@@ -53,6 +53,16 @@ _FUTURES: dict[str, Future[Any]] = {}
 _JOB_META: dict[str, tuple[dict[str, Any], str]] = {}
 _LOCK = threading.Lock()
 _START_LOCK = threading.Lock()
+#: lane -> job id, for read-only jobs standing in somebody else's worktree.
+#: `jobs.lane_is_busy` answers about the lane a job owns; a review job owns none
+#: and occupies one, and the lock has to know about both or two workers end up
+#: in one checkout.
+_REVIEW_OCCUPANCY: dict[str, str] = {}
+
+
+def _lane_occupied_by_review(lane: str) -> "str | None":
+    with _LOCK:
+        return _REVIEW_OCCUPANCY.get(str(lane or ""))
 
 
 class TransportRouter:
@@ -136,6 +146,9 @@ def start_agent_job(
                 _CANCEL_EVENTS.pop(jid, None)
                 _FUTURES.pop(jid, None)
                 _JOB_META.pop(jid, None)
+                for lane_key, owner in list(_REVIEW_OCCUPANCY.items()):
+                    if owner == jid:
+                        _REVIEW_OCCUPANCY.pop(lane_key, None)
             _ADMISSION.release()
 
     with _START_LOCK:
@@ -159,6 +172,26 @@ def start_agent_job(
         busy = jobs.lane_is_busy(lane_name)
         if busy is not None:
             return structured_error("LANE_BUSY", f"lane {lane_name} already has a running job")
+        review_target = ""
+        raw_review = str(task.get("review_lane") or "")
+        if raw_review:
+            try:
+                review_target = normalize_lane(raw_review)
+            except GuardError as exc:
+                return structured_error(exc.code, exc.message)
+            if jobs.lane_is_busy(review_target) is not None:
+                return structured_error(
+                    "LANE_BUSY", f"lane {review_target} already has a running job"
+                )
+        # A write job must also not walk into a lane a reviewer is standing in.
+        if _lane_occupied_by_review(lane_name) is not None:
+            return structured_error(
+                "LANE_BUSY", f"lane {lane_name} is being reviewed by a running job"
+            )
+        if review_target and _lane_occupied_by_review(review_target) is not None:
+            return structured_error(
+                "LANE_BUSY", f"lane {review_target} is being reviewed by a running job"
+            )
         if not _ADMISSION.acquire(blocking=False):
             return structured_error(
                 "QUEUE_FULL",
@@ -167,6 +200,8 @@ def start_agent_job(
         with _LOCK:
             _CANCEL_EVENTS[jid] = cancel_event
             _JOB_META[jid] = (dict(task), chosen)
+            if review_target:
+                _REVIEW_OCCUPANCY[review_target] = jid
         try:
             def submit_registered(callback: Callable[[], None]) -> None:
                 registered = threading.Event()
@@ -192,6 +227,8 @@ def start_agent_job(
                 _CANCEL_EVENTS.pop(jid, None)
                 _FUTURES.pop(jid, None)
                 _JOB_META.pop(jid, None)
+                if review_target:
+                    _REVIEW_OCCUPANCY.pop(review_target, None)
             _ADMISSION.release()
             raise
     jobs.update_job(
@@ -286,6 +323,33 @@ def run_task(
     branch: str | None = None
     base_ref = str(task["base_ref"])
     cwd = root
+    mounted_paths: list[str] = []
+
+    def abandon(receipt: dict[str, Any]) -> dict[str, Any]:
+        """Leave the lane as an ordinary finish would, then return *receipt*.
+
+        Mounted inputs are the bridge's, not the worker's, so they come out
+        however the job ended; and a lane that produced nothing does not
+        survive a cancel any more than it survives a completed run.
+        `release_lane` decides for itself whether there is work to keep.
+        """
+        try:
+            if mounted_paths:
+                unmount_paths(cwd, mounted_paths)
+            if write_role and branch and cwd != root:
+                released = release_lane(
+                    repo_root=root,
+                    worktree_path=cwd,
+                    branch=str(branch),
+                    base_sha=str(base_ref),
+                    git_runner=git_runner,
+                    timeout=30.0,
+                )
+                receipt["lane_released"] = bool(released.get("removed"))
+                receipt["lane_retained_reason"] = released.get("reason")
+        except Exception:  # noqa: BLE001 - cleanup must not replace the verdict
+            pass
+        return receipt
 
     def diff_snapshot_failure(
         snapshot: Mapping[str, Any],
@@ -298,6 +362,7 @@ def run_task(
             status="failed",
             blocked_reason="DIFF_SNAPSHOT_FAILED",
         )
+        abandon(receipt)
         receipt.update(
             {
                 "branch": branch,
@@ -422,7 +487,7 @@ def run_task(
                 _base_receipt(jid, transport, started, status="cancelled", blocked_reason="CANCELLED_DURING_PREFLIGHT"),
                 task,
             )
-        if not prep.get("ok"):
+        if not prep.get("ok"):  # noqa: SIM102 - the lane does not exist yet here
             return finalize_receipt(
                 _base_receipt(
                     jid,
@@ -456,7 +521,12 @@ def run_task(
         before_commits = {str(value) for value in before.get("commits") or []}
         if cancel_event.is_set():
             return finalize_receipt(
-                _base_receipt(jid, transport, started, status="cancelled", blocked_reason="CANCELLED_DURING_PREFLIGHT"),
+                abandon(
+                    _base_receipt(
+                        jid, transport, started,
+                        status="cancelled", blocked_reason="CANCELLED_DURING_PREFLIGHT",
+                    )
+                ),
                 task,
             )
 
@@ -540,7 +610,6 @@ def run_task(
             return finalize_receipt(receipt, task)
         return finalize_receipt(_run_legacy_readonly(task, jid, router.grok_bin, cancel_event), task)
 
-    mounted_paths: list[str] = []
     if task.get("mount_paths"):
         # Before the worker, after the checkout: a lane is a git ref, and
         # what git does not carry has to be put there deliberately or not
@@ -554,12 +623,14 @@ def run_task(
         )
         if not mount.get("ok"):
             return finalize_receipt(
-                _base_receipt(
-                    jid,
-                    transport,
-                    started,
-                    status="blocked",
-                    blocked_reason=str(mount.get("error") or "MOUNT_FAILED"),
+                abandon(
+                    _base_receipt(
+                        jid,
+                        transport,
+                        started,
+                        status="blocked",
+                        blocked_reason=str(mount.get("error") or "MOUNT_FAILED"),
+                    )
                 ),
                 task,
             )

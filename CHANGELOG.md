@@ -28,6 +28,115 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.26.0 — Eight readers, one bridge
+
+Eight Grok audits read this bridge, one dimension each, with every `read:
+file:line` citation re-checked against the tree. Four dimensions are new:
+`audit.protocol` (the MCP surface), `audit.lifecycle` (a job from dispatch to
+receipt), `audit.docs` (does the documentation still describe this code) and
+`audit.tests` (would the tests notice if the code stopped working). Everything
+below was reproduced by hand before it was changed; the claims that did not
+reproduce were dropped, and two of them were exactly that.
+
+### One poll can no longer be eight times its budget
+
+The budget is the bridge's central promise -- a single poll stays small however
+long the job ran -- and it did not hold. `_TRIM_ORDER` named six fields, and a
+job's own shape could put the weight somewhere else entirely:
+
+    64 declared test commands -> 138174 bytes against a 16384-byte budget
+    4000 artifacts            -> 130984 bytes
+
+with `economy_trimmed` reporting **nothing** in both cases, so the host could
+not even tell. Verifier previews are shortened before rows are dropped, test and
+artifact lists are trimmable, and a record that still does not fit has its
+heaviest field removed until it does -- naming each one in `economy_trimmed` and
+`economy_dropped`. The verdict is never what gets dropped.
+
+### A malformed frame header no longer ends the session
+
+One frame of `Content-Length: -5` made the stdio server exit with code 0:
+`read(-5)` drains the pipe to EOF, the body no longer matches the declared
+length, and the loop returns. From the host's side the bridge simply vanished
+mid-session. A non-positive or absurd length is now answered with `-32700` and
+the loop keeps listening. Both framings, because only one of them had a test.
+
+### Two ways a receipt could say `completed` while proving nothing
+
+An `execute` receipt with no commit was accepted if it wrote
+`NOT_A_WRITE_ROLE` into `lane_commit.reason` -- an exemption meant for a role
+that never reaches this branch. And a verifier row that says
+`outcome: not_run` was counted as the run that proves the work, as long as it
+also carried `passed: true`. Both are refused now.
+
+### The search gate judges a pattern the way it judges a path
+
+Measured against the live gate: `glob **/.env*` was refused, and the same glob
+with `path: "."` alongside it was **allowed** -- naming any path key skipped
+every pattern check. `**/*.pem`, `**/*.key`, `id_rsa/**` and
+`.env.local/settings.json` were all allowed, because the gate read only the last
+component and knew nothing about suffixes. A pattern inside a list
+(`['../outside/**']`) was allowed while the same string alone was refused.
+
+All four go through `looks_like_secret_path` now -- the same predicate the path
+check and the mount validator use -- and list values are flattened rather than
+stringified. In the other direction, the declared command
+`py -3 -m pytest tests/api_key.py -q` was refused: a Python module named after
+the thing it tests is not the thing.
+
+### A short password is still a password
+
+`password=hunter2` and `SECRET_KEY=secret` reached receipts intact: the bare
+value rule requires eight characters, for a documented reason -- at a lower
+floor it ate `token: str = ""` and the call in `password_hash = bcrypt(x)`. The
+floor stays, and a second rule covers the words that are never anything else,
+with those two shapes excluded.
+
+### A reviewed lane counts as busy
+
+`review_lane` shipped in 0.25.0 with a hole: the lane lock keys the lane a job
+owns, and a read-only job standing in someone else's worktree owns none. With
+`GROK_DELEGATE_CONCURRENCY=2` that meant two workers in one checkout, which is
+the single thing that lock exists to prevent. A cancel or a failed mount also
+returned without taking the mounted inputs back out or releasing an empty lane;
+every exit now leaves the lane the way a normal finish does.
+
+### The published schema means something at the boundary
+
+`job_id: {"a": 1}` was stringified and looked up as `"{'a': 1}"`, and
+`lane: {"a": 1}` started a job on a lane named after a dict's repr. An object or
+an array where the schema declares a scalar is refused with
+`ARGUMENTS_INVALID`. Scalar coercion is left alone: a numeric string is harmless
+because bounds are enforced after it, and several fields have refusals that say
+more than a type name would.
+
+`cwd` was honoured by `grok_delegate` and `grok_delegate_start` and declared in
+neither schema, so a client reading `tools/list` could not find it. It is
+declared now.
+
+### Documentation that no longer described this code
+
+`audit.docs` found eight checkable claims and each is corrected: the README said
+an unreadable `GROK_DELEGATE_REASONING_EFFORT` reads as "no preference" (it is
+refused) and that a job which changed nothing comes back `blocked` (it comes
+back `no_changes`); `docs/SECURITY.md` told operators to keep lanes outside the
+repository, which is the opposite of the default; `docs/EASY.md` gave Windows
+readers a POSIX venv path; the task-packet schema required `role` that the
+role-specific tools set themselves; the receipt schema documented
+`tests[].passed` as null-when-unknown and never mentioned `outcome` or
+`verifier_touched_files`; and `lane_retained_reason` had two documented values
+and five real ones.
+
+### Every environment variable, written down
+
+Twenty-one of the thirty-four `GROK_DELEGATE_*` variables the package reads were
+documented nowhere -- including the two git timeouts an operator needs on
+exactly the machine where jobs are timing out. `docs/ENVIRONMENT.md` lists all of
+them with defaults, and a test fails if the code and the reference drift apart in
+either direction.
+
+---
+
 ## 0.25.0 — The answer arrives, the lane does not linger
 
 ### A long answer no longer counts as a runaway
@@ -60,8 +169,9 @@ Ten lanes had accumulated in this repository, four of them from runs whose only
 product was the lane. A lane whose branch is still at the pinned base and whose
 tree is clean is now removed when the job ends -- after the receipt, never
 before, because acceptance is read from the tree the verifier left. Anything
-else is kept and says why: `lane_retained_reason` is `UNCOMMITTED_CHANGES` or
-`LANE_HAS_COMMITS`. Off with `GROK_DELEGATE_LANE_CLEANUP=0`.
+else is kept and says why: `lane_retained_reason` names which of them it was: `WORK_PRESENT` when the
+receipt shows work, and otherwise `UNCOMMITTED_CHANGES`, `LANE_HAS_COMMITS`,
+`CLEANUP_DISABLED` or `NOT_A_LINKED_WORKTREE`. Off with `GROK_DELEGATE_LANE_CLEANUP=0`.
 
 `grok_agent_status` now lists the lanes that exist, with branch and head, so
 unmerged work is visible at the start of a session instead of being found by

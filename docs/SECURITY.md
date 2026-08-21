@@ -66,7 +66,9 @@ records, artifact readback and an external verifier are.
 
 ## Operator checklist
 
-Use exact roots, keep lane/job directories outside the source repository,
+Use exact roots, keep lane/job directories out of the *visible* tree -- the default is
+`<project>/.grok/lanes`, a dot-directory the bridge adds to the project's
+`.gitignore`, so pytest, ripgrep and indexers skip it,
 inspect receipts before merge, repeat tests independently in the returned
 worktree, and treat `blocked`, `failed`, `cancelled`, `no_changes` and stale
 `unknown` records as non-success.

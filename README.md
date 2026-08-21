@@ -6,7 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.25.0-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.26.0-informational.svg)](pyproject.toml)
 [![Built by ZAI.ONE](https://img.shields.io/badge/built%20by-ZAI.ONE-111111.svg)](https://zai.one)
 
 > Built by **[ZAI.ONE](https://zai.one)** — international internet agency.
@@ -84,9 +84,12 @@ everything. Four things make that true here:
   Anything the agent says about its own tests is labelled `agent-reported` and
   is not evidence. A live capture once caught an agent reporting exit code 0
   while pytest was failing: in a shell, `a; b` returns *b*'s exit code.
-- **A job that changed nothing — or touched files you never asked for — comes
-  back `blocked`,** with the reason, instead of `ok` and a cheerful summary.
-  An artifact written by the test run rather than by the worker is caught too.
+- **A job that changed nothing comes back `no_changes`, and one that touched
+  files you never asked for comes back `blocked`,** with the reason, instead of
+  `ok` and a cheerful summary. The two are different answers because they are
+  different situations: nothing happened, or something happened that nobody
+  asked for. An artifact written by the test run rather than by the worker is
+  caught too.
 - **It never pushes and never merges.** Work lands on a `grok/*` branch, which
   the bridge commits for you even if the worker ran out of turns. You review it.
 - **It fails closed.** Nothing is in scope until a root is granted, and every
@@ -301,9 +304,15 @@ export GROK_DELEGATE_REASONING_EFFORT=xhigh   # low|medium|high|xhigh|max
 export GROK_DELEGATE_MAX_TURNS=40             # 1..60
 ```
 
+Every variable the bridge reads is listed in
+[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md), with its default and what it changes.
+
 These set the budget the bridge picks when a caller names none; a `model`,
-`reasoning_effort` or `max_turns` passed in the task always wins. An unparsable
-or out-of-range value reads as "no preference" rather than failing every job.
+`reasoning_effort` or `max_turns` passed in the task always wins. An empty value
+reads as "no preference". An out-of-range `max_turns` is clamped to the hard cap,
+but a `reasoning_effort` the bridge cannot read is refused with
+`REASONING_EFFORT_INVALID` rather than ignored -- a setting silently dropped is a
+setting the operator still believes is in force.
 
 They are independent of `GROK_DELEGATE_ECONOMY`. Economy keeps the *host's*
 context small — compact receipts, bounded diffs — which is a different question

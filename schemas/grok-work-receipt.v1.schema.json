@@ -99,7 +99,7 @@
               "boolean",
               "null"
             ],
-            "description": "null when the source cannot support a verdict."
+            "description": "True or false when the verifier ran. Absent -- not null -- when it did not; read `outcome`."
           },
           "returncode": {
             "type": [
@@ -114,6 +114,21 @@
               "agent-reported"
             ],
             "description": "Only bridge-verifier counts as evidence. agent-reported is the agent's own claim, whose exit code belongs to the last statement of a shell chain."
+          },
+          "outcome": {
+            "enum": [
+              "passed",
+              "failed",
+              "not_run"
+            ],
+            "description": "What happened to this run. `not_run` means the verifier never got to it; `passed` is absent then, rather than false."
+          },
+          "not_run_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a not_run row did not run: cancelled, timeout."
           }
         }
       }
@@ -201,6 +216,13 @@
         "null"
       ],
       "description": "Why the lane was kept: UNCOMMITTED_CHANGES, LANE_HAS_COMMITS, CLEANUP_DISABLED, ..."
+    },
+    "verifier_touched_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Paths that appeared between the worker finishing and the verifier finishing, so an artifact the test suite wrote is not counted as delivered work."
     }
   }
 }

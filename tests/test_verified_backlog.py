@@ -178,13 +178,38 @@ def test_a_real_commit_still_passes() -> None:
 
 
 def test_a_read_only_role_is_not_asked_for_a_commit() -> None:
-    """`NOT_A_WRITE_ROLE` is the honest absence of a commit, not a failed one."""
+    """`NOT_A_WRITE_ROLE` is the honest absence of a commit, not a failed one.
+
+    Judged on a read-only packet, which is what the name says. It used to be
+    judged on `_TASK` -- an execute packet -- so what it actually asserted was
+    that a *write* job may skip its commit by writing `NOT_A_WRITE_ROLE` into
+    the field, and that is now refused.
+    """
+    read_only_task = {
+        **_TASK,
+        "role": "skeptic",
+        "permission_profile": "read-only",
+        "expected_artifacts": [],
+        "test_commands": [],
+    }
+    out = finalize_receipt(
+        _receipt(lane_commit={"ok": True, "committed": False,
+                              "reason": "NOT_A_WRITE_ROLE", "sha": None}),
+        read_only_task,
+    )
+    assert out["status"] == "completed"
+
+
+def test_a_write_role_cannot_claim_the_read_only_exemption() -> None:
+    """The other half, which nothing asserted: an execute job with no commit
+    and that reason in the field was accepted."""
     out = finalize_receipt(
         _receipt(lane_commit={"ok": True, "committed": False,
                               "reason": "NOT_A_WRITE_ROLE", "sha": None}),
         _TASK,
     )
-    assert out["status"] == "completed"
+    assert out["status"] == "blocked"
+    assert out["blocked_reason"] == "LANE_COMMIT_MISSING: NOT_A_WRITE_ROLE"
 
 
 # --- C2/C3: one lane, one worker, however many jobs the registry holds ----------

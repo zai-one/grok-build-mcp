@@ -1581,7 +1581,12 @@ _FORBIDDEN_COMMAND = re.compile(
     # These need a separator in front for the same reason the command names need
     # an anchor: `oauth` and `credentials` are ordinary words inside ordinary
     # test filenames, and `tests/test_oauth.py` is not a credential.
-    r"(?:^|[\s:=/\\\"'])(?:\.env(?:\.|\b)|auth\.json\b|credentials?\b|oauth\b|api[_-]?key)|"
+    # `api_key` refuses `cat api_key` and `api_key.pem` but not `tests/api_key.py`:
+    # a source file named after the thing it tests is not the thing. Verified as
+    # a live false refusal -- the declared command `py -3 -m pytest
+    # tests/api_key.py -q` could not run.
+    r"(?:^|[\s:=/\\\"'])(?:\.env(?:\.|\b)|auth\.json\b|credentials?\b|oauth\b|"
+    r"api[_-]?key(?![\w-]*\.(?:py|js|ts|tsx|rs|go|java|rb|md)\b))|"
     # Suffixes and names that are never part of an innocent word, so they stay
     # unanchored: nothing legitimate contains `.pem` or `id_rsa` by accident.
     r"(?:id_[rd]sa|\.pem\b|\.pfx\b|\.p12\b|\.npmrc\b|\.pypirc\b)"
@@ -1800,6 +1805,44 @@ _SEARCH_KEYS = ("pattern", "glob", "query", "regex", "search", "include", "globs
 _PATTERN_ESCAPE = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)|^[A-Za-z]:|^[\\/]|^~")
 
 
+def _flatten_text(value: Any) -> "list[str]":
+    """Every string inside *value*, however it was nested.
+
+    `str()` of a list turns `['../outside/**']` into a string whose `../` is
+    wrapped in list punctuation, and the escape pattern -- which anchors on a
+    separator or the start -- no longer matched it. The gate allowed exactly the
+    pattern it refuses when spelled plainly.
+    """
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Mapping):
+        return [text for item in value.values() for text in _flatten_text(item)]
+    if isinstance(value, (list, tuple, set)):
+        return [text for item in value for text in _flatten_text(item)]
+    return []
+
+
+def _pattern_values(raw: Mapping[str, Any]) -> "list[str]":
+    """The search patterns in this request, trimmed of quoting."""
+    out: list[str] = []
+    for key in _SEARCH_KEYS:
+        value = raw.get(key)
+        if not value:
+            continue
+        out.extend(text.strip().strip("\"'") for text in _flatten_text(value) if text.strip())
+    return out
+
+
+def _pattern_as_path(text: str) -> Path:
+    """A glob with its wildcard segments dropped, for the secret-name check.
+
+    `**/` and `*` carry no name, and leaving them in would make every component
+    look unfamiliar to a predicate that compares names.
+    """
+    parts = [part for part in re.split(r"[\\/]", text) if part not in {"", "*", "**", "."}]
+    return Path("/".join(parts)) if parts else Path(text)
+
+
 def _search_scoped_to_cwd(raw: Mapping[str, Any], cwd: Path) -> bool:
     """Judge a search that names a pattern instead of a path.
 
@@ -1814,19 +1857,23 @@ def _search_scoped_to_cwd(raw: Mapping[str, Any], cwd: Path) -> bool:
     letter, a UNC prefix and `~` are refused, and a pattern that goes looking for
     a secret by name is refused for the same reason reading one is.
     """
+    patterns = _pattern_values(raw)
+    for text in patterns:
+        if _PATTERN_ESCAPE.search(text):
+            return False
+        # The same predicate the path check and the mount validator use, so a
+        # pattern cannot go looking for what a path may not name. It reads every
+        # component, not just the last one, and it knows suffixes: `**/*.pem`,
+        # `id_rsa/**` and `.env.local/settings.json` were all allowed while the
+        # equivalent path was refused.
+        if looks_like_secret_path(_pattern_as_path(text)):
+            return False
     if any(raw.get(key) for key in _PATH_KEYS):
+        # Both, not either: naming a path used to skip every pattern check, so
+        # `{path: ".", glob: "**/.env*"}` was allowed where the glob alone was
+        # refused.
         return _paths_confined(raw, cwd)
-    values = [str(raw.get(key)) for key in _SEARCH_KEYS if raw.get(key)]
-    if not values:
-        return False
-    for text in values:
-        if _PATTERN_ESCAPE.search(text.strip().strip("\"'")):
-            return False
-        tail = _win_name(re.split(r"[\\/]", text.strip().strip("\"'"))[-1])
-        if tail in _SECRET_NAMES or tail.startswith((".env", "id_rsa", "id_dsa", "id_ecdsa",
-                                                     "id_ed25519")):
-            return False
-    return True
+    return bool(patterns)
 
 
 def _paths_confined(raw: Mapping[str, Any], cwd: Path) -> bool:

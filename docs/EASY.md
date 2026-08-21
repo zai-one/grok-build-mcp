@@ -33,7 +33,10 @@ snippets to the venv directly.
 grok login
 
 # 2) Check
+# macOS / Linux
 ~/.local/share/grok-mcp/.venv/bin/python -m grok_delegate --self-test
+# Windows (install.ps1 clones to %LOCALAPPDATA%\grok-mcp)
+%LOCALAPPDATA%\grok-mcp\.venv\Scripts\python.exe -m grok_delegate --self-test
 # want: binary PASS + auth present
 
 # 3) Wire Claude Desktop / Cursor
