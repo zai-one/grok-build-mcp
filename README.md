@@ -6,7 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.24.0-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.25.0-informational.svg)](pyproject.toml)
 [![Built by ZAI.ONE](https://img.shields.io/badge/built%20by-ZAI.ONE-111111.svg)](https://zai.one)
 
 > Built by **[ZAI.ONE](https://zai.one)** — international internet agency.
@@ -230,9 +230,19 @@ shows `roots.host_root_trusted` and `roots.host_root` so a root you never typed
 is traceable.
 
 Hosts that do not set `CLAUDE_PROJECT_DIR` are unaffected — the flag then grants
-nothing. Reading the host's roots over MCP `roots/list`, which would also cover
-`--add-dir` directories and non-Claude hosts, needs a bidirectional stdio loop
-this server does not have yet.
+nothing.
+
+That environment variable is now the second-best route, because the server also
+asks the host directly. After `notifications/initialized` it sends `roots/list`,
+and whatever the host declares joins the allowlist — no variable, no restart,
+and `notifications/roots/list_changed` re-asks, so a revoked root stops being
+granted. This is on by default, unlike the variable above, and the difference is
+real: any process can set an environment variable, while a root arrives here
+because a person opened that directory in their editor. A tool call can never
+grant one.
+
+Verified live: a project absent from `GROK_DELEGATE_ALLOWED_ROOTS` became usable
+purely because the host declared it. Turn it off with `GROK_DELEGATE_MCP_ROOTS=0`.
 
 ### Keeping the running server current
 

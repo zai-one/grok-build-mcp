@@ -19,7 +19,7 @@ from typing import Any, Mapping, MutableMapping, Sequence
 # drifted: status kept answering 0.2.0 after the server moved to 0.3.0, so the
 # one call an operator would make to check "did my restart take effect?"
 # answered with the old number.
-SERVER_VERSION = "0.24.0"
+SERVER_VERSION = "0.25.0"
 
 # Server-side hard cap for --max-turns (B5).
 HARD_CAP_MAX_TURNS = 60
@@ -1040,3 +1040,53 @@ def confine_path_to_root(
             f"{field} resolves outside worktree/root (escape rejected)",
         ) from exc
     return candidate
+
+
+#: Names that are a credential wherever they appear. Kept here rather than in
+#: the permission gate because the gate is no longer the only caller: mounting a
+#: path into a lane has to refuse the same set, and two lists for one rule is
+#: exactly how `id_rsa` came to be denied to `git show` and handed over by an
+#: ordinary read.
+SECRET_FILE_NAMES = frozenset({
+    "auth.json", "credentials.json", "credentials", ".env", ".npmrc", ".pypirc",
+    ".netrc", "_netrc", ".git-credentials", ".htpasswd", ".pgpass",
+})
+
+#: `.env` and not `.env.`: `.envrc` is a credential file by any reasonable
+#: reading, the search gate has always refused it, and this list said yes.
+_SECRET_PREFIXES = (".env", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519")
+_SECRET_SUFFIXES = (".pem", ".p12", ".pfx", ".key")
+
+
+def windows_open_name(part: str) -> str:
+    """The name Windows will actually open, not the one that was typed.
+
+    Win32 strips trailing dots and spaces from a component, and everything after
+    a colon names an alternate data stream rather than a different file. So
+    `auth.json.`, `auth.json ` and `.env::$DATA` all reach exactly the file this
+    denylist exists to refuse, while comparing the raw string let all three
+    through. Verified against the live gate before and after.
+    """
+    text = str(part or "")
+    head = text.split(":", 1)[0] if len(text) > 2 or ":" not in text else text
+    return head.rstrip(". ").casefold()
+
+
+def looks_like_secret_path(path: "Path | str") -> bool:
+    """True if any component of *path* names a credential file.
+
+    Every component, not just the last one: `id_rsa/config` and
+    `.env.local/settings.json` are a private key and an environment file with
+    something appended, and checking only the tail let both through while the
+    docstring claimed otherwise.
+    """
+    candidate = Path(path)
+    for part in candidate.parts:
+        name = windows_open_name(part)
+        if (
+            name in SECRET_FILE_NAMES
+            or name.startswith(_SECRET_PREFIXES)
+            or name.endswith(_SECRET_SUFFIXES)
+        ):
+            return True
+    return False

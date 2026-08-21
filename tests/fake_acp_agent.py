@@ -49,6 +49,80 @@ for raw in sys.stdin:
                 },
             })
             continue
+        if "RESENT_OUTPUT_FIXTURE" in prompt:
+            # What Grok actually does with a running command: resend the whole
+            # accumulated buffer under the same toolCallId every time it grows.
+            buffer = ""
+            for index in range(120):
+                buffer += f"line {index:04d} of a long test run" + chr(10)
+                send({
+                    "jsonrpc": "2.0", "method": "session/update", "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "tool_call_update",
+                            "toolCallId": "call-running",
+                            "status": "in_progress",
+                            "rawOutput": {"command": "pytest", "output_preview": buffer},
+                        },
+                    },
+                })
+            send({"jsonrpc": "2.0", "id": message["id"], "result": {"stopReason": "end_turn"}})
+            continue
+        if "DEEP_FRAME_FIXTURE" in prompt:
+            # Deep enough to break `json.loads` on CPython 3.14 (5000 parses,
+            # 20000 raises), sent as one line the reader has to survive.
+            depth = 20000
+            sys.stdout.write("{" + chr(34) + "a" + chr(34) + ":" * 1 + ("{" + chr(34) + "a" + chr(34) + ":") * (depth - 1) + "1" + "}" * depth + chr(10))
+            sys.stdout.flush()
+            send({
+                "jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": session_id,
+                    "update": {"sessionUpdate": "agent_message_chunk",
+                               "content": {"type": "text", "text": "survived"}},
+                },
+            })
+            send({"jsonrpc": "2.0", "id": message["id"], "result": {"stopReason": "end_turn"}})
+            continue
+        if "CHUNKED_FIXTURE" in prompt:
+            # The shape that killed honest long answers: 200 frames of envelope
+            # carrying twenty bytes of text each.
+            for index in range(200):
+                send({
+                    "jsonrpc": "2.0", "method": "session/update", "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": f"chunk {index:05d} ..."},
+                        },
+                    },
+                })
+            send({"jsonrpc": "2.0", "id": message["id"], "result": {"stopReason": "end_turn"}})
+            continue
+        if "OVERSIZED_ACK_FIXTURE" in prompt:
+            send({
+                "jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": session_id,
+                    "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Y" * 20000}},
+                },
+            })
+            for followup in sys.stdin:
+                cancel = json.loads(followup)
+                if cancel.get("method") == "session/cancel":
+                    send({"jsonrpc": "2.0", "id": message["id"], "result": {"stopReason": "cancelled"}})
+                    break
+            continue
+        if "ENVELOPE_FLOOD_FIXTURE" in prompt:
+            # No payload at all, forever: the case the wire backstop exists for.
+            index = 0
+            while True:
+                index += 1
+                send({
+                    "jsonrpc": "2.0", "method": "session/update", "params": {
+                        "sessionId": session_id,
+                        "update": {"sessionUpdate": "agent_thought_chunk", "toolCallId": f"t{index}"},
+                    },
+                })
+            continue
         if "SECRET_FIXTURE" in prompt:
             send({"jsonrpc": "2.0", "method": "session/update", "params": {
                 "sessionId": session_id,

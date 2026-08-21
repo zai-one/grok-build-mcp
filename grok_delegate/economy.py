@@ -127,6 +127,7 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
         "tests",
         "tests_skipped_reason",
         "denied_tool_calls",
+        "output_truncated",
         "lane_commit",
         "diffstat",
         "unified_diff",
@@ -147,7 +148,7 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
         for key in ("status", "blocked_reason", "summary", "worktree_path", "branch",
                     "changed_files", "full_changed_files", "artifacts", "tests",
                     "tests_skipped_reason", "denied_tool_calls", "lane_commit",
-                    "diffstat", "unified_diff"):
+                    "output_truncated", "diffstat", "unified_diff"):
             if record.get(key) in (None, "", [], {}) and nested.get(key) not in (None, "", [], {}):
                 record[key] = nested[key]
 

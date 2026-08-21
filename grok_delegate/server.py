@@ -442,6 +442,8 @@ _TASK_PACKET_PROPERTIES: dict[str, Any] = {
     "acceptance_criteria": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
     "expected_artifacts": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
     "test_commands": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
+    "mount_paths": {"type": "array", "maxItems": 16, "items": {"type": "string", "maxLength": 1024}},
+    "review_lane": {"type": "string", "minLength": 1, "maxLength": 96},
     "correlation_id": {"type": "string", "minLength": 1, "maxLength": 128},
 }
 

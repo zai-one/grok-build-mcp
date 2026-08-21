@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import threading
 import time
@@ -29,6 +30,7 @@ try:
         build_permission_profile,
         confine_path_to_root,
         enforce_bounds,
+        looks_like_secret_path,
         normalize_lane,
         structured_error,
         validate_grok_bin,
@@ -52,6 +54,7 @@ except ImportError:  # flat import when package dir is on sys.path
         build_permission_profile,
         confine_path_to_root,
         enforce_bounds,
+        looks_like_secret_path,
         normalize_lane,
         structured_error,
         validate_grok_bin,
@@ -1281,6 +1284,339 @@ _BRIDGE_COMMIT_IDENTITY = (
 )
 
 
+#: Total bytes a job may mount into its lane. Generous for a spec or a fixture
+#: directory, small enough that a mistyped path cannot copy a repository.
+MOUNT_MAX_BYTES = 32 * 1024 * 1024
+
+
+def _tree_size(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    total = 0
+    for child in path.rglob("*"):
+        if child.is_file():
+            total += child.stat().st_size
+    return total
+
+
+def _is_link(path: Path) -> bool:
+    """True for a symlink or a Windows junction, on every supported Python.
+
+    `Path.is_junction()` arrived in 3.12 and this package supports 3.10, so on
+    the two versions in between a junction read as an ordinary directory and
+    `copytree` walked straight through it. The reparse-point attribute is the
+    thing itself and has been on `os.lstat` results since 3.5.
+    """
+    try:
+        if path.is_symlink():
+            return True
+        probe = getattr(path, "is_junction", None)
+        if callable(probe) and probe():
+            return True
+        attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+        return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    except FileNotFoundError:
+        # Nothing there is not a link; the caller's own missing-path check owns
+        # this case and gives a far better message than "it is a link".
+        return False
+    except OSError:
+        # Fail closed: a path we cannot stat is not a path we will copy.
+        return True
+
+
+def mount_paths_into(
+    *,
+    repo_root: Path | str,
+    worktree_path: Path | str,
+    paths: Sequence[str],
+    git_runner: GitRunner | None = None,
+    timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Put gitignored inputs where a lane can read them.
+
+    A lane is a checkout of a git ref, which is exactly why it is safe -- an
+    ignored `.env` is not in it -- and exactly why a task brief that lives
+    outside git is not in it either. The operator names what the job needs, one
+    path at a time, and nothing else crosses.
+
+    Only ignored paths may be mounted. A tracked file is already in the lane, so
+    asking to mount one means the caller is confused about which tree they are
+    talking about, and copying over it would put an uncommitted edit on a branch
+    a human is going to review.
+    """
+    git = git_runner or default_git_runner
+    root = Path(repo_root).resolve()
+    lane = Path(worktree_path).resolve()
+    mounted: list[str] = []
+    if not paths:
+        return {"ok": True, "mounted": mounted}
+    if lane == root:
+        return {"ok": False, "mounted": mounted, "error": "MOUNT_WITHOUT_LANE",
+                "message": "mount_paths needs a lane worktree; this job runs in the project itself"}
+
+    budget = MOUNT_MAX_BYTES
+
+    def refuse(error: str, message: str) -> dict[str, Any]:
+        """Refusing halfway is still writing into somebody's lane."""
+        if mounted:
+            unmount_paths(lane, list(mounted))
+        return {"ok": False, "mounted": [], "error": error, "message": message}
+
+    for rel in paths:
+        relative = Path(str(rel))
+        raw_source = root / relative
+        # Every component, unresolved: `resolve()` walks through a link and then
+        # `_is_link` sees only the target, so a junction inside the project used
+        # to pass while its contents landed under the link's name in the lane.
+        probe = root
+        for part in relative.parts:
+            probe = probe / part
+            if _is_link(probe):
+                return refuse("MOUNT_PATH_SYMLINK",
+                              f"{relative.as_posix()} passes through a link ({part}); "
+                              "mount the real path")
+        try:
+            source = raw_source.resolve()
+            source.relative_to(root)
+        except (ValueError, OSError):
+            return refuse("MOUNT_PATH_ESCAPE",
+                          f"{relative.as_posix()} resolves outside the project")
+        if not source.exists():
+            return refuse("MOUNT_PATH_MISSING",
+                          f"{relative.as_posix()} does not exist in the project")
+        if looks_like_secret_path(relative) or looks_like_secret_path(source):
+            return refuse("MOUNT_PATH_FORBIDDEN",
+                          f"{relative.as_posix()} names a credential file")
+        if source.is_dir():
+            # A directory is mounted whole, so every name inside it is being
+            # mounted too.
+            for child in source.rglob("*"):
+                if _is_link(child):
+                    return refuse("MOUNT_PATH_SYMLINK",
+                                  f"{relative.as_posix()} contains a link ({child.name}); "
+                                  "mount the files you mean")
+                if looks_like_secret_path(child):
+                    return refuse("MOUNT_PATH_FORBIDDEN",
+                                  f"{relative.as_posix()} contains a credential file "
+                                  f"({child.name})")
+
+        # Asked in the *lane*, which is the tree that decides whether this file
+        # can reach a commit. The project's `.gitignore` may be newer than the
+        # ref the lane was cut from, and then "ignored here" said nothing about
+        # "ignored there".
+        # The trailing slash matters: a `briefs/` pattern matches a directory,
+        # and the lane does not have the directory yet, so git cannot infer what
+        # kind of thing the path is unless it is spelled.
+        probe_path = relative.as_posix() + ("/" if source.is_dir() else "")
+        ignored = git(["-C", str(lane), "check-ignore", "-q", probe_path], None, timeout)
+        if ignored.get("timedOut"):
+            return refuse("MOUNT_CHECK_FAILED",
+                          "git check-ignore did not answer in time")
+        if ignored.get("returncode") != 0:
+            return refuse("MOUNT_PATH_TRACKED",
+                          f"{relative.as_posix()} is not ignored by the lane, so it could reach "
+                          "the lane commit; mount only what git does not carry")
+
+        size = _tree_size(source)
+        if size > budget:
+            return refuse("MOUNT_TOO_LARGE",
+                          f"mount_paths exceed {MOUNT_MAX_BYTES} bytes")
+
+        target = lane / relative
+        probe = lane
+        for part in relative.parts:
+            probe = probe / part
+            if probe.exists() and _is_link(probe):
+                # A lane reused from an earlier job can hold a link where this
+                # mount wants to write, and copying through it writes outside.
+                return refuse("MOUNT_TARGET_ESCAPE",
+                              f"{relative.as_posix()} would be written through a link in the lane")
+        try:
+            target.relative_to(lane)
+        except ValueError:
+            return refuse("MOUNT_TARGET_ESCAPE",
+                          f"{relative.as_posix()} would land outside the lane")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # `symlinks=True`: copy a link as a link rather than following it. The
+        # tree was already checked, but the check and the copy are two moments,
+        # and only this one decides what the lane ends up holding.
+        if source.is_dir():
+            shutil.copytree(source, target, dirs_exist_ok=True, symlinks=True)
+        else:
+            shutil.copy2(source, target, follow_symlinks=False)
+
+        # What actually landed, judged after the fact: a race between the walk
+        # above and the copy cannot survive this.
+        landed = _tree_size(target)
+        if landed > budget:
+            mounted.append(relative.as_posix())
+            return refuse("MOUNT_TOO_LARGE",
+                          f"mount_paths exceed {MOUNT_MAX_BYTES} bytes")
+        for child in ([target] if target.is_file() else [target, *target.rglob("*")]):
+            if _is_link(child):
+                mounted.append(relative.as_posix())
+                return refuse("MOUNT_PATH_SYMLINK",
+                              f"{relative.as_posix()} landed a link in the lane ({child.name})")
+        budget -= landed
+        mounted.append(relative.as_posix())
+    return {"ok": True, "mounted": mounted}
+
+
+#: Off with GROK_DELEGATE_LANE_CLEANUP=0, for an operator who would rather keep
+#: every worktree and sweep them by hand.
+def lane_cleanup_enabled() -> bool:
+    return str(os.environ.get("GROK_DELEGATE_LANE_CLEANUP", "")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def release_lane(
+    *,
+    repo_root: Path | str,
+    worktree_path: Path | str,
+    branch: str,
+    base_sha: str,
+    git_runner: GitRunner | None = None,
+    timeout: float = 60.0,
+) -> dict[str, Any]:
+    """Remove a lane that holds nothing; keep -- and name -- one that holds work.
+
+    A job that changed nothing still left a checkout and a branch behind, and
+    they accumulated: ten lanes in this repository alone, four of them from
+    runs whose only product was the lane itself. Cleanup is not a nicety here,
+    because a stale lane is also a trap -- `base_ref` resolves in the main
+    repository, so a reused lane carries the previous job's work into the next
+    job's diff.
+
+    Refuses on anything that is not a `grok/*` branch, for the same reason
+    `commit_lane_work` does: this code deletes, and deleting the wrong branch is
+    worse than leaving a stale one.
+    """
+    git = git_runner or default_git_runner
+    lane = str(branch or "")
+    wt = Path(worktree_path)
+    if not lane.startswith("grok/"):
+        return {"ok": True, "removed": False, "reason": "NOT_A_LANE_BRANCH"}
+    if not lane_cleanup_enabled():
+        return {"ok": True, "removed": False, "reason": "CLEANUP_DISABLED"}
+    if not wt.exists():
+        return {"ok": True, "removed": False, "reason": "ALREADY_GONE"}
+    # A linked worktree keeps a `.git` *file* pointing at the main repository; a
+    # main checkout keeps a `.git` directory. Cheap, local, and it means this
+    # function cannot delete somebody's repository even if it is handed the
+    # wrong path with a lane-shaped branch name.
+    if (wt / ".git").is_dir() or wt.resolve() == Path(repo_root).resolve():
+        return {"ok": False, "removed": False, "reason": "NOT_A_LINKED_WORKTREE"}
+
+    # `-uall` for the same reason `collect_diff` uses it: plain porcelain
+    # collapses a new directory to one `?? src/` line. Ignored files are still
+    # invisible here, which is why the caller must not ask for a release when
+    # the receipt shows the job produced anything at all.
+    status = git(["-C", str(wt), "status", "--porcelain", "-uall"], None, timeout)
+    if status.get("returncode") != 0 or status.get("timedOut"):
+        return {"ok": False, "removed": False, "reason": "STATUS_FAILED"}
+    if str(status.get("stdout") or "").strip():
+        return {"ok": True, "removed": False, "reason": "UNCOMMITTED_CHANGES"}
+
+    head = git(["-C", str(wt), "rev-parse", "HEAD"], None, timeout)
+    if head.get("returncode") != 0 or head.get("timedOut"):
+        return {"ok": False, "removed": False, "reason": "REV_PARSE_FAILED"}
+    tip = str(head.get("stdout") or "").strip()
+    if not tip or not base_sha or tip != str(base_sha).strip():
+        # Anything on the branch is somebody's work until a human says
+        # otherwise. This code does not merge and does not judge.
+        return {"ok": True, "removed": False, "reason": "LANE_HAS_COMMITS"}
+
+    removed = git(["-C", str(repo_root), "worktree", "remove", "--force", str(wt)], None, timeout)
+    if removed.get("returncode") != 0 or removed.get("timedOut"):
+        return {"ok": False, "removed": False, "reason": "WORKTREE_REMOVE_FAILED"}
+    deleted = git(["-C", str(repo_root), "branch", "-D", lane], None, timeout)
+    if deleted.get("returncode") != 0 or deleted.get("timedOut"):
+        # The checkout is gone, which is most of the point; a dangling branch
+        # pointing at the base commit costs nothing and is easy to see.
+        return {"ok": True, "removed": True, "reason": "BRANCH_DELETE_FAILED", "branch_deleted": False}
+    return {"ok": True, "removed": True, "reason": None, "branch_deleted": True}
+
+
+def unmount_paths(worktree_path: Path | str, mounted: Sequence[str]) -> list[str]:
+    """Take back what was mounted, leaving the lane as git-clean as it was.
+
+    A mount is an input, not a product. Leaving it behind means a reviewer finds
+    files no commit and no diff explains -- and means a read-only role, which is
+    supposed to leave nothing, leaves something.
+    """
+    lane = Path(worktree_path).resolve()
+    removed: list[str] = []
+    for rel in mounted or []:
+        target = (lane / Path(str(rel))).resolve()
+        try:
+            target.relative_to(lane)
+        except ValueError:
+            continue
+        try:
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            elif target.exists():
+                target.unlink()
+            else:
+                continue
+            removed.append(str(rel))
+            # Prune directories that only existed to hold the mount.
+            parent = target.parent
+            while parent != lane and parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
+        except OSError:
+            continue
+    return removed
+
+
+def list_lanes(
+    repo_root: Path | str,
+    *,
+    lanes_parent: Path | str | None = None,
+    git_runner: GitRunner | None = None,
+    timeout: float = 30.0,
+) -> list[dict[str, Any]]:
+    """Lanes that exist right now, so an operator can see what is unmerged.
+
+    One `git worktree list` per repository, not one call per lane: this is read
+    by `grok_agent_status`, which an operator calls at the start of a session.
+    """
+    git = git_runner or default_git_runner
+    root = Path(repo_root)
+    parent = Path(lanes_parent) if lanes_parent is not None else resolve_lanes_parent(root, None)
+    listed = git(["-C", str(root), "worktree", "list", "--porcelain"], None, timeout)
+    if listed.get("returncode") != 0 or listed.get("timedOut"):
+        return []
+    lanes: list[dict[str, Any]] = []
+    current: dict[str, Any] = {}
+    for line in str(listed.get("stdout") or "").splitlines():
+        if line.startswith("worktree "):
+            current = {"path": line[len("worktree "):].strip()}
+        elif line.startswith("HEAD "):
+            current["head"] = line[len("HEAD "):].strip()[:12]
+        elif line.startswith("branch "):
+            current["branch"] = line[len("branch "):].strip().replace("refs/heads/", "")
+        elif not line.strip() and current:
+            lanes.append(current)
+            current = {}
+    if current:
+        lanes.append(current)
+    out: list[dict[str, Any]] = []
+    for lane in lanes:
+        path = lane.get("path")
+        if not path or not is_path_inside(Path(path), parent):
+            continue
+        if not str(lane.get("branch") or "").startswith("grok/"):
+            continue
+        out.append(lane)
+    return out
+
+
 def commit_lane_work(
     worktree_path: Path | str,
     *,
@@ -2018,6 +2354,12 @@ __all__ = [
     "CHECKOUT_SETTLE_POLL_SECONDS",
     "DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS",
     "DEFAULT_GIT_TIMEOUT_SECONDS",
+    "release_lane",
+    "mount_paths_into",
+    "unmount_paths",
+    "MOUNT_MAX_BYTES",
+    "list_lanes",
+    "lane_cleanup_enabled",
     "GIT_SPAWN_STARVATION_CAUSE",
     "GIT_SPAWN_STARVATION_MEASUREMENT",
     "GIT_SPAWN_STARVATION_MIN_SECONDS",

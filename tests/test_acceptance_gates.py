@@ -224,6 +224,10 @@ def test_a_reused_lane_cannot_hide_what_an_earlier_job_left(monkeypatch) -> None
         root = outer / "repo"
         root.mkdir()
         monkeypatch.setenv("GROK_DELEGATE_LANES_PARENT", str(outer / "lanes"))
+        # A lane that produced nothing is now removed when the job ends, and a
+        # removed lane cannot be reused. This test is about the reuse hazard,
+        # so it opts out of cleanup to keep the lane alive between the runs.
+        monkeypatch.setenv("GROK_DELEGATE_LANE_CLEANUP", "0")
 
         def git(*args):
             subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True)

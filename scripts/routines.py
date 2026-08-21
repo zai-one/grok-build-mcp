@@ -309,6 +309,152 @@ def r_hygiene_lane(row: Row, turns: int) -> Row:
     return row.settle()
 
 
+def r_hygiene_release(row: Row, turns: int) -> Row:
+    """A lane that produced nothing does not survive its job; one that did, does."""
+    from grok_delegate import runner
+
+    root = seed_repo()
+    runner.ensure_lane_dir_ignored(root)
+    base = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+
+    empty = runner.prepare_worktree(repo_root=root, lane="r-release-empty", base_ref="HEAD",
+                                    require_clean_base=False)
+    if not empty.get("ok"):
+        row.fail(f"worktree refused: {empty.get('error')}")
+        return row.settle()
+    released = runner.release_lane(repo_root=root, worktree_path=empty["worktree_path"],
+                                   branch=empty["branch"], base_sha=base)
+    row.evidence["empty_lane"] = released
+    if not released.get("removed"):
+        row.fail(f"a lane that produced nothing was kept: {released.get('reason')}")
+    if Path(str(empty["worktree_path"])).exists():
+        row.fail("release reported removal but the checkout is still on disk")
+
+    worked = runner.prepare_worktree(repo_root=root, lane="r-release-worked", base_ref="HEAD",
+                                     require_clean_base=False)
+    tree = Path(str(worked["worktree_path"]))
+    (tree / "answer.txt").write_text("real work\n", encoding="utf-8")
+    kept = runner.release_lane(repo_root=root, worktree_path=tree,
+                               branch=worked["branch"], base_sha=base)
+    row.evidence["dirty_lane"] = kept
+    if kept.get("removed"):
+        row.fail("uncommitted work was deleted with the lane")
+    if kept.get("reason") != "UNCOMMITTED_CHANGES":
+        row.fail(f"a kept lane must say why, got {kept.get('reason')!r}")
+
+    listed = runner.list_lanes(root)
+    row.evidence["listed"] = listed
+    if not any(str(lane.get("branch")) == worked["branch"] for lane in listed):
+        row.fail("a live lane is missing from the listing an operator reads")
+    if any(str(lane.get("branch")) == empty["branch"] for lane in listed):
+        row.fail("a released lane is still listed as live")
+    return row.settle()
+
+
+def r_security_mount(row: Row, turns: int) -> Row:
+    """Only ignored, non-credential, in-project paths cross into a lane."""
+    from grok_delegate import runner
+    from grok_delegate.contracts import validate_task_packet
+    from grok_delegate.guard import GuardError
+
+    # Not seed_repo(secret=True): that one commits the .env, and a tracked
+    # credential is in every checkout of the ref by definition. The case that
+    # matters is the ignored one, which is why a lane is safe at all.
+    root = seed_repo()
+    runner.ensure_lane_dir_ignored(root)
+    gitignore = root / ".gitignore"
+    gitignore.write_text(gitignore.read_text(encoding="utf-8") + "briefs/" + chr(10) + ".env" + chr(10),
+                         encoding="utf-8")
+    subprocess.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
+    subprocess.run(["git", "-C", str(root), "-c", "user.name=R", "-c", "user.email=r@e.invalid",
+                    "commit", "-qm", "ignore briefs"], capture_output=True)
+    (root / "briefs").mkdir(exist_ok=True)
+    (root / "briefs" / "task.md").write_text("the brief" + chr(10), encoding="utf-8")
+    (root / ".env").write_text("XAI_API_KEY=xai-ROUTINE0000000000000000000000000000FAKE" + chr(10),
+                               encoding="utf-8")
+
+    packet = {
+        "objective": "read the brief", "role": "execute", "project_root": str(root),
+        "permission_profile": "workspace", "max_turns": 4, "timeout_seconds": 120,
+        "expected_artifacts": ["answer.txt"], "test_commands": [TEST_COMMAND],
+        "correlation_id": "r-mount",
+    }
+    refusals = {}
+    for name in (".env", "briefs/../.env", "secrets/id_rsa"):
+        try:
+            validate_task_packet({**packet, "mount_paths": [name]}, allowed_roots=[root])
+            refusals[name] = None
+        except GuardError as exc:
+            refusals[name] = exc.code
+    row.evidence["refusals"] = refusals
+    for name, code in refusals.items():
+        if code is None:
+            row.fail(f"a credential path was accepted for mounting: {name}")
+
+    lane = runner.prepare_worktree(repo_root=root, lane="r-mount", base_ref="HEAD",
+                                   require_clean_base=False)
+    tree = Path(str(lane["worktree_path"]))
+    mounted = runner.mount_paths_into(repo_root=root, worktree_path=tree, paths=["briefs/task.md"])
+    row.evidence["mounted"] = mounted
+    if not mounted.get("ok"):
+        row.fail(f"an ordinary ignored brief could not be mounted: {mounted.get('error')}")
+    elif not (tree / "briefs" / "task.md").exists():
+        row.fail("mount reported success and the file is not in the lane")
+
+    if (tree / ".env").exists():
+        row.fail("the lane contains a credential the job never asked for")
+
+    dirty = subprocess.run(["git", "-C", str(tree), "status", "--porcelain"],
+                           capture_output=True, text=True).stdout.strip()
+    row.evidence["lane_status"] = dirty
+    if dirty:
+        row.fail(f"a mounted file is visible to the lane commit: {dirty[:120]}")
+
+    tracked = runner.mount_paths_into(repo_root=root, worktree_path=tree, paths=["app.py"])
+    row.evidence["tracked"] = tracked
+    if tracked.get("ok"):
+        row.fail("a tracked file was mounted over the lane's own copy")
+    return row.settle()
+
+
+def r_economy_budget(row: Row, turns: int) -> Row:
+    """The output budget measures the agent, not the protocol around it."""
+    from grok_delegate.acp import charge_payload, payload_bytes
+
+    frame = {
+        "jsonrpc": "2.0", "method": "session/update",
+        "params": {"sessionId": "01a0252a-fe3d-7670-8fcf-7357c08a3220",
+                   "update": {"sessionUpdate": "agent_message_chunk",
+                              "content": {"type": "text", "text": "hello"}}},
+    }
+    wire = len(json.dumps(frame, ensure_ascii=False).encode("utf-8"))
+    charged = payload_bytes(frame)
+    row.evidence["frame"] = {"wire_bytes": wire, "charged": charged}
+    # Keys are charged too -- a megabyte-long key is agent-produced bytes -- so
+    # the number is not exactly five. What must hold is that the envelope is not
+    # what the agent pays for.
+    if not 5 <= charged <= wire // 4:
+        row.fail(f"a five-byte chunk was charged {charged} bytes of a {wire}-byte frame")
+
+    seen: "dict[str, int]" = {}
+    running = ""
+    total = 0
+    for index in range(80):
+        running += f"line {index:04d}" + chr(10)
+        total += charge_payload(
+            {"jsonrpc": "2.0", "method": "session/update",
+             "params": {"sessionId": "s", "update": {"sessionUpdate": "tool_call_update",
+                                                     "toolCallId": "call-1",
+                                                     "rawOutput": {"output_preview": running}}}},
+            seen,
+        )
+    row.evidence["resent_output"] = {"final_buffer": len(running), "charged_total": total}
+    if total > len(running) + 64:
+        row.fail(f"a resent buffer of {len(running)} bytes was charged {total}")
+    return row.settle()
+
+
 def r_evidence_gates(row: Row, turns: int) -> Row:
     """The three ways a receipt can look finished while proving nothing."""
     task = {"role": "execute", "objective": "x", "expected_artifacts": ["app.py"],
@@ -1227,6 +1373,9 @@ ROUTINES: "dict[str, tuple[str, str, Callable[[Row, int], Row]]]" = {
     "wiring.roots": ("wiring", "harness", r_wiring_roots),
     "wiring.handshake": ("wiring", "harness", r_wiring_handshake),
     "hygiene.lane": ("hygiene", "harness", r_hygiene_lane),
+    "hygiene.release": ("hygiene", "harness", r_hygiene_release),
+    "security.mount": ("security", "harness", r_security_mount),
+    "economy.budget": ("economy", "harness", r_economy_budget),
     "evidence.gates": ("evidence", "harness", r_evidence_gates),
     "security.secrets": ("security", "grok", r_security_secrets),
     "security.read": ("security", "grok", r_security_read),

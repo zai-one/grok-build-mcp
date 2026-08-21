@@ -32,6 +32,7 @@ try:
         SubprocessRunner,
         WhichFn,
         in_project_lanes_parent,
+        list_lanes,
         run_readonly_cli,
     )
 except ImportError:  # flat import
@@ -52,6 +53,7 @@ except ImportError:  # flat import
         SubprocessRunner,
         WhichFn,
         in_project_lanes_parent,
+        list_lanes,
         run_readonly_cli,
     )
 
@@ -566,6 +568,19 @@ def build_status_report(
             # how status came to report a directory no job would ever write to.
             lanes_map[r] = str(in_project_lanes_parent(Path(r)))
 
+    lanes_live: list[dict[str, Any]] = []
+    for root_path in roots:
+        try:
+            lanes_live.extend(
+                list_lanes(Path(root_path), lanes_parent=lanes_map.get(root_path))
+            )
+        except Exception:
+            continue
+    # A repository that collected lanes for a month must not turn a status call
+    # into a page of paths. The count still tells the truth about how many.
+    lanes_total = len(lanes_live)
+    lanes_live = lanes_live[:32]
+
     env_sandbox = os.environ.get("GROK_SANDBOX") or os.environ.get("GROK_DELEGATE_SANDBOX")
     compatibility = compatibility_report(detected_cli_version=version_info.get("version"))
 
@@ -609,6 +624,10 @@ def build_status_report(
             "host_root_trusted": trust_host_roots_enabled(env_source),
             "host_root": (host_provided_roots(env_source) or [None])[0],
         },
+        # Unmerged work is invisible until somebody goes looking for it, and
+        # a lane is exactly that: a branch a human still has to judge.
+        "lanes": lanes_live,
+        "lanes_total": lanes_total,
         "permissions": {
             "execute_mode": "dontAsk",
             "plan_mode": "plan",

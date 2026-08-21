@@ -28,6 +28,172 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.25.0 — The answer arrives, the lane does not linger
+
+### A long answer no longer counts as a runaway
+
+`ACP_OUTPUT_LIMIT` killed jobs that had done nothing wrong. Measured on a live
+stream: the median `agent_message_chunk` frame is 456 bytes and carries 2-8
+bytes of text, so a 25 KB answer cost 1.5-5.8 MB against a 1-2.4 MB cap. Five
+jobs told to keep their answer short passed; three without that instruction
+died. The budget now counts what the agent produced -- text, not envelope --
+and a separate, much larger allowance bounds the stream itself so an agent
+emitting nothing but envelopes is still stopped.
+
+A running command is charged once, not once per update. Grok resends the whole
+accumulated `rawOutput` under the same `toolCallId` every time it grows, so one
+three-minute pytest run arrived as hundreds of frames each carrying the entire
+buffer so far -- the same bytes counted hundreds of times. This was found by
+running the skeptic over these very changes and watching it die at
+`ACP_OUTPUT_LIMIT`.
+
+An overrun is also no longer a crash. It cancels the turn the way running out
+of turns does: the edits already on disk stay, the verifier still judges them,
+and the receipt says `output_truncated` with `output_payload_bytes` and
+`output_cap_bytes`. **Breaking:** a job stopped by the output cap now reports
+`status: "cancelled"` where it previously reported `"failed"`; an orchestrator
+matching on `failed` to detect it should match `blocked_reason` instead.
+
+### A lane that produced nothing no longer survives the job
+
+Ten lanes had accumulated in this repository, four of them from runs whose only
+product was the lane. A lane whose branch is still at the pinned base and whose
+tree is clean is now removed when the job ends -- after the receipt, never
+before, because acceptance is read from the tree the verifier left. Anything
+else is kept and says why: `lane_retained_reason` is `UNCOMMITTED_CHANGES` or
+`LANE_HAS_COMMITS`. Off with `GROK_DELEGATE_LANE_CLEANUP=0`.
+
+`grok_agent_status` now lists the lanes that exist, with branch and head, so
+unmerged work is visible at the start of a session instead of being found by
+accident weeks later.
+
+Removal refuses anything that is not a linked worktree: a lane keeps a `.git`
+file, a main checkout keeps a `.git` directory, so a lane-shaped branch name on
+the wrong path cannot delete a repository.
+
+### `mount_paths`: the brief that lives outside git
+
+A lane is a checkout of a git ref, which is why it is safe -- an ignored `.env`
+is not in it -- and why the task brief sitting in an ignored directory is not in
+it either. Jobs worked from a spec they could not read. A task may now name
+`mount_paths`, and exactly those paths are copied into the lane before the
+worker starts. They must be inside the project, must be ignored by git (so they
+cannot reach the lane commit, and a tracked file is refused as a mistake), must
+not be a credential by name, must not be a symlink, and must fit in 32 MB. The
+receipt names what was mounted, so a reviewer is not left wondering where a file
+came from.
+
+A mounted directory is checked all the way down, because mounting a directory
+mounts every name in it. A credential anywhere inside refuses the whole mount,
+and so does a link -- including a Windows junction, which is the reachable case:
+measured on this machine, `os.symlink` needs a privilege the user does not have
+while `mklink /J` needs none, and `Path.is_symlink()` answers False for what it
+makes while `copytree` follows it straight out of the project.
+
+### A skeptic can review a lane
+
+Asked to review lane work, a read-only role ran in the main checkout, where
+every lane path was outside its own directory and the permission gate refused
+it. A task may now carry `review_lane`, and a read-only role with one runs
+inside that worktree.
+
+It is a separate field, not the existing `lane`, and soak is why: every
+read-only job already passes `lane` as a label for itself -- the soak passes
+`soak-consult` and `soak-skeptic` -- so reading that as "stand in that worktree"
+turned two working calls into `LANE_NOT_FOUND` on the first run. A write role
+that names `review_lane` is refused outright: it gets a lane of its own, and two
+workers in one worktree is the thing the lane lock exists to prevent.
+
+The role still creates no branch and commits nothing; an unknown lane is
+`LANE_NOT_FOUND`. The bridge itself may put a declared `mount_paths` input in the
+lane for the duration of the job and takes it out again afterwards, which is the
+only thing that touches disk.
+
+The lane must be a linked worktree of this repository, under this project's
+lanes parent. Each of those was reachable on its own: `GROK_DELEGATE_LANES_PARENT`
+can name a shared directory, and then a lane called `lib` resolved into a
+neighbouring checkout, while a lane named after the project resolved into the
+main checkout -- the one tree with the gitignored secrets this feature exists to
+stay out of. `transport=legacy` refuses a review lane outright, because it runs
+in `project_root` whatever cwd says.
+
+This is also the answer to the read gate the CLI does not offer. Grok CLI 1.0.5
+does not ask permission to read, so a `.env` in the working directory is
+readable whatever the bridge denies -- measured, with zero calls to the gate. A
+role that works in a lane instead of the main checkout is working in a tree that
+does not contain ignored files at all, and `mount_paths` is the narrow way to
+carry in what it genuinely needs.
+
+### Three more routines
+
+`hygiene.release` (a lane that produced nothing does not survive its job, one
+that did is kept and says why), `security.mount` (only ignored, non-credential
+paths cross into a lane, and nothing mounted reaches the lane commit), and
+`economy.budget` (a chunk is charged for its text and not its frame, and a resent buffer
+is charged once). All three run in the harness driver, so they cost seconds.
+
+### What four skeptics found before this shipped
+
+Each section above was reviewed by an independent Grok skeptic with its own
+sixty turns, and every one came back with defects. They are fixed here; the list
+is what changed, not a confession:
+
+- **A lane name meant two lanes.** `lane="grok/x"` was slugified whole, so the
+  one-job-per-lane check guarded `grok/grok-x` while the review path opened
+  `grok/x`. A skeptic could walk into a worktree a running execute job owned.
+- **Ignored work looked like an empty lane.** `git status --porcelain` says
+  nothing about ignored files, and this repository ignores `*.log` and
+  `Service/Audits/routines-*.json`. A job whose only product was one of those
+  read as "produced nothing" and `worktree remove --force` took it. The receipt
+  now decides: a lane is released only when changed files, artifacts, worker
+  writes and the lane commit are all empty.
+- **A removed checkout with a surviving branch reported itself as fully
+  removed.** `lane_retained_reason` now survives a successful removal, and
+  `lane_branch_deleted` says which half happened.
+- **Ignore status was judged in the project while the file landed in the lane.**
+  A `.gitignore` newer than the ref the lane was cut from meant a mounted file
+  could reach the lane commit. It is asked in the lane now.
+- **Junctions were invisible on Python 3.10 and 3.11.** `Path.is_junction()`
+  arrived in 3.12 and this package supports 3.10, so on the two versions in
+  between `copytree` walked straight through a junction. Detection now reads the
+  reparse-point attribute, which has been there since 3.5.
+- **The credential predicate read only the last component**, so `id_rsa/config`
+  and `.env.local/settings.json` passed, and `.envrc` was refused by the search
+  gate while the mount validator allowed it.
+- **A refused mount left its earlier copies behind**, and a link already sitting
+  in a reused lane was written through. Mounts roll back on refusal, the
+  destination is checked for links, and what actually landed is measured after
+  the copy rather than before it.
+- **An overrun could still report success.** An agent that answered `end_turn`
+  after being cancelled produced `status: completed` next to
+  `blocked_reason: ACP_OUTPUT_LIMIT`; a job deadline landing inside the
+  five-second cancel grace reported `ACP_TIMEOUT` instead of the real cause; and
+  a permission request arriving after the cancel was still granted.
+- **The websocket had no wire backstop at all**, so an agent streaming nothing
+  but envelopes ran to the job deadline there while stdio stopped it. An
+  oversized single frame also reported itself as the output budget; it has its
+  own code now (`ACP_FRAME_TOO_LARGE`), because it is a protocol fault and not a
+  truncated answer.
+- **A frame nested twenty thousand deep killed the job.** `json.loads` raises
+  `RecursionError`, which `except json.JSONDecodeError` did not catch, and the
+  depth guard lived after the parse. Such a frame is malformed now, and the turn
+  survives it.
+- **Identifier keys were free at any size**, so a hundred kilobytes under the
+  key `status` cost nothing. Keys are counted, and an exempt key stops being
+  exempt once its value is too large to be an identifier.
+- **The error path dropped `worker_written_files`**, so a job stopped by the
+  output cap reported no writes and acceptance blamed the worker for files it
+  had been given permission to write.
+
+### One definition of "this path is a credential"
+
+`looks_like_secret_path` moved to `guard.py`, along with the Windows name
+normaliser that strips trailing dots and alternate data streams. The permission
+gate and the mount validator now share it. Two lists for one rule is how
+`id_rsa` came to be refused to `git show` and handed over by an ordinary read.
+
+---
+
 ## 0.24.0 — Nothing waits twice
 
 ### A busy bridge no longer starves its own subprocess spawns

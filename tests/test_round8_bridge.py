@@ -310,8 +310,13 @@ def test_timeout_and_oversized_output_fail_closed() -> None:
             popen_factory=lambda _argv, **kwargs: subprocess.Popen([sys.executable, str(FAKE)], **kwargs),
             output_byte_cap=16_384,
         ).run(oversized_task, cwd=root, cancel_event=threading.Event())
-        assert oversized["status"] == "failed"
+        # Bounded, not crashed: an agent that overruns its output budget is
+        # stopped the way turn exhaustion stops one, so the edits it already
+        # made stay on disk for the verifier to judge.
+        assert oversized["status"] == "cancelled"
         assert oversized["blocked_reason"] == "ACP_OUTPUT_LIMIT"
+        assert oversized["output_truncated"] is True
+        assert oversized["output_cap_bytes"] == 16_384
 
 
 def test_secret_redaction_covers_events_and_receipt_summary() -> None:
@@ -655,15 +660,21 @@ def test_managed_websocket_stderr_is_cumulatively_bounded() -> None:
         result = WebSocketACPTransport(popen_factory=managed_factory).run(
             task, cwd=root, cancel_event=threading.Event()
         )
-        assert result["status"] == "failed"
         # Under parallel suite load the fake daemon may miss the first connect
-        # window; the important product gate is still a fail-closed non-success
-        # receipt with either the output cap or a connect/process failure code.
+        # window; the important product gate is still a non-success receipt
+        # with either the output cap or a connect/process failure code.
         assert result.get("blocked_reason") in {
             "ACP_OUTPUT_LIMIT",
             "ACP_WS_CONNECT_FAILED",
             "ACP_WS_PROCESS_EXITED",
         }
+        # The cap is a deliberate stop, so it reads as cancelled; a daemon that
+        # never came up is a failure and still reads as one.
+        if result.get("blocked_reason") == "ACP_OUTPUT_LIMIT":
+            assert result["status"] == "cancelled"
+            assert result["output_truncated"] is True
+        else:
+            assert result["status"] == "failed"
         assert result["worker_alive_after_shutdown"] in {False, None}
 
 

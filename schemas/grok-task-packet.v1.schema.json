@@ -20,6 +20,18 @@
     "acceptance_criteria": {"$ref": "#/$defs/boundedStringArray"},
     "expected_artifacts": {"$ref": "#/$defs/boundedStringArray"},
     "test_commands": {"$ref": "#/$defs/boundedStringArray"},
+    "review_lane": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "description": "For a read-only role: an existing grok/* lane of this project to run inside, instead of the project itself"
+    },
+    "mount_paths": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {"type": "string", "minLength": 1, "maxLength": 1024},
+      "description": "Project-relative, git-ignored, non-credential paths copied read-only into the lane before the worker starts"
+    },
     "correlation_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
   },
   "$defs": {

@@ -35,9 +35,13 @@ from .runner import (
     in_project_lanes_parent,
     is_hidden_inside,
     is_path_inside,
+    mount_paths_into,
     prepare_worktree,
+    release_lane,
+    unmount_paths,
     spawn_or_cached_version,
     spawn_priority,
+    worktree_path_for_lane,
 )
 
 _CONCURRENCY = max(1, min(int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "1") or "1"), 2))
@@ -269,6 +273,7 @@ def run_task(
     router: TransportRouter,
     cancel_event: threading.Event,
     event_sink: Callable[[dict[str, Any]], None] | None = None,
+    review_lane: str | None = None,
 ) -> dict[str, Any]:
     jid = _job_id(task, transport, lane)
     started = _utc_now()
@@ -322,6 +327,54 @@ def run_task(
             _base_receipt(jid, transport, started, status="cancelled", blocked_reason="CANCELLED_BEFORE_START"),
             task,
         )
+
+    review_lane = review_lane or (str(task.get("review_lane") or "") or None)
+    if not write_role and review_lane:
+        # A skeptic asked to review lane work could not: it ran in the main
+        # checkout, so every path it wanted to read or test was outside its own
+        # cwd and the permission gate refused it. Reviewing a lane means
+        # standing in it. Read-only, and never creating one -- a role that
+        # cannot write must not leave a branch behind either.
+        try:
+            lane_path = worktree_path_for_lane(_default_lanes_parent(root), normalize_lane(review_lane))
+        except GuardError as exc:
+            return finalize_receipt(
+                _base_receipt(
+                    jid, transport, started, status="blocked", blocked_reason=str(exc.code)
+                ),
+                task,
+            )
+        if not _is_lane_worktree_of(lane_path, root):
+            # `.git` existing is true of every repository on the disk, and
+            # `GROK_DELEGATE_LANES_PARENT` can point anywhere: without this a
+            # review of "lane lib" landed in a neighbouring checkout, secrets
+            # and all, and a lane named after the project landed in the main
+            # checkout -- the one tree this feature exists to stay out of.
+            return finalize_receipt(
+                _base_receipt(
+                    jid,
+                    transport,
+                    started,
+                    status="blocked",
+                    blocked_reason="LANE_NOT_FOUND",
+                ),
+                task,
+            )
+        if transport == "legacy":
+            # The legacy path runs in `project_root` no matter what cwd says, so
+            # honouring the lane here would be a receipt that names a tree the
+            # worker never stood in.
+            return finalize_receipt(
+                _base_receipt(
+                    jid,
+                    transport,
+                    started,
+                    status="blocked",
+                    blocked_reason="REVIEW_LANE_UNSUPPORTED_TRANSPORT",
+                ),
+                task,
+            )
+        cwd = lane_path.resolve()
 
     if write_role:
         git_exe = shutil.which("git") or "git"
@@ -479,11 +532,38 @@ def run_task(
                     "tests": verified_tests,
                     "tests_skipped_reason": tests_skipped,
                     "artifacts": _present_artifacts(cwd, task),
+                    "output_truncated": bool(result.get("output_truncated")),
+                    "output_payload_bytes": result.get("output_payload_bytes"),
+                    "output_cap_bytes": result.get("output_cap_bytes"),
                 }
             )
             return finalize_receipt(receipt, task)
         return finalize_receipt(_run_legacy_readonly(task, jid, router.grok_bin, cancel_event), task)
 
+    mounted_paths: list[str] = []
+    if task.get("mount_paths"):
+        # Before the worker, after the checkout: a lane is a git ref, and
+        # what git does not carry has to be put there deliberately or not
+        # at all.
+        mount = mount_paths_into(
+            repo_root=root,
+            worktree_path=cwd,
+            paths=list(task.get("mount_paths") or []),
+            git_runner=git_runner,
+            timeout=min(float(task["timeout_seconds"]), 30.0),
+        )
+        if not mount.get("ok"):
+            return finalize_receipt(
+                _base_receipt(
+                    jid,
+                    transport,
+                    started,
+                    status="blocked",
+                    blocked_reason=str(mount.get("error") or "MOUNT_FAILED"),
+                ),
+                task,
+            )
+        mounted_paths = list(mount.get("mounted") or [])
     jobs.update_job(jid, {"phase": "executor", "worktree_path": str(cwd)})
     adapter = router.adapter(transport)
     result = adapter.run(
@@ -615,10 +695,18 @@ def run_task(
             # the acceptance gate has no business blaming the worker for it.
             "worker_written_files": result.get("worker_written_files") or [],
             "lane_commit": lane_commit,
+            # Named in the receipt because a reviewer looking at the lane
+            # would otherwise find files that no commit and no diff explains.
+            "mounted_paths": mounted_paths,
             "artifacts": _present_artifacts(cwd, task),
             "summary": redact_text(str(result.get("summary") or "")),
             "events": result.get("events") or [],
             "stop_reason": result.get("stop_reason"),
+            # A bounded answer has to say so where the caller reads, not only in
+            # the adapter's own return value.
+            "output_truncated": bool(result.get("output_truncated")),
+            "output_payload_bytes": result.get("output_payload_bytes"),
+            "output_cap_bytes": result.get("output_cap_bytes"),
             "agent_version": result.get("agent_version"),
             "server_pid": os.getpid(),
             "worker_pid": result.get("worker_pid"),
@@ -627,6 +715,46 @@ def run_task(
             "error": redact_text(str(result.get("error") or "")) or None,
         }
     )
+    if mounted_paths:
+        # A mount is an input. Leaving it behind makes a reviewer wonder where a
+        # file came from, and means a read-only role left something on disk.
+        unmount_paths(cwd, mounted_paths)
+    if write_role and branch:
+        # `git status` says nothing about ignored files, and this repository
+        # ignores `*.log` and `Service/Audits/routines-*.json` -- a job whose
+        # only product was one of those looked like a lane that produced
+        # nothing, and `worktree remove --force` took the work with it. The
+        # receipt knows better than git here, so it decides.
+        produced = any(
+            (
+                receipt.get("changed_files"),
+                receipt.get("full_changed_files"),
+                receipt.get("artifacts"),
+                receipt.get("worker_written_files"),
+                (lane_commit or {}).get("sha"),
+            )
+        )
+        if produced:
+            receipt["lane_released"] = False
+            receipt["lane_retained_reason"] = "WORK_PRESENT"
+        else:
+            # After the receipt, never before it: acceptance is read from the
+            # tree the verifier left, and a lane removed early would take that
+            # evidence with it.
+            released = release_lane(
+                repo_root=root,
+                worktree_path=cwd,
+                branch=str(branch),
+                base_sha=str(base_ref),
+                git_runner=git_runner,
+                timeout=min(float(task["timeout_seconds"]), 60.0),
+            )
+            receipt["lane_released"] = bool(released.get("removed"))
+            # Kept even when the checkout went: `BRANCH_DELETE_FAILED` means the
+            # branch is still there, and reporting the lane as removed with its
+            # branch would be a lie the next job trips over.
+            receipt["lane_retained_reason"] = released.get("reason")
+            receipt["lane_branch_deleted"] = released.get("branch_deleted", False)
     return finalize_receipt(receipt, task)
 
 
@@ -1017,8 +1145,45 @@ def _default_lanes_parent(root: Path) -> Path:
     )
 
 
+def _is_lane_worktree_of(lane_path: Path, root: Path) -> bool:
+    """True only for a linked worktree of *root*, sitting under its lanes parent.
+
+    Three separate things, because each one was reachable on its own: a lane
+    outside the lanes parent (the parent is an env variable), a main checkout
+    rather than a lane (a `.git` directory, not a file), and a linked worktree
+    of some other repository (a `.git` file pointing elsewhere).
+    """
+    try:
+        lane_path = lane_path.resolve()
+        root = root.resolve()
+        if lane_path == root or not is_path_inside(lane_path, _default_lanes_parent(root)):
+            return False
+        marker = lane_path / ".git"
+        if not marker.is_file():
+            return False
+        pointer = marker.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return False
+    if not pointer.lower().startswith("gitdir:"):
+        return False
+    target = pointer.split(":", 1)[1].strip()
+    try:
+        return is_path_inside(Path(target).resolve(), (root / ".git").resolve())
+    except OSError:
+        return False
+
+
 def _lane_name(value: str | None, task: Mapping[str, Any]) -> str:
+    """Normalize a caller's lane to the same name the rest of the bridge uses.
+
+    The slug was built from the whole string, so `grok/x` became the slug
+    `grok-x` and then the lane `grok/grok-x` -- while everything that calls
+    `normalize_lane` directly read the same input as `grok/x`. The busy check
+    used one, the review path used the other, and a skeptic could walk into a
+    worktree a running execute job owned.
+    """
     raw = value or f"round8-{task['role']}-{task['correlation_id']}"
+    raw = re.sub(r"^grok/", "", str(raw).strip(), flags=re.IGNORECASE)
     slug = re.sub(r"[^a-z0-9-]+", "-", raw.lower()).strip("-")[:80]
     if not slug:
         slug = "round8-task"

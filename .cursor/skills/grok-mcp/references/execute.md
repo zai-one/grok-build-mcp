@@ -18,4 +18,19 @@ Fallback if a card is rejected:
 4. Host reads changed_files / diffstat / bounded unified_diff / tests / worktree_path.
 5. `session_end`; human merges `grok/*`.
 
+## When the job needs something git does not carry
+
+A lane is a checkout of a git ref, so a brief in an ignored directory is not in
+it. Name it: `task.mount_paths: ["briefs/task.md"]`. The bridge copies those
+paths in before the worker starts and takes them out afterwards, and refuses
+anything that is not ignored by the lane, is a link, or is named like a
+credential. The receipt lists `mounted_paths`.
+
+## Reviewing a lane
+
+`task.review_lane: "<slug>"` puts a read-only role (`consult`, `skeptic`) inside
+that lane's worktree instead of the project. Read-only still: no branch, no
+commit. An unknown lane is `LANE_NOT_FOUND`. The top-level `lane` argument is
+just the job's name and does not do this.
+
 Anti: chat-as-objective · parallel jobs · host edits mid-job · CLI version pin.

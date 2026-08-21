@@ -30,7 +30,14 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib.parse import quote, urlparse
 
 from .contracts import EVENT_SCHEMA_ID, MAX_EVENTS, bounded_event, build_prompt, redact_text as _redact_text
-from .guard import ALWAYS_APPROVE_FLAG, GuardError, SERVER_VERSION, validate_grok_bin
+from .guard import (
+    ALWAYS_APPROVE_FLAG,
+    GuardError,
+    SERVER_VERSION,
+    looks_like_secret_path,
+    validate_grok_bin,
+    windows_open_name,
+)
 
 ACP_PROTOCOL_VERSION = 1
 
@@ -61,7 +68,12 @@ _expected_agent_version = expected_agent_version
 _EXPECTED_SENTINEL: Any = object()
 DEFAULT_OUTPUT_BYTES = 1_000_000
 MAX_MALFORMED_FRAMES = 3
-MAX_WS_FRAME_BYTES = 2_000_000
+#: One JSON-RPC frame may legitimately be large -- a whole file in a tool
+#: result -- while the output budget stays small. Bounding a line by the
+#: output budget cut such frames out of the stream before anything could
+#: read them, which is a different failure wearing the same name.
+MAX_FRAME_BYTES = 2_000_000
+MAX_WS_FRAME_BYTES = MAX_FRAME_BYTES
 CANCEL_GRACE_SECONDS = 5.0
 
 #: Output a single turn may legitimately produce. The cap exists to stop a
@@ -85,6 +97,129 @@ def output_cap_for(task: Mapping[str, Any], *, configured: int = DEFAULT_OUTPUT_
     except (TypeError, ValueError):
         turns = 0
     return max(DEFAULT_OUTPUT_BYTES, turns * OUTPUT_BYTES_PER_TURN)
+
+
+#: Frames are mostly envelope. Measured on a live job: the median
+#: `agent_message_chunk` frame is 456 bytes and carries 2-8 bytes of text, so a
+#: 25 KB answer costs 1.5-5.8 MB of stream. Counting frames against the output
+#: budget therefore killed long, healthy answers -- a skeptic's honest report --
+#: while a runaway agent producing real text was measured wrongly too. The
+#: budget counts what the agent produced; this factor bounds the stream itself,
+#: which is what protects the reader from an agent that emits nothing but
+#: envelopes.
+WIRE_BUDGET_FACTOR = 64
+
+#: Keys whose values identify a frame rather than carry agent output. A session
+#: id is 36 bytes and rides on every single frame; charging the agent for it is
+#: how a 2-byte chunk came to cost hundreds.
+_ENVELOPE_KEYS = frozenset(
+    {
+        "jsonrpc",
+        "id",
+        "method",
+        "sessionId",
+        "sessionUpdate",
+        "toolCallId",
+        "kind",
+        "type",
+        "role",
+        "status",
+        "outcome",
+        "protocolVersion",
+        "optionId",
+    }
+)
+
+
+#: How deep a frame may nest before the counter stops descending. A frame this
+#: deep is not an answer, and recursing to Python's own limit would raise
+#: RecursionError inside the reader -- turning a malformed frame into a crashed
+#: job rather than a counted one.
+_PAYLOAD_MAX_DEPTH = 40
+
+
+#: How long an "identifier" may be before it stops being free. A session id is
+#: 36 bytes and a status is a word; a hundred kilobytes under the key `status`
+#: is an agent spending budget through a hole in the exemption list.
+_ENVELOPE_FREE_MAX = 128
+
+
+def _serialised_size(value: Any) -> int:
+    """Everything under here, in bytes, without descending further."""
+    try:
+        return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value).encode("utf-8", errors="replace"))
+
+
+def payload_bytes(message: Any, _depth: int = 0) -> int:
+    """UTF-8 bytes of agent-produced text in one frame, envelope excluded.
+
+    Deliberately structural rather than a list of known fields: Grok sends
+    eleven private `_x.ai/*` methods on 1.0.5 alone, and a budget that only
+    understood the spec'd ones would stop counting the moment the CLI grew a
+    new shape.
+
+    Keys count too, and an exempt key stops being exempt once its value is too
+    large to be an identifier. Both holes were reachable: `status` carrying a
+    hundred kilobytes cost nothing, and so did a megabyte-long key.
+    """
+    if isinstance(message, str):
+        return len(message.encode("utf-8", errors="replace"))
+    if _depth >= _PAYLOAD_MAX_DEPTH:
+        # Not a slice: a budget that under-reports deep nesting is a budget an
+        # agent can spend forever by nesting one level deeper.
+        return _serialised_size(message)
+    if isinstance(message, Mapping):
+        total = 0
+        for key, value in message.items():
+            if key in _ENVELOPE_KEYS and _serialised_size(value) <= _ENVELOPE_FREE_MAX:
+                continue
+            total += len(str(key).encode("utf-8", errors="replace"))
+            total += payload_bytes(value, _depth + 1)
+        return total
+    if isinstance(message, (list, tuple)):
+        return sum(payload_bytes(item, _depth + 1) for item in message)
+    return 0
+
+
+#: How many tool calls the growth ledger remembers. A 60-turn job makes tens of
+#: calls; this is far above that and far below anything that could matter.
+_TOOL_LEDGER_MAX = 4096
+
+#: Same reasoning for the tool-call state the permission gate reads from.
+_TOOL_STATE_MAX = 512
+
+
+def charge_payload(
+    message: Mapping[str, Any],
+    seen: dict[str, int],
+) -> int:
+    """Bytes to charge for this frame, given what its tool call already cost.
+
+    Grok streams a running command by resending the whole output buffer every
+    time it grows, under the same `toolCallId`. Charging the full frame each
+    time turned one three-minute test run into megabytes of "agent output" --
+    the budget was measuring the same bytes over and over.
+    """
+    total = payload_bytes(message)
+    update = ((message.get("params") or {}).get("update") or {}) if isinstance(message, Mapping) else {}
+    call_id = str(update.get("toolCallId") or "") if isinstance(update, Mapping) else ""
+    if not call_id:
+        return total
+    already = seen.get(call_id, 0)
+    # `call_id in seen`, not `already`: a first frame worth zero bytes put the id
+    # in the ledger with the value 0, and testing truthiness read that as "never
+    # seen" -- so once the ledger filled, that call's every later frame was
+    # charged in full again.
+    if call_id in seen or len(seen) < _TOOL_LEDGER_MAX:
+        seen[call_id] = max(already, total)
+    else:
+        # A CLI that invents a new toolCallId for every frame would otherwise
+        # grow this ledger for as long as the stream lasts. Past the bound, new
+        # ids are simply charged in full -- which is the old, safe behaviour.
+        return total
+    return max(0, total - already)
 
 
 def _model_argv(task: Mapping[str, Any]) -> list[str]:
@@ -215,13 +350,15 @@ class StdioACPTransport:
         reader_overflow = threading.Event()
         written: set[str] = set()
         reader_stop = threading.Event()
-        reader_budget = {"remaining": cap}
+        # The reader budget is the stream backstop, not the output budget: it
+        # counts frames, and frames are mostly envelope.
+        reader_budget = {"remaining": cap * WIRE_BUDGET_FACTOR}
         reader_budget_lock = threading.Lock()
         threads = [
             threading.Thread(
                 target=_line_reader,
                 args=(
-                    proc.stdout, "stdout", inbound, cap,
+                    proc.stdout, "stdout", inbound, max(cap, MAX_FRAME_BYTES),
                     reader_overflow, reader_budget, reader_budget_lock, reader_stop,
                 ),
                 daemon=True,
@@ -244,6 +381,8 @@ class StdioACPTransport:
         tool_state: dict[str, dict[str, Any]] = {}
         session_id: str | None = None
         output_bytes = 0
+        output_limited: str | None = None
+        tool_output_seen: dict[str, int] = {}
         denied_tool_calls = 0
         malformed = 0
         request_id = 0
@@ -283,18 +422,50 @@ class StdioACPTransport:
             except (BrokenPipeError, OSError) as exc:
                 raise ACPError("ACP_DISCONNECTED", "agent stdin closed") from exc
 
+        def bound_output(reason: str) -> None:
+            """Stop the turn the way a cancel does, not the way a crash does.
+
+            Raising here threw away every edit the agent had already made and
+            reported the job as failed. Turn exhaustion, which is the same
+            situation -- the agent must stop, the work so far is real -- ends in
+            a cancel, keeps the diff, and still runs the verifier. So does this.
+            """
+            nonlocal output_limited, cancelled, cancel_deadline
+            if output_limited is None:
+                output_limited = reason
+                emit("output_limit", {"reason": reason, "cap_bytes": cap})
+            if session_id is None:
+                raise ACPError("ACP_OUTPUT_LIMIT", reason)
+            if not cancelled:
+                send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})
+                cancelled = True
+                cancel_deadline = time.monotonic() + CANCEL_GRACE_SECONDS
+
         def await_response(wanted: int, phase: str) -> dict[str, Any]:
             nonlocal output_bytes, malformed, session_id, cancelled, timed_out, cancel_deadline, denied_tool_calls
+            nonlocal output_limited
             while True:
-                if reader_overflow.is_set():
-                    raise ACPError("ACP_OUTPUT_LIMIT", "agent output exceeded reader or queue cap")
+                if reader_overflow.is_set() and output_limited is None:
+                    bound_output("stream exceeded the wire backstop")
                 if cancel_deadline is not None and time.monotonic() >= cancel_deadline:
+                    if output_limited is not None:
+                        # We are the ones who asked it to stop. An agent that
+                        # does not answer must not turn a bounded answer into a
+                        # different failure the reader has to decode.
+                        raise ACPError(
+                            "ACP_OUTPUT_LIMIT",
+                            f"{output_limited}; the agent did not acknowledge the cancel",
+                        )
                     raise ACPError("ACP_CANCEL_TIMEOUT", "agent did not acknowledge cancellation")
                 if time.monotonic() >= deadline:
                     timed_out = True
                     if session_id and not cancelled:
                         send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})
                         cancelled = True
+                    if output_limited is not None:
+                        # The job's own deadline landing inside the five-second
+                        # grace we opened does not change what stopped the turn.
+                        raise ACPError("ACP_OUTPUT_LIMIT", output_limited)
                     raise ACPError("ACP_TIMEOUT", f"timeout during {phase}")
                 if cancel_event.is_set() and session_id and not cancelled:
                     send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})
@@ -309,9 +480,6 @@ class StdioACPTransport:
                     channel, raw = inbound.get(timeout=0.1)
                 except queue.Empty:
                     continue
-                output_bytes += len(raw.encode("utf-8", errors="replace"))
-                if output_bytes > cap:
-                    raise ACPError("ACP_OUTPUT_LIMIT", "agent output exceeded configured cap")
                 if channel == "stderr":
                     if raw:
                         # Kept raw here and redacted once as a joined stream
@@ -323,7 +491,11 @@ class StdioACPTransport:
                     continue
                 try:
                     message = json.loads(raw)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, RecursionError, ValueError):
+                    # RecursionError included deliberately: `json.loads` blows
+                    # the stack on a frame nested a thousand deep, and the depth
+                    # guard in `payload_bytes` lives after the parse, so without
+                    # this the job died before anything could count it.
                     malformed += 1
                     if malformed > MAX_MALFORMED_FRAMES:
                         raise ACPError("ACP_MALFORMED_JSON", "too many malformed JSON-RPC frames")
@@ -333,13 +505,29 @@ class StdioACPTransport:
                     if malformed > MAX_MALFORMED_FRAMES:
                         raise ACPError("ACP_MALFORMED_JSONRPC", "too many invalid JSON-RPC frames")
                     continue
+                # Counted after parsing, because what the budget is for is the
+                # text the agent wrote, not the JSON it arrived in. The frame
+                # that crosses the line is still kept: dropping it would throw
+                # away the sentence the agent was in the middle of, and it is
+                # bounded by the per-line cap anyway.
+                keep_text = output_limited is None
+                output_bytes += charge_payload(message, tool_output_seen)
+                if output_bytes > cap and output_limited is None:
+                    bound_output("agent output exceeded the configured cap")
 
                 method = message.get("method")
                 if method == "session/request_permission" and "id" in message:
                     permission_params = _permission_params_with_tool_state(
                         message.get("params") or {}, tool_state
                     )
-                    decision = permission_decision(permission_params, task, cwd)
+                    decision = (
+                        # The turn is already stopping. Granting a new write here
+                        # would put a file in the lane after the point where the
+                        # receipt says the agent stopped producing.
+                        "reject_once"
+                        if output_limited is not None
+                        else permission_decision(permission_params, task, cwd)
+                    )
                     # A refused call is the worker reaching for something the
                     # role was never going to be allowed. The caller cannot see
                     # that from a receipt that only says what landed, and on
@@ -368,7 +556,15 @@ class StdioACPTransport:
                     continue
                 if method == "session/update":
                     update = (message.get("params") or {}).get("update") or {}
-                    _consume_update(update, text_chunks=text_chunks, tests=tests, tool_state=tool_state)
+                    # Past the budget the text stops being kept -- that is what
+                    # the budget is -- but tool state and test results still
+                    # matter for the receipt, so the update is still consumed.
+                    _consume_update(
+                        update,
+                        text_chunks=text_chunks if keep_text else [],
+                        tests=tests,
+                        tool_state=tool_state,
+                    )
                     compact = _compact_session_update(update)
                     if compact is not None:
                         emit("session_update", compact)
@@ -446,8 +642,14 @@ class StdioACPTransport:
             )
             prompt = await_response(request_id, "session/prompt")
             stop_reason = str((prompt.get("result") or {}).get("stopReason") or "")
-            status = "completed" if stop_reason == "end_turn" else (
-                "cancelled" if stop_reason == "cancelled" or cancelled else "failed"
+            status = (
+                # A turn we asked to stop is not a turn that finished, whatever
+                # the agent says its stopReason was.
+                "cancelled"
+                if output_limited is not None
+                else "completed" if stop_reason == "end_turn"
+                else "cancelled" if stop_reason == "cancelled" or cancelled
+                else "failed"
             )
             result = {
                 "status": status,
@@ -463,12 +665,35 @@ class StdioACPTransport:
                 "agent_pid": proc.pid,
                 "started_at": started,
                 "finished_at": _utc_now(),
-                "blocked_reason": None if status == "completed" else f"ACP_STOP_{stop_reason or 'UNKNOWN'}",
+                "blocked_reason": (
+                    "ACP_OUTPUT_LIMIT"
+                    if output_limited is not None
+                    else (None if status == "completed" else f"ACP_STOP_{stop_reason or 'UNKNOWN'}")
+                ),
+                # A truncated answer that says so is usable; one that pretends to
+                # be complete is not: `ACP_STOP_cancelled` alone could not tell
+                # the two apart.
+                "output_truncated": output_limited is not None,
+                "output_limit_reason": output_limited,
+                "output_payload_bytes": output_bytes,
+                "output_cap_bytes": cap,
             }
         except ACPError as exc:
             result = {
-                "status": "cancelled" if exc.code == "ACP_CANCELLED" or cancel_event.is_set() else "failed",
+                # An output limit is a stop, not a crash: the edits on disk are
+                # real and the verifier still has to judge them, exactly as it
+                # does when the agent runs out of turns.
+                "status": (
+                    "cancelled"
+                    if exc.code in {"ACP_CANCELLED", "ACP_OUTPUT_LIMIT"} or cancel_event.is_set()
+                    else "failed"
+                ),
                 "session_id": session_id,
+                # Dropped here once, and acceptance then blamed the worker for
+                # files it had been given permission to write: an empty list
+                # reads as "the worker wrote nothing".
+                "worker_written_files": sorted(written),
+                "denied_tool_calls": denied_tool_calls,
                 "summary": _redact_text("".join(text_chunks))[:16_000],
                 "tests": tests,
                 "events": events,
@@ -479,6 +704,13 @@ class StdioACPTransport:
                 "blocked_reason": exc.code,
                 "error": _redact_text(exc.message),
                 "timed_out": timed_out,
+                # A truncated answer that says so is usable; one that pretends to
+                # be complete is not: `ACP_STOP_cancelled` alone could not tell
+                # the two apart.
+                "output_truncated": output_limited is not None,
+                "output_limit_reason": output_limited,
+                "output_payload_bytes": output_bytes,
+                "output_cap_bytes": cap,
                 "stderr_preview": _redact_text("\n".join(stderr_tail[-5:]))[:2_000],
             }
         finally:
@@ -670,6 +902,9 @@ class WebSocketACPTransport:
         tool_state: dict[str, dict[str, Any]] = {}
         session_id: str | None = None
         output_bytes = 0
+        wire_bytes = 0
+        output_limited: str | None = None
+        tool_output_seen: dict[str, int] = {}
         denied_tool_calls = 0
         malformed = 0
         cancelled = False
@@ -701,18 +936,44 @@ class WebSocketACPTransport:
         def send(message: Mapping[str, Any]) -> None:
             ws.send_text(json.dumps(dict(message), ensure_ascii=False, separators=(",", ":")))
 
+        def bound_output(reason: str) -> None:
+            """Same contract as the stdio path: cancel the turn, keep the work."""
+            nonlocal output_limited, cancelled, cancel_deadline
+            if output_limited is None:
+                output_limited = reason
+                emit("output_limit", {"reason": reason, "cap_bytes": cap})
+            if session_id is None:
+                raise ACPError("ACP_OUTPUT_LIMIT", reason)
+            if not cancelled:
+                send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})
+                cancelled = True
+                cancel_deadline = time.monotonic() + CANCEL_GRACE_SECONDS
+
         def await_response(wanted: int, phase: str) -> dict[str, Any]:
             nonlocal output_bytes, malformed, session_id, cancelled, timed_out, cancel_deadline, reconnect_used, ws, denied_tool_calls
+            nonlocal output_limited, wire_bytes
             while True:
-                if external_overflow is not None and external_overflow.is_set():
-                    raise ACPError("ACP_OUTPUT_LIMIT", "managed daemon stderr exceeded configured cap")
+                if external_overflow is not None and external_overflow.is_set() and output_limited is None:
+                    bound_output("managed daemon stderr exceeded configured cap")
                 if cancel_deadline is not None and time.monotonic() >= cancel_deadline:
+                    if output_limited is not None:
+                        # We are the ones who asked it to stop. An agent that
+                        # does not answer must not turn a bounded answer into a
+                        # different failure the reader has to decode.
+                        raise ACPError(
+                            "ACP_OUTPUT_LIMIT",
+                            f"{output_limited}; the agent did not acknowledge the cancel",
+                        )
                     raise ACPError("ACP_CANCEL_TIMEOUT", "agent did not acknowledge cancellation")
                 if time.monotonic() >= deadline:
                     timed_out = True
                     if session_id and not cancelled:
                         send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})
                         cancelled = True
+                    if output_limited is not None:
+                        # The job's own deadline landing inside the five-second
+                        # grace we opened does not change what stopped the turn.
+                        raise ACPError("ACP_OUTPUT_LIMIT", output_limited)
                     raise ACPError("ACP_TIMEOUT", f"timeout during {phase}")
                 if cancel_event.is_set() and session_id and not cancelled:
                     send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})
@@ -760,12 +1021,19 @@ class WebSocketACPTransport:
                     )
                 if raw is None:
                     continue
-                output_bytes += len(raw.encode("utf-8", errors="replace"))
-                if output_bytes > cap:
-                    raise ACPError("ACP_OUTPUT_LIMIT", "agent output exceeded configured cap")
+                # The stdio reader charges raw line bytes against this same
+                # backstop. Without it here, an agent streaming nothing but
+                # envelopes ran to the job deadline and reported ACP_TIMEOUT.
+                wire_bytes += len(raw.encode("utf-8", errors="replace"))
+                if wire_bytes > cap * WIRE_BUDGET_FACTOR and output_limited is None:
+                    bound_output("stream exceeded the wire backstop")
                 try:
                     message = json.loads(raw)
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, RecursionError, ValueError):
+                    # RecursionError included deliberately: `json.loads` blows
+                    # the stack on a frame nested a thousand deep, and the depth
+                    # guard in `payload_bytes` lives after the parse, so without
+                    # this the job died before anything could count it.
                     malformed += 1
                     if malformed > MAX_MALFORMED_FRAMES:
                         raise ACPError("ACP_MALFORMED_JSON", "too many malformed JSON-RPC frames")
@@ -775,12 +1043,28 @@ class WebSocketACPTransport:
                     if malformed > MAX_MALFORMED_FRAMES:
                         raise ACPError("ACP_MALFORMED_JSONRPC", "too many invalid JSON-RPC frames")
                     continue
+                # Counted after parsing, because what the budget is for is the
+                # text the agent wrote, not the JSON it arrived in. The frame
+                # that crosses the line is still kept: dropping it would throw
+                # away the sentence the agent was in the middle of, and it is
+                # bounded by the per-line cap anyway.
+                keep_text = output_limited is None
+                output_bytes += charge_payload(message, tool_output_seen)
+                if output_bytes > cap and output_limited is None:
+                    bound_output("agent output exceeded the configured cap")
                 method = message.get("method")
                 if method == "session/request_permission" and "id" in message:
                     permission_params = _permission_params_with_tool_state(
                         message.get("params") or {}, tool_state
                     )
-                    decision = permission_decision(permission_params, task, cwd)
+                    decision = (
+                        # The turn is already stopping. Granting a new write here
+                        # would put a file in the lane after the point where the
+                        # receipt says the agent stopped producing.
+                        "reject_once"
+                        if output_limited is not None
+                        else permission_decision(permission_params, task, cwd)
+                    )
                     # A refused call is the worker reaching for something the
                     # role was never going to be allowed. The caller cannot see
                     # that from a receipt that only says what landed, and on
@@ -798,7 +1082,15 @@ class WebSocketACPTransport:
                     continue
                 if method == "session/update":
                     update = (message.get("params") or {}).get("update") or {}
-                    _consume_update(update, text_chunks=text_chunks, tests=tests, tool_state=tool_state)
+                    # Past the budget the text stops being kept -- that is what
+                    # the budget is -- but tool state and test results still
+                    # matter for the receipt, so the update is still consumed.
+                    _consume_update(
+                        update,
+                        text_chunks=text_chunks if keep_text else [],
+                        tests=tests,
+                        tool_state=tool_state,
+                    )
                     compact = _compact_session_update(update)
                     if compact is not None:
                         emit("session_update", compact)
@@ -847,8 +1139,14 @@ class WebSocketACPTransport:
             }})
             prompt = await_response(2, "session/prompt")
             stop_reason = str((prompt.get("result") or {}).get("stopReason") or "")
-            status = "completed" if stop_reason == "end_turn" else (
-                "cancelled" if stop_reason == "cancelled" or cancelled else "failed"
+            status = (
+                # A turn we asked to stop is not a turn that finished, whatever
+                # the agent says its stopReason was.
+                "cancelled"
+                if output_limited is not None
+                else "completed" if stop_reason == "end_turn"
+                else "cancelled" if stop_reason == "cancelled" or cancelled
+                else "failed"
             )
             return {
                 "status": status, "session_id": session_id, "stop_reason": stop_reason,
@@ -857,16 +1155,40 @@ class WebSocketACPTransport:
                 "summary": _redact_text("".join(text_chunks))[:16_000], "tests": tests, "events": events,
                 "agent_version": agent_version, "worker_pid": worker_pid, "agent_pid": worker_pid,
                 "started_at": started, "finished_at": _utc_now(),
-                "blocked_reason": None if status == "completed" else f"ACP_STOP_{stop_reason or 'UNKNOWN'}",
+                "blocked_reason": (
+                    "ACP_OUTPUT_LIMIT"
+                    if output_limited is not None
+                    else (None if status == "completed" else f"ACP_STOP_{stop_reason or 'UNKNOWN'}")
+                ),
+                # A truncated answer that says so is usable; one that pretends to
+                # be complete is not: `ACP_STOP_cancelled` alone could not tell
+                # the two apart.
+                "output_truncated": output_limited is not None,
+                "output_limit_reason": output_limited,
+                "output_payload_bytes": output_bytes,
+                "output_cap_bytes": cap,
                 "worker_alive_after_shutdown": False if managed else None,
             }
         except ACPError as exc:
             return {
-                "status": "cancelled" if exc.code == "ACP_CANCELLED" or cancel_event.is_set() else "failed",
-                "session_id": session_id, "summary": _redact_text("".join(text_chunks))[:16_000],
+                "status": (
+                    "cancelled"
+                    if exc.code in {"ACP_CANCELLED", "ACP_OUTPUT_LIMIT"} or cancel_event.is_set()
+                    else "failed"
+                ),
+                "session_id": session_id, "worker_written_files": sorted(written),
+                "denied_tool_calls": denied_tool_calls,
+                "summary": _redact_text("".join(text_chunks))[:16_000],
                 "tests": tests, "events": events, "worker_pid": worker_pid, "agent_pid": worker_pid,
                 "started_at": started, "finished_at": _utc_now(), "blocked_reason": exc.code,
                 "error": _redact_text(exc.message), "timed_out": timed_out,
+                # A truncated answer that says so is usable; one that pretends to
+                # be complete is not: `ACP_STOP_cancelled` alone could not tell
+                # the two apart.
+                "output_truncated": output_limited is not None,
+                "output_limit_reason": output_limited,
+                "output_payload_bytes": output_bytes,
+                "output_cap_bytes": cap,
                 "worker_alive_after_shutdown": False if managed else None,
             }
 
@@ -907,7 +1229,10 @@ class _WebSocketConnection:
             elif length == 127:
                 length = struct.unpack("!Q", self._recv_exact(8))[0]
             if length > MAX_WS_FRAME_BYTES:
-                raise ACPError("ACP_OUTPUT_LIMIT", "WebSocket frame exceeded configured cap")
+                # Not ACP_OUTPUT_LIMIT: this is one oversized frame, a protocol
+                # fault, and reporting it as the output budget produced a
+                # receipt saying the answer was truncated when nothing was.
+                raise ACPError("ACP_FRAME_TOO_LARGE", "WebSocket frame exceeded the frame cap")
             mask = self._recv_exact(4) if masked else b""
             payload = self._recv_exact(length)
             if masked:
@@ -928,7 +1253,7 @@ class _WebSocketConnection:
             else:
                 raise ACPError("ACP_WS_PROTOCOL", f"unsupported WebSocket opcode {opcode}")
             if sum(len(chunk) for chunk in chunks) > MAX_WS_FRAME_BYTES:
-                raise ACPError("ACP_OUTPUT_LIMIT", "fragmented WebSocket message exceeded configured cap")
+                raise ACPError("ACP_FRAME_TOO_LARGE", "fragmented WebSocket message exceeded the frame cap")
             if fin:
                 try:
                     return b"".join(chunks).decode("utf-8")
@@ -1449,18 +1774,10 @@ def approved_write_paths(params: Mapping[str, Any], decision: Mapping[str, Any],
     return out
 
 
-def _win_name(part: str) -> str:
-    """The name Windows will actually open, not the one that was typed.
-
-    Win32 strips trailing dots and spaces from a component, and everything after
-    a colon names an alternate data stream rather than a different file. So
-    `auth.json.`, `auth.json ` and `.env::$DATA` all reach exactly the file this
-    denylist exists to refuse, while comparing the raw string let all three
-    through. Verified against the live gate before and after.
-    """
-    text = str(part or "")
-    head = text.split(":", 1)[0] if len(text) > 2 or ":" not in text else text
-    return head.rstrip(". ").casefold()
+#: The same normaliser the secret-name predicate uses. Aliased rather than
+#: copied: a rule about what Windows opens is worth exactly nothing if one of
+#: its two copies forgets about alternate data streams.
+_win_name = windows_open_name
 
 
 #: Names a worker may not read even inside its own worktree. The command gate
@@ -1523,16 +1840,9 @@ def _paths_confined(raw: Mapping[str, Any], cwd: Path) -> bool:
             candidate.relative_to(cwd)
         except ValueError:
             return False
-        lowered_parts = {_win_name(part) for part in candidate.parts}
-        # The suffix has to come off the *normalised* name: `key.pem.` has a
-        # pathlib suffix that is not `.pem`, and Windows opens the key anyway.
-        normalised_name = _win_name(candidate.name)
-        if (
-            lowered_parts & _SECRET_NAMES
-            or normalised_name.startswith((".env.", "id_rsa", "id_dsa", "id_ecdsa",
-                                           "id_ed25519"))
-            or normalised_name.endswith((".pem", ".p12", ".pfx", ".key"))
-        ):
+        # One definition, shared with the mount validator: see
+        # `guard.looks_like_secret_path`.
+        if looks_like_secret_path(candidate):
             return False
     return True
 
@@ -1552,6 +1862,11 @@ def _consume_update(
         return
     tool_id = str(update.get("toolCallId") or "")
     if kind == "tool_call" and tool_id:
+        # Bounded: a stream inventing a new toolCallId per frame would otherwise
+        # grow this dictionary for as long as the wire backstop allows, which is
+        # 64x the output cap.
+        if len(tool_state) >= _TOOL_STATE_MAX and tool_id not in tool_state:
+            tool_state.pop(next(iter(tool_state)), None)
         tool_state[tool_id] = dict(update)
         return
     if kind != "tool_call_update" or not tool_id:

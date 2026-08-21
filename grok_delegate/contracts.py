@@ -19,6 +19,7 @@ from .guard import (
     configured_max_turns,
     configured_model,
     configured_reasoning_effort,
+    looks_like_secret_path,
     path_in_allowlist,
 )
 from .economy import apply_task_economy_defaults
@@ -58,6 +59,8 @@ _TASK_FIELDS = frozenset(
         "acceptance_criteria",
         "expected_artifacts",
         "test_commands",
+        "mount_paths",
+        "review_lane",
         "correlation_id",
     }
 )
@@ -181,6 +184,39 @@ def validate_task_packet(
             raise GuardError("EXPECTED_ARTIFACT_ESCAPE", "expected artifact escapes project_root") from exc
         normalized_artifacts.append(candidate.as_posix())
 
+    mounts = _bounded_string_list(value.get("mount_paths", []), "mount_paths")
+    normalized_mounts: list[str] = []
+    for item in mounts:
+        candidate = Path(item)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise GuardError(
+                "MOUNT_PATH_INVALID",
+                "mount_paths entries must be relative to project_root and must not contain '..'",
+            )
+        resolved = (root / candidate).resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError as exc:
+            raise GuardError("MOUNT_PATH_ESCAPE", "mount path escapes project_root") from exc
+        if looks_like_secret_path(candidate):
+            # The whole reason a lane is built from a git ref is that
+            # gitignored credentials are not in it. Mounting one back would
+            # undo that in the one place the bridge still controls.
+            raise GuardError(
+                "MOUNT_PATH_FORBIDDEN",
+                f"mount_paths must not name a credential file: {candidate.as_posix()}",
+            )
+        normalized_mounts.append(candidate.as_posix())
+
+    review_lane = _optional_string(value.get("review_lane"), "review_lane", 96)
+    if review_lane and role in {"execute", "fix"}:
+        # A write role gets a lane of its own; asking it to stand in another
+        # one would mean two workers in a single worktree.
+        raise GuardError(
+            "REVIEW_LANE_NOT_FOR_WRITE_ROLE",
+            "review_lane is for read-only roles; a write role is given its own lane",
+        )
+
     test_commands = _bounded_string_list(value.get("test_commands", []), "test_commands")
     if role in {"execute", "fix"} and not test_commands:
         raise GuardError(
@@ -206,6 +242,8 @@ def validate_task_packet(
         ),
         "expected_artifacts": normalized_artifacts,
         "test_commands": test_commands,
+        "mount_paths": normalized_mounts,
+        "review_lane": review_lane,
         "correlation_id": correlation,
     }
 

@@ -167,6 +167,40 @@
         null
       ],
       "description": "Why tests is empty. null means the verifier ran and these are its results."
+    },
+    "mounted_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Paths copied into the lane for this job, named so a reviewer can tell them from the worker's own files"
+    },
+    "output_truncated": {
+      "type": "boolean",
+      "description": "The agent's answer hit the output budget and was cut; the work on disk is still real"
+    },
+    "output_payload_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "output_cap_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "lane_released": {
+      "type": "boolean",
+      "description": "The lane produced nothing and was removed with its branch"
+    },
+    "lane_retained_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Why the lane was kept: UNCOMMITTED_CHANGES, LANE_HAS_COMMITS, CLEANUP_DISABLED, ..."
     }
   }
 }
