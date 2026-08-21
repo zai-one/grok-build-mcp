@@ -79,6 +79,7 @@ try:
     from . import jobs  # type: ignore[no-redef]
     from .status import (  # type: ignore[no-redef]
         build_status_report,
+        prime_auth_probe_async,
         run_doctor_json,
         run_inspect_json,
         run_models,
@@ -148,6 +149,7 @@ except ImportError:  # flat import when package dir is on sys.path
     import jobs  # noqa: E402
     from status import (  # noqa: E402
         build_status_report,
+        prime_auth_probe_async,
         run_doctor_json,
         run_inspect_json,
         run_models,
@@ -1923,6 +1925,20 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
         return None if is_notification else _jsonrpc_result(req_id, result)
 
     if method == "notifications/initialized":
+        # The session probe is a 12.7 s network call and the host is about to
+        # spend at least that long thinking. Start it now, in the background, so
+        # the first status or session_begin reads a cached answer instead of
+        # buying one. Off with GROK_DELEGATE_PREWARM=0.
+        if str(os.environ.get("GROK_DELEGATE_PREWARM", "")).strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            try:
+                prime_auth_probe_async()
+            except Exception:
+                pass
         return None
 
     if method == "tools/list":

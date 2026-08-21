@@ -37,6 +37,7 @@ from .runner import (
     is_path_inside,
     prepare_worktree,
     spawn_or_cached_version,
+    spawn_priority,
 )
 
 _CONCURRENCY = max(1, min(int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "1") or "1"), 2))
@@ -854,13 +855,15 @@ def _run_owned_process(
     # GIT_TIMEOUT does not read as "git is broken / check antivirus".
     spawn_started = time.monotonic()
     try:
-        proc = subprocess.Popen(
-            [str(value) for value in argv], cwd=str(cwd), stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            encoding="utf-8", errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
-            start_new_session=os.name != "nt",
-        )
+        # The spawn is what starves; the child then runs on its own budget.
+        with spawn_priority():
+            proc = subprocess.Popen(
+                [str(value) for value in argv], cwd=str(cwd), stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace",
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0,
+                start_new_session=os.name != "nt",
+            )
     except FileNotFoundError:
         return {
             "returncode": 127, "stdout": "", "stderr": "binary not found",

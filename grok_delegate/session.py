@@ -23,7 +23,7 @@ from .economy import (
     default_reasoning_effort,
 )
 from .guard import SERVER_VERSION
-from .status import probe_auth_presence, probe_grok_version
+from .status import cached_auth_presence, probe_grok_version
 
 INTENTS = frozenset(
     {"brainstorm", "execute", "verify", "install", "update", "triage", "feedback", "auto"}
@@ -392,7 +392,7 @@ def resolve_gate(
         try:
             ver = probe_grok_version(subprocess_runner=subprocess_runner, which=which_fn)
             version = ver.get("version")
-            auth = probe_auth_presence(subprocess_runner=subprocess_runner, which=which_fn)
+            auth = cached_auth_presence(subprocess_runner=subprocess_runner, which=which_fn)
             auth_present = bool(auth.get("auth_present"))
         except Exception:
             pass

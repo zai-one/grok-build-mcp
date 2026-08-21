@@ -10,11 +10,13 @@ import json
 import os
 import re
 import shutil
+import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 try:
     from .guard import (
@@ -123,6 +125,68 @@ DEFAULT_GIT_CHECKOUT_TIMEOUT_SECONDS = 600.0
 
 # Upper bound for either knob — a typo must not park a lane for a day.
 _GIT_TIMEOUT_CAP_SECONDS = 3600.0
+
+# The starvation above is not only survivable, it is largely avoidable, and the
+# knob is the interpreter's own. Measured three times on the same stand
+# (Popen(['git','--version']), 16 bytecode threads, median of 7):
+#
+#   idle process ..................................    5.7 /  5.9 /  5.6 ms
+#   busy, default interval (0.005) ................ 1280  / 1920  / 1526  ms
+#   busy, switchinterval 0.0005 ...................   22.9 /  22.5 /  24.4 ms
+#
+# Larger intervals are worse in proportion (0.02 -> ~3-5 s, 0.1 -> ~9-14 s), so
+# the direction is not an artefact. The price is real and that is why this is
+# scoped: at 0.0005 a bytecode loop loses 50% of its throughput and JSON parsing
+# 79%. Held for the tens of milliseconds a spawn takes, that costs the reader
+# thread a rounding error; held process-wide it would cost the whole stream.
+SPAWN_SWITCH_INTERVAL_SECONDS = 0.0005
+
+_SPAWN_PRIORITY_LOCK = threading.Lock()
+_SPAWN_PRIORITY_DEPTH = 0
+_SPAWN_PRIORITY_SAVED: float | None = None
+
+
+def spawn_priority_enabled() -> bool:
+    """Off with GROK_DELEGATE_SPAWN_PRIORITY=0."""
+    return str(os.environ.get("GROK_DELEGATE_SPAWN_PRIORITY", "")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+@contextmanager
+def spawn_priority() -> "Iterator[None]":
+    """Give the spawning thread a fair chance at the GIL, briefly.
+
+    Concurrent spawns nest: the first one lowers the interval, the last one out
+    restores what was there before. Restoring per-spawn instead would let one
+    finishing spawn hand the interpreter back to the busy threads while another
+    spawn is still in flight -- which is the exact stall this exists to avoid.
+    """
+    global _SPAWN_PRIORITY_DEPTH, _SPAWN_PRIORITY_SAVED
+    if not spawn_priority_enabled():
+        yield
+        return
+    with _SPAWN_PRIORITY_LOCK:
+        if _SPAWN_PRIORITY_DEPTH == 0:
+            _SPAWN_PRIORITY_SAVED = sys.getswitchinterval()
+            try:
+                sys.setswitchinterval(SPAWN_SWITCH_INTERVAL_SECONDS)
+            except (ValueError, OverflowError):  # pragma: no cover - platform guard
+                _SPAWN_PRIORITY_SAVED = None
+        _SPAWN_PRIORITY_DEPTH += 1
+    try:
+        yield
+    finally:
+        with _SPAWN_PRIORITY_LOCK:
+            _SPAWN_PRIORITY_DEPTH -= 1
+            if _SPAWN_PRIORITY_DEPTH <= 0:
+                _SPAWN_PRIORITY_DEPTH = 0
+                if _SPAWN_PRIORITY_SAVED is not None:
+                    sys.setswitchinterval(_SPAWN_PRIORITY_SAVED)
+                    _SPAWN_PRIORITY_SAVED = None
 
 
 def _env_timeout(name: str, default: float) -> float:
@@ -423,21 +487,27 @@ def _spawn_git(
         # and communicate still reaps the child. The remaining leak is
         # inside Popen itself (child created, then Popen raises) — not
         # closable here without wrapping the constructor.
-        proc = subprocess.Popen(  # noqa: S603 — argv is filtered by the caller
-            cmd,
-            cwd=str(cwd) if cwd else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            # Decode as UTF-8, never the Windows locale codepage: git output can
-            # carry non-cp1252 bytes (branch/file names), which would raise
-            # UnicodeDecodeError in the reader thread and lose the result.
-            encoding="utf-8",
-            errors="replace",
-        )
-        spawn_seconds = time.monotonic() - spawn_started
-        wait_started = time.monotonic()
-        stdout, stderr = proc.communicate(timeout=timeout)
+        with spawn_priority():
+            proc = subprocess.Popen(  # noqa: S603 — argv is filtered by the caller
+                cmd,
+                cwd=str(cwd) if cwd else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                # Decode as UTF-8, never the Windows locale codepage: git output
+                # can carry non-cp1252 bytes (branch/file names), which would
+                # raise UnicodeDecodeError in the reader thread and lose the
+                # result.
+                encoding="utf-8",
+                errors="replace",
+            )
+            spawn_seconds = time.monotonic() - spawn_started
+            # The window covers communicate() too. Popen alone was measured at
+            # 22.9 ms against 1280 ms, yet a whole lane preparation only fell
+            # from 39.7 s to 28.8 s: the rest of the stall is the parent's own
+            # pipe reading, which needs the GIL exactly as badly.
+            wait_started = time.monotonic()
+            stdout, stderr = proc.communicate(timeout=timeout)
         return {
             "args": cmd,
             "returncode": proc.returncode,
@@ -624,18 +694,21 @@ def default_subprocess_runner(
     _reject_always_approve(args)
     cmd = [str(a) for a in args]
     try:
-        proc = subprocess.Popen(  # noqa: S603 — argv is guard-validated above
-            cmd,
-            cwd=str(cwd) if cwd else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            # Grok emits UTF-8 (goal text, summaries, box drawing). Decoding with
-            # the Windows locale codepage crashes the reader thread on the first
-            # non-cp1252 byte and drops the whole delegation result.
-            encoding="utf-8",
-            errors="replace",
-        )
+        # Only the spawn, not the wait: this child can run for seconds (`grok
+        # models` measured 12.7 s) and the switch interval is process-wide.
+        with spawn_priority():
+            proc = subprocess.Popen(  # noqa: S603 — argv is guard-validated above
+                cmd,
+                cwd=str(cwd) if cwd else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                # Grok emits UTF-8 (goal text, summaries, box drawing). Decoding
+                # with the Windows locale codepage crashes the reader thread on
+                # the first non-cp1252 byte and drops the delegation result.
+                encoding="utf-8",
+                errors="replace",
+            )
     except FileNotFoundError:
         return {
             "args": cmd,

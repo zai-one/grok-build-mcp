@@ -33,7 +33,7 @@ def _ready_gate(monkeypatch, tmp_path):
     tests pass or fail for a reason that has nothing to do with the cycle.
     """
     monkeypatch.setattr(session_mod, "probe_grok_version", lambda **_k: {"version": "1.0.4"})
-    monkeypatch.setattr(session_mod, "probe_auth_presence", lambda **_k: {"auth_present": True})
+    monkeypatch.setattr(session_mod, "cached_auth_presence", lambda **_k: {"auth_present": True})
     monkeypatch.setenv("GROK_DELEGATE_ALLOWED_ROOTS", str(tmp_path))
     return tmp_path
 

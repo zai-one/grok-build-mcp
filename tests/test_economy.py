@@ -168,6 +168,39 @@ def test_a_trimmed_receipt_says_which_fields_gave_way(monkeypatch) -> None:
     assert out["unified_diff"].endswith("…(truncated)")
 
 
+def test_the_lane_commit_survives_compaction(monkeypatch) -> None:
+    """Acceptance asks for a commit in grok/*, so the poll has to carry one.
+
+    A host that reads compact polls -- which is every host with the economy
+    switches on -- could see `changed_files` and a green verifier run and still
+    have no idea whether the bridge committed the work it is being asked to
+    accept.
+    """
+    from grok_delegate.economy import compact_job_record
+
+    monkeypatch.setenv("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    out = compact_job_record(
+        {"ok": True, "job_id": "j", "state": "done",
+         "result": {"status": "completed", "changed_files": ["a.md"],
+                    "lane_commit": {"ok": True, "committed": True, "reason": None,
+                                    "sha": "42372f0f850de8f06a2191285bf82c54b33756ee"}}}
+    )
+    assert out["lane_commit"]["committed"] is True
+    assert out["lane_commit"]["sha"].startswith("42372f0f")
+
+
+def test_a_missing_lane_commit_stays_missing(monkeypatch) -> None:
+    """Compaction must not invent evidence it did not receive."""
+    from grok_delegate.economy import compact_job_record
+
+    monkeypatch.setenv("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    out = compact_job_record(
+        {"ok": True, "job_id": "j", "state": "done",
+         "result": {"status": "completed", "changed_files": ["a.md"]}}
+    )
+    assert "lane_commit" not in out
+
+
 def test_a_small_receipt_is_left_exactly_as_it_was(monkeypatch) -> None:
     """The budget must not announce itself on a job that never approached it."""
     from grok_delegate.economy import compact_job_record

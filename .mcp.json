@@ -5,7 +5,11 @@
       "args": [
         "-c",
         "import os, sys; sys.path.insert(0, os.environ.get('CLAUDE_PROJECT_DIR') or os.getcwd()); from grok_delegate.server import main; sys.exit(main(sys.argv[1:]))"
-      ]
+      ],
+      "env": {
+        "GROK_DELEGATE_ECONOMY": "1",
+        "GROK_DELEGATE_ECONOMY_COMPACT_POLL": "1"
+      }
     }
   }
 }

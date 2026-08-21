@@ -28,6 +28,55 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.24.0 — Nothing waits twice
+
+### A busy bridge no longer starves its own subprocess spawns
+
+`GIT_TIMEOUT` on a lane that had nothing wrong with it. Measured on the same
+stand as the 0.23.0 retry: `Popen(['git','--version'])` costs 5.7 ms in an idle
+process, 1280-1920 ms with sixteen bytecode-hot threads, and 6.5 ms with the
+same sixteen threads asleep. It is GIL contention, and the interpreter has the
+knob for it. Each spawn now runs with a shorter switch interval, restored the
+moment it returns: 22.9 / 22.5 / 24.4 ms across three runs, and a whole lane
+preparation under that load fell from 39.4-53.0 s to 22.4-27.5 s against a 60 s
+budget. Held process-wide the same setting would cost the stream reader half its
+throughput, so the window is scoped to the spawn -- and for git, which finishes
+in milliseconds, to the pipe read that follows it. Off with
+`GROK_DELEGATE_SPAWN_PRIORITY=0`.
+
+Reported symptom this fixes: hourly routine ticks passing about half the time,
+with preflight measured at 28-75 s against the same budget, the outcome decided
+by scheduling noise rather than by the repository.
+
+### `grok_agent_status` and `session_begin` stop paying 13 s for the same answer
+
+The session probe is `grok models`, and that command takes 12.7 s on this
+machine -- measured three times, 12.72 / 12.76 / 12.80 -- which was essentially
+all of what either call cost. A present session is now remembered for ten
+minutes and concurrent callers share one probe instead of starting two. Absence
+is never cached: that is the state the operator is about to fix with `grok
+login`, and a remembered "no" would outlive the fix. `auth.cached` and
+`auth.probe_seconds` in the status answer say which of the two you got.
+
+The probe also starts in the background as soon as the host sends
+`notifications/initialized`, so the first call reads an answer that was bought
+while the host was still thinking. Off with `GROK_DELEGATE_PREWARM=0`.
+
+### A compact poll no longer drops the lane commit
+
+Acceptance asks for a commit in `grok/*`, and `lane_commit` was the field that
+said whether there was one -- but it was not in the compact record, so every
+host with the economy switches on saw changed files and a green verifier run
+with no way to tell whether the work had been committed.
+
+### The bridge's own project gets the economy defaults
+
+`.mcp.json` in this repository started the server without
+`GROK_DELEGATE_ECONOMY`, so working on the bridge cost 30.8 KB of wire per poll
+where every other project cost 5.4 KB. Measured on the same job.
+
+---
+
 ## 0.23.0 — A wait you can watch
 
 ### A verifier run that never happened is no longer reported as a failure

@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -228,6 +230,138 @@ def probe_auth_presence(
     }
 
 
+#: How long a *present* session stays a fact without asking the CLI again.
+AUTH_CACHE_TTL_SECONDS = 600.0
+
+_AUTH_LOCK = threading.Lock()
+#: binary -> (expires_at, result)
+_AUTH_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+#: binary -> event set when the probe running right now has stored its answer
+_AUTH_INFLIGHT: dict[str, threading.Event] = {}
+
+
+def clear_auth_probe_cache() -> None:
+    """Forget the cached session probe.
+
+    Production rarely needs this -- a login lasts longer than a server. Tests do,
+    or one case's injected runner answers for the next.
+    """
+    with _AUTH_LOCK:
+        _AUTH_CACHE.clear()
+        for event in _AUTH_INFLIGHT.values():
+            event.set()
+        _AUTH_INFLIGHT.clear()
+
+
+def cached_auth_presence(
+    *,
+    grok_bin: str = DEFAULT_GROK_BIN,
+    subprocess_runner: SubprocessRunner | None = None,
+    which: WhichFn | None = None,
+    ttl: float = AUTH_CACHE_TTL_SECONDS,
+) -> dict[str, Any]:
+    """``probe_auth_presence`` without paying for it every single call.
+
+    The probe is ``grok models``, and on this machine that costs 12.7 s of
+    network round trip -- measured three times, 12.72/12.76/12.80 -- which was
+    the whole of ``grok_agent_status`` and the whole of ``session_begin``. The
+    answer it buys changes about as often as the operator logs in.
+
+    Only a *present* session is cached. Absence is the state the operator is
+    about to fix with ``grok login``, and a cached "no" would keep saying no for
+    ten minutes after the login succeeded. Concurrent callers share one probe
+    rather than starting a second: two tools asking at once cost 12.7 s, not
+    25.4 s.
+    """
+    if subprocess_runner is not None:
+        # A caller carrying its own runner is asking about *that* runner, not
+        # about the machine. Caching those answers under the binary name would
+        # let one caller's stub speak for everybody else's probe.
+        out = dict(probe_auth_presence(grok_bin=grok_bin, subprocess_runner=subprocess_runner, which=which))
+        out["cached"] = False
+        return out
+
+    key = str(grok_bin or DEFAULT_GROK_BIN)
+    while True:
+        with _AUTH_LOCK:
+            hit = _AUTH_CACHE.get(key)
+            if hit is not None and hit[0] > time.monotonic():
+                out = dict(hit[1])
+                out["cached"] = True
+                return out
+            waiting = _AUTH_INFLIGHT.get(key)
+            if waiting is None:
+                mine = threading.Event()
+                _AUTH_INFLIGHT[key] = mine
+                break
+        # Someone else is already asking; their answer is ours too.
+        waiting.wait(MODELS_TIMEOUT_SECONDS + 5.0)
+        with _AUTH_LOCK:
+            hit = _AUTH_CACHE.get(key)
+        if hit is not None and hit[0] > time.monotonic():
+            out = dict(hit[1])
+            out["cached"] = True
+            return out
+        # The other probe failed or was cleared: fall through and ask ourselves,
+        # unless it is still registered, in which case try again.
+        with _AUTH_LOCK:
+            if _AUTH_INFLIGHT.get(key) is waiting:
+                _AUTH_INFLIGHT.pop(key, None)
+
+    started = time.perf_counter()
+    try:
+        result = dict(
+            probe_auth_presence(
+                grok_bin=key,
+                subprocess_runner=subprocess_runner,
+                which=which,
+            )
+        )
+        result["cached"] = False
+        result["probe_seconds"] = round(time.perf_counter() - started, 3)
+        if result.get("auth_present") and ttl > 0:
+            with _AUTH_LOCK:
+                _AUTH_CACHE[key] = (time.monotonic() + ttl, dict(result))
+        return result
+    finally:
+        # Released here and not after the store, so a probe that raises frees
+        # its waiters instead of parking them for the full timeout.
+        with _AUTH_LOCK:
+            event = _AUTH_INFLIGHT.pop(key, None)
+        if event is not None:
+            event.set()
+
+
+def prime_auth_probe_async(
+    *,
+    grok_bin: str = DEFAULT_GROK_BIN,
+    which: WhichFn | None = None,
+) -> threading.Thread | None:
+    """Start paying for the session probe before anyone waits on it.
+
+    A host opens the bridge and then thinks, or reads a file, or waits for the
+    operator to type. That idle time is free, and 12.7 s of it is exactly what
+    the first ``grok_agent_status`` used to charge. Returns the thread so a test
+    can join it; None when the binary is not there to ask.
+    """
+    which_fn = which or shutil.which
+    try:
+        if not (which_fn(grok_bin) or Path(grok_bin).is_file()):
+            return None
+    except Exception:
+        return None
+
+    def run() -> None:
+        try:
+            cached_auth_presence(grok_bin=grok_bin, which=which_fn)
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=run, name="grok-auth-prewarm", daemon=True)
+    thread.start()
+    return thread
+
+
 def probe_git_available(
     *,
     git_runner: Callable[[Sequence[str], Path | None, float], dict[str, Any]] | None = None,
@@ -410,7 +544,7 @@ def build_status_report(
             subprocess_runner=subprocess_runner,
             which=which,
         )
-        auth_info = probe_auth_presence(
+        auth_info = cached_auth_presence(
             grok_bin=bin_name,
             subprocess_runner=subprocess_runner,
             which=which,
@@ -458,6 +592,11 @@ def build_status_report(
             "probe": auth_info.get("probe") or "models",
             # Explicit: we do not read auth.json
             "auth_json_read": False,
+            # `grok models` is a network round trip. Saying whether this answer
+            # came from it or from the cache is the difference between a status
+            # call that looks mysteriously slow and one that explains itself.
+            "cached": bool(auth_info.get("cached")),
+            "probe_seconds": auth_info.get("probe_seconds"),
         },
         "git": git_info,
         "roots": {
