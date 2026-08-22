@@ -165,6 +165,24 @@ def test_a_short_event_list_gains_no_bookkeeping(monkeypatch) -> None:
     assert "events_total" not in out
 
 
+def test_a_compact_poll_on_the_wire_still_names_the_dropped_events(monkeypatch) -> None:
+    """compact_job_record counted 64/4; _bounded_poll then re-read the
+    remainder and reported events_total=4, which is the silent drop.
+    """
+    monkeypatch.setenv("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    jobs_mod._JOBS["j"] = {
+        "ok": True,
+        "job_id": "j",
+        "state": "done",
+        "events": [{"n": i} for i in range(64)],
+        "result": {"status": "completed", "summary": "ok"},
+    }
+    body = _tools_call("grok_agent_poll", {"job_id": "j"})["result"]["structuredContent"]
+    assert [row["n"] for row in body["events"]] == [60, 61, 62, 63]
+    assert body["events_omitted"] == 64 - ECONOMY_MAX_EVENTS
+    assert body["events_total"] == 64
+
+
 # --- 3. consult/review bind to their session, never steal execute -------------
 
 
@@ -312,6 +330,38 @@ def test_consult_with_the_execute_cid_still_does_not_steal(tmp_path, monkeypatch
                 "objective": "how should auth work",
                 "project_root": str(tmp_path),
                 "correlation_id": "corr-shared",
+                "role": "consult",
+            }
+        },
+        allowed_roots=[tmp_path],
+    )
+    nxt = handle_tool_call("grok_agent_session_next", {"session_id": sid})
+    card = nxt.get("card") or {}
+    assert card.get("args", {}).get("job_id") != "job-from-consult"
+    assert card.get("tool") != "grok_agent_poll"
+
+
+def test_consult_does_not_steal_a_verify_session_poll_slot(tmp_path, monkeypatch) -> None:
+    """verify's first card is poll. Matching cid without this skip parks
+    the consult on that slot, same steal as execute, different mode.
+    """
+    _enable_project(tmp_path)
+    begin = _begin(
+        tmp_path, intent="verify", goal="check the work",
+        correlation_id="corr-verify",
+    )
+    sid = begin["session_id"]
+    monkeypatch.setattr(
+        "grok_delegate.server.start_agent_job",
+        lambda *_a, **_k: {"ok": True, "job_id": "job-from-consult", "state": "running"},
+    )
+    handle_tool_call(
+        "grok_agent_consult",
+        {
+            "task": {
+                "objective": "how should auth work",
+                "project_root": str(tmp_path),
+                "correlation_id": "corr-verify",
                 "role": "consult",
             }
         },

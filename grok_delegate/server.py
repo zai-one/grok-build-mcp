@@ -1195,8 +1195,8 @@ def _bind_read_only_job(job_id: str, *, correlation_id: str | None) -> str | Non
     A consult going through that path steals the execute poll slot and still
     leaves the brainstorm session with job_id None, which is the failure
     session_end reported as ``"job": "none"`` after the worker had finished.
-    Bind only by matching correlation_id, never onto execute/fix, never onto
-    a session that already has a job (verify may already be pointed at one).
+    Bind only by matching correlation_id, never onto execute/fix/verify
+    (those emit a poll card), never onto a session that already has a job.
     """
     try:
         from .session import _session_correlation_id, _sessions
@@ -1209,7 +1209,10 @@ def _bind_read_only_job(job_id: str, *, correlation_id: str | None) -> str | Non
     for sess in reversed(list(_sessions.values())):
         if sess.get("ended"):
             continue
-        if sess.get("mode") in {"execute", "fix"}:
+        # execute/fix/verify all emit a poll card once they have a job_id.
+        # Parking a consult there is the steal; brainstorm is the session
+        # that must learn about the job, and it is none of these.
+        if sess.get("mode") in {"execute", "fix", "verify"}:
             continue
         if sess.get("job_id"):
             continue
@@ -2267,10 +2270,17 @@ def _bounded_poll(record: dict[str, Any], limit: int) -> dict[str, Any]:
         events = holder.get("events")
         if not isinstance(events, list):
             continue
-        total = len(events)
-        if total > limit:
+        current = len(events)
+        # compact_job_record already counted 64 in / 4 out. Re-reading
+        # len(events) here reported events_total=4, which is the silent drop
+        # this function exists to prevent.
+        prior_total = holder.get("events_total")
+        total = prior_total if isinstance(prior_total, int) and prior_total > current else current
+        if current > limit:
             holder["events"] = events[-limit:]
             holder["events_omitted"] = total - limit
+        elif total > current:
+            holder["events_omitted"] = total - current
         holder["events_total"] = total
     return out
 
