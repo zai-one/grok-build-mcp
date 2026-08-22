@@ -144,12 +144,38 @@ _PAYLOAD_MAX_DEPTH = 40
 _ENVELOPE_FREE_MAX = 128
 
 
+#: How many nodes the size estimate will visit before it stops counting. A frame
+#: with more than this in it is already past every budget it could be measured
+#: against, so the exact number stops mattering.
+_SIZE_NODE_CAP = 100_000
+
+
 def _serialised_size(value: Any) -> int:
-    """Everything under here, in bytes, without descending further."""
-    try:
-        return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
-    except Exception:
-        return len(str(value).encode("utf-8", errors="replace"))
+    """Everything under here, in bytes, counted without recursing.
+
+    `json.dumps` and `str()` both recurse, and both were reached from the depth
+    guard that exists precisely because the frame is too deep to recurse into.
+    An explicit stack has no such limit, and the node cap keeps a hostile frame
+    from turning the measurement itself into the denial of service.
+    """
+    total = 0
+    stack = [value]
+    visited = 0
+    while stack and visited < _SIZE_NODE_CAP:
+        item = stack.pop()
+        visited += 1
+        if isinstance(item, str):
+            total += len(item.encode("utf-8", errors="replace"))
+        elif isinstance(item, Mapping):
+            for key, nested in item.items():
+                total += len(str(key).encode("utf-8", errors="replace"))
+                stack.append(nested)
+        elif isinstance(item, (list, tuple, set)):
+            stack.extend(item)
+        elif item is not None:
+            # A scalar: safe to stringify, because it has nothing inside it.
+            total += len(str(item).encode("utf-8", errors="replace"))
+    return total
 
 
 def payload_bytes(message: Any, _depth: int = 0) -> int:
@@ -1812,14 +1838,24 @@ def _flatten_text(value: Any) -> "list[str]":
     wrapped in list punctuation, and the escape pattern -- which anchors on a
     separator or the start -- no longer matched it. The gate allowed exactly the
     pattern it refuses when spelled plainly.
+
+    Iterative for the same reason `_serialised_size` is: this walks a value that
+    arrived from the agent, and a deep one must not be able to end the turn by
+    exhausting the stack.
     """
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, Mapping):
-        return [text for item in value.values() for text in _flatten_text(item)]
-    if isinstance(value, (list, tuple, set)):
-        return [text for item in value for text in _flatten_text(item)]
-    return []
+    out: list[str] = []
+    stack = [value]
+    visited = 0
+    while stack and visited < _SIZE_NODE_CAP:
+        item = stack.pop()
+        visited += 1
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, Mapping):
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple, set)):
+            stack.extend(item)
+    return out
 
 
 def _pattern_values(raw: Mapping[str, Any]) -> "list[str]":

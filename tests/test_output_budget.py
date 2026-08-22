@@ -20,6 +20,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+import pytest
+
 from grok_delegate.acp import StdioACPTransport, payload_bytes
 from grok_delegate.contracts import validate_task_packet
 
@@ -245,12 +247,28 @@ def test_a_shrinking_buffer_is_not_a_refund() -> None:
 
 
 def test_a_deeply_nested_frame_is_counted_not_crashed() -> None:
-    """Recursing to Python's own limit would turn a bad frame into a dead job."""
+    """Recursing to Python's own limit would turn a bad frame into a dead job.
+
+    The depth is the point. Five thousand levels passed on CPython 3.14 and
+    raised on 3.10 and 3.13, so the first version of this test was green locally
+    and red on three of the four CI platforms -- how much stack is left is a
+    property of the runtime, and `sys.setrecursionlimit` does not govern the C
+    encoders that were doing the recursing. A hundred thousand levels is past
+    every version's real limit, so `json.dumps` and `str()` both raise on all of
+    them, and only a measurement that does not recurse can answer at all.
+    """
+    import json as _json
+
     frame: dict = {"text": "bottom"}
-    for _ in range(5000):
+    for _ in range(100_000):
         frame = {"params": frame}
-    counted = payload_bytes(frame)
-    assert counted > 0
+
+    # The two functions the old implementation reached for, and what they do here.
+    for recursive in (lambda: _json.dumps(frame), lambda: str(frame)):
+        with pytest.raises(RecursionError):
+            recursive()
+
+    assert payload_bytes(frame) > 0
 
 
 def test_the_receipt_carries_the_truncation_flags(tmp_path) -> None:

@@ -295,6 +295,7 @@ def test_a_partial_mount_is_rolled_back(tmp_path: Path) -> None:
     assert not (lane / "briefs" / "first.md").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="a junction is a Windows reparse point")
 def test_a_link_in_the_lane_is_not_written_through(tmp_path: Path) -> None:
     """A reused lane can hold a link where the mount wants to write."""
     root = _repo(tmp_path, ignore="briefs/\n")
@@ -318,6 +319,7 @@ def test_a_link_in_the_lane_is_not_written_through(tmp_path: Path) -> None:
     assert not (outside / "task.md").exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="a junction is a Windows reparse point")
 def test_a_link_on_the_way_to_the_source_is_refused(tmp_path: Path) -> None:
     """`resolve()` walks through a link, so the check saw only the target while
     the copy landed under the link's own name in the lane."""

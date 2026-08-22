@@ -28,6 +28,31 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.26.1 — What the local run could not see
+
+### A deep frame still killed the reader on 3.10 and 3.13
+
+The guard added in 0.26.0 stops descending at forty levels and then measures the
+rest with `json.dumps`, falling back to `str()`. Both recurse. So the protection
+against a hostile frame ended in the same `RecursionError` one call further
+down -- on every supported Python except the one this was written on. CPython
+3.14 tolerates a five-thousand-level frame; 3.10 and 3.13 do not, and
+`sys.setrecursionlimit` does not govern those C encoders either way.
+
+The measurement walks an explicit stack now, bounded by node count rather than
+by depth, so the shape of a frame no longer decides whether the reader survives
+it. `_flatten_text`, which walks the same untrusted values for the search gate,
+was iterative-ised for the same reason.
+
+**This was found by CI, not by the local suite, and it had been red for two
+releases.** 0.25.0 and 0.26.0 both shipped with a failing matrix. Two tests were
+also Windows-only without saying so -- they shell out to `mklink /J`, which does
+not exist on Linux -- and took the Ubuntu rows down with them. AGENTS.md now
+says what finishing means: run the suite on the oldest supported interpreter,
+and read `gh run list` instead of assuming.
+
+---
+
 ## 0.26.0 — Eight readers, one bridge
 
 Eight Grok audits read this bridge, one dimension each, with every `read:
