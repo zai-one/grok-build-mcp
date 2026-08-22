@@ -28,6 +28,7 @@ try:
         trust_host_roots_enabled,
         validate_grok_bin,
     )
+    from .host_roots import host_roots, mcp_roots_enabled
     from .runner import (
         SubprocessRunner,
         WhichFn,
@@ -49,6 +50,7 @@ except ImportError:  # flat import
         trust_host_roots_enabled,
         validate_grok_bin,
     )
+    from host_roots import host_roots, mcp_roots_enabled  # type: ignore
     from runner import (  # type: ignore
         SubprocessRunner,
         WhichFn,
@@ -621,8 +623,18 @@ def build_status_report(
             "configured": len(roots) > 0,
             # Without this an operator sees a root they never configured and has
             # no way to tell where it came from.
+            #
+            # `host_root_trusted` reads like "this root can be trusted" and is
+            # nothing of the sort: it is the GROK_DELEGATE_TRUST_HOST_ROOTS flag,
+            # which is off by default and governs an env-provided path only. The
+            # channel that actually grants directories here is MCP `roots/list`,
+            # on by default, and it was not represented in this block at all --
+            # so the two fields together said "no host root" while the host had
+            # declared one and the bridge had accepted it.
             "host_root_trusted": trust_host_roots_enabled(env_source),
             "host_root": (host_provided_roots(env_source) or [None])[0],
+            "mcp_roots_enabled": mcp_roots_enabled(env_source),
+            "mcp_roots": [str(path) for path in host_roots()[:8]],
         },
         # Unmerged work is invisible until somebody goes looking for it, and
         # a lane is exactly that: a branch a human still has to judge.

@@ -416,3 +416,90 @@ def test_a_fitted_poll_spends_the_budget_it_was_given() -> None:
     )
     assert result.get("unified_diff"), "trimmed, not dropped"
     assert "unified_diff" in (fitted.get("economy_trimmed") or [])
+
+
+def test_a_trimmed_event_list_keeps_the_newest() -> None:
+    """Which end survives is the whole value of the field.
+
+    Measured before this test: a 64-event record cut to fit a 900-byte budget
+    came back holding sequences 0..7 with 63 gone. Every other place the bridge
+    shortens events takes the tail, because a poller is asking what just
+    happened -- so under budget pressure the host was handed the handshake and
+    lost the failure it was polling for.
+    """
+    from grok_delegate.economy import _fit_record_budget
+
+    record = {
+        "ok": True,
+        "job_id": "j",
+        "state": "done",
+        "events": [{"sequence": i, "kind": "session_update"} for i in range(64)],
+        "result": {"status": "completed", "summary": "s" * 200},
+    }
+    _fit_record_budget(record, 900)
+    kept = [event["sequence"] for event in record["events"]]
+
+    assert kept, "the trim emptied the list instead of shortening it"
+    assert kept[-1] == 63, f"the newest event was dropped; kept {kept[:3]}...{kept[-3:]}"
+    assert kept == sorted(kept), "the order was disturbed"
+
+
+def test_an_unordered_list_still_gives_up_its_tail() -> None:
+    """`changed_files` has no order to preserve; keeping the head is fine."""
+    from grok_delegate.economy import _fit_record_budget
+
+    record = {
+        "ok": True,
+        "job_id": "j",
+        "state": "done",
+        "changed_files": [f"src/module_{i:03d}.py" for i in range(200)],
+    }
+    _fit_record_budget(record, 900)
+    kept = record["changed_files"]
+
+    assert kept, "the trim emptied the list"
+    assert kept[0] == "src/module_000.py", "an unordered list changed direction for no reason"
+
+
+def test_the_compatibility_poll_pays_the_same_budget(tmp_path) -> None:
+    """One tool name must not cost seven times another for the same answer.
+
+    Measured on the same job at the same moment: `grok_agent_poll` 8 022 B,
+    `grok_delegate_poll` 60 114 B, because the compatibility path returned the
+    registry record whole -- past compaction, past `fit_poll_budget`, past every
+    promise the bridge makes about what one poll costs a host.
+    """
+    from grok_delegate import jobs
+    from grok_delegate.economy import ECONOMY_MAX_RECORD, wire_size
+    from grok_delegate.server import handle_tool_call
+
+    jobs.reset_jobs_for_tests()
+    job_id = jobs.new_job_id()
+    jobs.start_job(
+        lambda: {
+            "ok": True,
+            "status": "completed",
+            "summary": "S" * 40_000,
+            "unified_diff": "+x\n" * 5_000,
+        },
+        lane="grok/x",
+        tool="grok_agent_execute",
+        job_id=job_id,
+        thread_starter=lambda fn: fn(),
+    )
+    try:
+        typed = handle_tool_call("grok_agent_poll", {"job_id": job_id}, allowed_roots=[tmp_path])
+        compat = handle_tool_call("grok_delegate_poll", {"job_id": job_id}, allowed_roots=[tmp_path])
+    finally:
+        jobs.reset_jobs_for_tests()
+
+    typed_size = wire_size(typed.get("structuredContent", typed))
+    compat_size = wire_size(compat.get("structuredContent", compat))
+
+    assert compat_size <= ECONOMY_MAX_RECORD, (
+        f"the compatibility poll returned {compat_size} B against a "
+        f"{ECONOMY_MAX_RECORD} B budget"
+    )
+    assert compat_size <= typed_size * 1.5, (
+        f"the same job costs {compat_size} B here and {typed_size} B on the typed tool"
+    )

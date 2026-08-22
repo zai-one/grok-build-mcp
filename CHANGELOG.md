@@ -28,6 +28,45 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.28.0 — The poll that keeps the newest half
+
+Three of the nine known-but-open findings from the 2026-08-22 sweep, triaged by
+measuring rather than by re-reading, and closed because they bite.
+
+### A budget cut threw away the events a poller was asking about
+
+When a record would not fit, list fields were shortened by keeping the front.
+For `events` that is backwards: everywhere else the bridge takes the tail,
+because what just happened is the reason anyone polls. Measured before this
+fix -- 64 events cut to fit a 900-byte budget came back holding sequences 0..7
+with 63 gone, so under pressure the host was handed the handshake and lost the
+failure. `events` now gives up its head; unordered path lists are unchanged.
+
+### `grok_delegate_poll` cost seven times `grok_agent_poll` for the same answer
+
+The compatibility poll returned the registry record whole, past compaction, past
+`fit_poll_budget`, past every promise the bridge makes about what one poll costs.
+Measured on one job at one moment: 8 022 B on the typed tool, 60 114 B here.
+**Breaking:** it is bounded now and carries the same `events_omitted` /
+`economy_trimmed` bookkeeping, so a client reading it gets a shortened record
+where it used to get everything.
+
+### `status.roots` described the channel that is off and omitted the one that is on
+
+`host_root_trusted` reads like "this root can be trusted" and is nothing of the
+sort: it is the `GROK_DELEGATE_TRUST_HOST_ROOTS` flag, off by default, about an
+env-provided path. Directories are actually granted through MCP `roots/list`,
+which is on by default and appeared nowhere in that block -- so the two fields
+together said "no host root" while the host had declared one and the bridge had
+accepted it. `mcp_roots_enabled` and `mcp_roots` are reported alongside them.
+
+The other six findings from that sweep are still open and now triaged in
+`Service/Handoffs/2026-08-22-sweep-fixes-evidence.md`: two need two failures at
+once to show, two cost bytes the budget already caps, and two are arguably not
+defects at all.
+
+---
+
 ## 0.27.0 — What the host is told is now true
 
 ### One tools/call answer cost twice what the budget promised

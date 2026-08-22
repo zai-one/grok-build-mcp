@@ -1495,7 +1495,13 @@ def handle_tool_call(
             record = jobs.get_job(job_id)
             if record is None:
                 return structured_error("JOB_UNKNOWN", f"unknown job_id: {job_id}")
-            return {"ok": True, **record}
+            # The budget is a promise about one poll, not about one tool name.
+            # This path returned the registry record whole: measured on the same
+            # job at the same moment, `grok_agent_poll` answered 8 022 B and
+            # this one 60 114 B. A host that picks the compatibility tool out of
+            # the catalogue should not pay seven times for the same answer.
+            compat = fit_poll_budget(_bounded_poll(compact_job_record(record), DEFAULT_POLL_EVENTS))
+            return {"ok": _poll_ok(compat), **compat}
         limit = args.get("limit")
         try:
             limit_v = int(limit) if limit is not None else 20

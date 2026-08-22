@@ -247,6 +247,11 @@ _TRIM_ORDER: tuple[tuple[str, int], ...] = (
     ("artifacts", 4), ("tests", 1),
 )
 
+#: Fields whose last entries are the interesting ones, so a budget cut takes
+#: from the front. Only `events` qualifies today: `changed_files`, `artifacts`
+#: and the rest are unordered sets of paths.
+_TAIL_TRIMMED = frozenset({"events"})
+
 #: How much of one verifier run's output survives when the budget is tight. The
 #: exit status and the command are what acceptance reads; the preview is for a
 #: human, and a human can ask for the lane.
@@ -433,7 +438,18 @@ def _fit_record_budget(
                 keep = max(floor, len(value) - need - 48)
                 owner[key] = value[:keep].removesuffix("\n…(truncated)") + "\n…(truncated)"
             elif isinstance(value, list) and len(value) > floor:
-                owner[key] = value[: max(floor, len(value) // 2)]
+                keep_n = max(floor, len(value) // 2)
+                # Which end survives is not cosmetic for `events`: it is the one
+                # field here whose order carries meaning, and everywhere else
+                # the bridge shortens it from the tail (`events[-N:]`) because a
+                # poller is asking what just happened. Measured before this
+                # line: a 64-event record cut to fit came back holding
+                # sequences 0..7 with 63 gone -- the handshake kept, the
+                # failure dropped. File lists have no such order, so they keep
+                # the head as they always did.
+                owner[key] = (
+                    value[-keep_n:] if key in _TAIL_TRIMMED else value[:keep_n]
+                )
             else:
                 break
             note(key, owner)

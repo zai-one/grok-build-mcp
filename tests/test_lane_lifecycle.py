@@ -423,3 +423,34 @@ def test_mount_paths_without_a_lane_is_refused_not_ignored(
     )
     assert receipt["blocked_reason"] == "MOUNT_WITHOUT_LANE"
     assert worker.cwd is None
+
+
+def test_status_says_where_a_root_came_from(tmp_path) -> None:
+    """Two fields described the channel that is off; the one that is on was absent.
+
+    `host_root_trusted` reads like "this root can be trusted" and is only the
+    GROK_DELEGATE_TRUST_HOST_ROOTS flag, off by default and about an env-provided
+    path. Directories are actually granted through MCP `roots/list`, which is on
+    by default -- so an operator reading this block saw `host_root: null` while
+    the host had declared a directory and the bridge had accepted it.
+    """
+    from grok_delegate import host_roots as host_roots_module
+    from grok_delegate.status import build_status_report
+
+    host_roots_module.reset_for_tests()
+    report = build_status_report(allowed_roots=[tmp_path])
+    roots = report["roots"]
+
+    assert "mcp_roots_enabled" in roots, "the channel that grants roots is not reported"
+    assert roots["mcp_roots_enabled"] is True, "MCP roots are on by default"
+    assert roots["mcp_roots"] == [], "nothing was declared in this test"
+
+    host_roots_module.apply_roots_response(
+        {"result": {"roots": [{"uri": tmp_path.as_uri(), "name": "declared"}]}}
+    )
+    try:
+        after = build_status_report(allowed_roots=[tmp_path])["roots"]
+        assert after["mcp_roots"], "a declared root is invisible in status"
+        assert str(tmp_path) in after["mcp_roots"][0]
+    finally:
+        host_roots_module.reset_for_tests()
