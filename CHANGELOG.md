@@ -28,6 +28,90 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.29.0 — What 0.27.0 promised, on the path it is actually used
+
+A Grok audit read this bridge, a second pass checked every one of its claims
+against the tree, and a third tried to refute the conclusions that survived.
+Eight findings in; seven were true as facts; four stood up to the skeptic. Three
+of the four are 0.27.0 promises that were verified on one path and shipped
+broken on another.
+
+### A blocked job still polled back as `ok: true` — on the cycle the skill prescribes
+
+0.27.0 made the poll envelope reflect the job. It reflected it only when the
+record still carried `result`, and `compact_job_record` lifts `status` to the
+top level and drops `result` entirely — so on a compacted poll the answer was
+`ok: true` for *every* status there is: blocked, failed, cancelled, no_changes.
+The navigator turns compaction on for its own session, which makes that the main
+path, and `isError` on the MCP envelope followed the same flag.
+
+The verdict is now read wherever compaction left it, and it mirrors the receipt
+rather than inventing a second policy: `ok` is true when `status` is
+`completed`, exactly as `finalize_receipt` decides it. A job with no verdict yet
+is still `ok: true` — a running job has not failed.
+
+Nothing pinned `_poll_ok`, which is why the hole was invisible; it has tests now.
+
+### Persistence held on stdio and nowhere else
+
+Both calls to `configure_durable_jobs` lived in `serve_stdio`, so a bridge
+served over HTTP — the shape documented for a VPS — kept its jobs in memory and
+answered `JOB_UNKNOWN` after a restart, against a changelog entry that said
+finished jobs survive one.
+
+### Two hosts on one machine deleted each other's job records
+
+The default jobs directory is per-user, chosen because one process serves every
+project a host opens. Two processes serve one user just as easily — a Cursor and
+a Claude, or stdio beside HTTP — and `evict_on_disk` walks the whole directory,
+so either could trim the other's finished records to make room for its own. The
+neighbour then answered `JOB_UNKNOWN` for completed work as soon as it
+restarted: the failure persistence was turned on to prevent, one level out.
+
+Eviction now leaves alone any record whose owning process is still alive, and
+sorts by the same key the in-memory cap uses, so the two sets of 64 track each
+other instead of drifting apart when jobs finish out of start order.
+
+The visible consequence: the directory holds up to 64 records per live server
+rather than 64 in total. Records left by a server that is gone are evictable
+again the moment its pid is, so the growth is bounded by how many bridges are
+actually running, and `GROK_DELEGATE_JOBS_DIR` still gives each one its own
+directory if you would rather they never met.
+
+### A lane directory deleted by hand could never be reopened
+
+Removing `<project>/.grok/lanes/<slug>` leaves git's registration behind, and
+`worktree add` then fails with "missing but already registered" — which the
+existing retry does not recognise, since it only looks for "already exists" and
+"already checked out". The lane answered `WORKTREE_CREATE_FAILED` on every later
+job while its branch sat there intact. One `worktree prune` before the add
+clears registrations whose directory is already gone.
+
+### `тест` and `протестируй` route like `test`
+
+English `tests?` was in the verify vocabulary and Russian had no form of it, so
+`тест репозитория` fell to `operate` while `test the repository` chose `verify`.
+
+Only that gap. The neighbouring ones a first pass wanted to close were refuted:
+English has no `look`/`glance` here either, so adding `посмотри`/`глянь` would
+have created an asymmetry rather than removed one, and `_SETUP_WORDS` matches
+the Grok CLI installer rather than a package manager. A test now forbids the
+Russian and English forms from disagreeing.
+
+### What was refuted, and stands unchanged
+
+`session_end` reporting a cancelled job as `ok` is not a defect: AGENTS.md calls
+turn exhaustion a normal outcome when the verifier ran and the commit landed,
+and a compact record cannot tell that apart from an operator's cancel because
+`stop_reason` is not kept. Making `cancelled` mean not-ok would break the
+documented success. Reading the durable store on a registry miss would blow the
+documented cap of 64 and resurrect what eviction removed. `lane_is_busy` keying
+on the lane name alone gives a false refusal, not a wrong answer, and keying it
+on the project means putting `project_root` on a persisted record — a schema
+change with its own weight. All three are left as they are, on purpose.
+
+---
+
 ## 0.28.0 — The poll that keeps the newest half
 
 Three of the nine known-but-open findings from the 2026-08-22 sweep, triaged by

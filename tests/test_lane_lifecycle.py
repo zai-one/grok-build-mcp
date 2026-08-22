@@ -454,3 +454,48 @@ def test_status_says_where_a_root_came_from(tmp_path) -> None:
         assert str(tmp_path) in after["mcp_roots"][0]
     finally:
         host_roots_module.reset_for_tests()
+
+
+def test_a_lane_whose_directory_was_deleted_can_be_reopened(tmp_path) -> None:
+    """git keeps the registration; without a prune the lane is stuck forever.
+
+    An operator who removes `<project>/.grok/lanes/<slug>` by hand leaves the
+    worktree registered. `worktree add` then fails with "missing but already
+    registered", which the existing retry does not recognise -- it only looks
+    for "already exists" / "already checked out" -- so the lane answered
+    WORKTREE_CREATE_FAILED on every later job while its branch sat there intact.
+    """
+    import shutil
+    import subprocess
+
+    from grok_delegate.runner import prepare_worktree
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=t@e", "-c", "user.name=t",
+         "commit", "-q", "-m", "seed"],
+        check=True,
+    )
+
+    lanes = tmp_path / "lanes"
+    first = prepare_worktree(
+        repo_root=repo, lane="stuck", base_ref="HEAD", lanes_parent=lanes
+    )
+    assert first.get("ok"), first
+    worktree = Path(first["worktree_path"])
+    assert worktree.is_dir()
+
+    # what an operator does when a lane looks like clutter
+    shutil.rmtree(worktree)
+
+    again = prepare_worktree(
+        repo_root=repo, lane="stuck", base_ref="HEAD", lanes_parent=lanes
+    )
+    assert again.get("ok"), (
+        f"the lane could not be reopened after its directory was removed: {again}"
+    )
+    assert Path(again["worktree_path"]).is_dir()

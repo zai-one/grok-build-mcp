@@ -1198,6 +1198,15 @@ def prepare_worktree(
 
     parent.mkdir(parents=True, exist_ok=True)
 
+    # An operator who deletes `<project>/.grok/lanes/<slug>` by hand leaves
+    # git's registration behind, and `worktree add` then fails with "missing
+    # but already registered" -- which the retry below does not recognise,
+    # because it only looks for "already exists" / "already checked out". The
+    # lane stayed on WORKTREE_CREATE_FAILED with its branch intact and no way
+    # forward. Pruning first costs one cheap git call and only drops
+    # registrations whose directory is already gone.
+    git(["worktree", "prune"], root, checkout_budget)
+
     # Prefer: worktree add -b <branch> <path> <base>
     # If branch already exists, try worktree add <path> <branch>.
     report_progress(phase=PHASE_WORKTREE, phase_at=time.time(), reusing=False)

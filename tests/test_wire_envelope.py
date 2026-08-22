@@ -503,3 +503,51 @@ def test_the_compatibility_poll_pays_the_same_budget(tmp_path) -> None:
     assert compat_size <= typed_size * 1.5, (
         f"the same job costs {compat_size} B here and {typed_size} B on the typed tool"
     )
+
+
+def test_the_poll_verdict_survives_compaction() -> None:
+    """The 0.27.0 promise, on the cycle the skill actually prescribes.
+
+    `_poll_ok` read the verdict out of `result`, and `compact_job_record` lifts
+    `status` to the top level and drops `result` entirely -- so on a compacted
+    poll it returned True for every status there is. The navigator turns
+    compaction on for its own session, which makes that the main path, and the
+    fix was verified only on the typed one. Nothing pinned this function at all,
+    which is why the hole was invisible.
+    """
+    import os
+
+    from grok_delegate.economy import compact_job_record
+    from grok_delegate.server import _poll_ok
+
+    previous = os.environ.get("GROK_DELEGATE_ECONOMY_COMPACT_POLL")
+    os.environ["GROK_DELEGATE_ECONOMY_COMPACT_POLL"] = "1"
+    try:
+        for status in ("blocked", "failed", "cancelled", "no_changes", "completed"):
+            record = {
+                "job_id": "j",
+                "state": "done",
+                "result": {"ok": status == "completed", "status": status},
+            }
+            compacted = compact_job_record(dict(record))
+            assert _poll_ok(compacted) == _poll_ok(record), (
+                f"compact and typed disagree about {status}: "
+                f"{_poll_ok(compacted)} vs {_poll_ok(record)}"
+            )
+            assert _poll_ok(record) is (status == "completed"), (
+                f"{status} should follow the receipt's own ok"
+            )
+    finally:
+        if previous is None:
+            os.environ.pop("GROK_DELEGATE_ECONOMY_COMPACT_POLL", None)
+        else:
+            os.environ["GROK_DELEGATE_ECONOMY_COMPACT_POLL"] = previous
+
+
+def test_a_running_job_is_not_reported_as_failed() -> None:
+    """It has no verdict yet, and absence of a verdict is not a bad one."""
+    from grok_delegate.server import _poll_ok
+
+    assert _poll_ok({"job_id": "j", "state": "running", "result": None}) is True
+    assert _poll_ok({"job_id": "j", "state": "running"}) is True
+    assert _poll_ok({"job_id": "j", "state": "error"}) is False

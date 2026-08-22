@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .contracts import register_secret_needle
-from .server import handle_jsonrpc
+from .server import configure_durable_jobs, handle_jsonrpc
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 MAX_BODY = 2_000_000
@@ -294,6 +294,10 @@ def create_http_server(
 
 
 def serve_http(*, host: str, port: int) -> None:
+    # Both calls to this lived in `serve_stdio`, so the promise that a finished
+    # job survives a restart held on stdio and nowhere else -- while this
+    # transport accepts the same job tools and is documented for VPS use.
+    configure_durable_jobs()
     server = create_http_server(host=host, port=port)
     sys.stderr.write(
         "grok-delegate HTTP is private Bearer JSON-RPC, not MCP Streamable HTTP. "

@@ -492,7 +492,11 @@ _EXECUTE_WORDS = re.compile(
 _VERIFY_WORDS = re.compile(
     r"(?i)\b("
     r"review|verify|check|audit|tests?|"
-    r"провер\w*|ревью\w*|отревьюй\w*|аудит\w*|проаудируй\w*|сверь\w*"
+    # English `tests?` is in this list and Russian had no form of it at all,
+    # which is an asymmetry rather than a missing synonym: `посмотри`/`глянь`
+    # have no English counterpart here either, so adding them would create one.
+    r"провер\w*|ревью\w*|отревьюй\w*|аудит\w*|проаудируй\w*|сверь\w*|"
+    r"тест\w*|протестир\w*"
     r")\b"
 )
 _BRAINSTORM_WORDS = re.compile(

@@ -2216,12 +2216,26 @@ def _poll_ok(record: Mapping[str, Any]) -> bool:
     reader would otherwise have noticed the status in. A job with no result yet
     is fine: it has not failed, it has not finished.
     """
+    # Read the verdict wherever it is. `compact_job_record` lifts `status` to
+    # the top level and drops `result` entirely, so looking only at `result`
+    # returned True for *every* status on a compacted poll -- blocked, failed,
+    # cancelled, no_changes alike -- and the navigator turns compaction on for
+    # its own session, which is the cheap cycle the skill tells hosts to run.
+    # The fix shipped in 0.27.0 was verified on the typed path and only there,
+    # and nothing pinned this function, so the hole was invisible.
     result = record.get("result")
-    if not isinstance(result, Mapping):
-        return True
-    if result.get("ok") is False:
+    holder = result if isinstance(result, Mapping) else record
+    if holder.get("ok") is False:
         return False
-    return str(result.get("status") or "") not in {"blocked", "failed"}
+    status = str(holder.get("status") or "").strip()
+    if status:
+        # Mirror the receipt instead of inventing a second policy:
+        # `finalize_receipt` sets `ok = status == "completed"`. Judging only
+        # `blocked`/`failed` here made the compact and typed paths disagree
+        # about the same job.
+        return status == "completed"
+    # No verdict yet is not a failure: a running job has neither.
+    return str(record.get("state") or "") != "error"
 
 
 #: A poller wants to know what is happening now, not to re-read the handshake.

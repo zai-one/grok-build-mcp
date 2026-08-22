@@ -145,3 +145,98 @@ class SurvivesRestartTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EveryTransportKeepsItsRecordsTests(unittest.TestCase):
+    """Persistence was wired into `serve_stdio` and nowhere else."""
+
+    def test_http_configures_durable_jobs(self) -> None:
+        """The same promise, the other documented transport.
+
+        Both calls to `configure_durable_jobs` lived in `serve_stdio`, so a
+        bridge served over HTTP -- the shape AGENTS.md documents for a VPS --
+        kept its jobs in memory and answered JOB_UNKNOWN after a restart, while
+        the changelog said finished jobs survive one.
+        """
+        from grok_delegate import http_server
+
+        source = Path(http_server.__file__).read_text(encoding="utf-8")
+        body = source[source.index("def serve_http("):]
+        body = body[: body.find("\ndef ")]
+        self.assertIn(
+            "configure_durable_jobs()",
+            body,
+            "serve_http does not enable durable job records",
+        )
+
+
+class SharedDirectoryTests(unittest.TestCase):
+    """One per-user directory, several servers on the machine."""
+
+    def test_eviction_leaves_a_live_neighbours_record_alone(self) -> None:
+        """Otherwise the fix for a lost job recreates it between two hosts.
+
+        The default directory is per-user because one process serves every
+        project a host opens -- but a Cursor and a Claude on one machine share
+        it too, and `evict_on_disk` walks the whole directory. Either could trim
+        the other's finished records to make room for its own, and the
+        neighbour would answer JOB_UNKNOWN for completed work as soon as it
+        restarted.
+        """
+        mine = os.getpid()
+        live_neighbour = 4242
+        dead = 2**31 - 1
+
+        def alive(pid: int) -> bool:
+            return pid in {mine, live_neighbour}
+
+        self.assertTrue(
+            jobs_store._evictable({"server_pid": mine}, owner_pid=mine, alive=alive)
+        )
+        self.assertFalse(
+            jobs_store._evictable(
+                {"server_pid": live_neighbour}, owner_pid=mine, alive=alive
+            ),
+            "a record owned by a running neighbour was treated as ours to delete",
+        )
+        self.assertTrue(
+            jobs_store._evictable({"server_pid": dead}, owner_pid=mine, alive=alive),
+            "a record from a dead server is debris",
+        )
+        self.assertTrue(
+            jobs_store._evictable({}, owner_pid=mine, alive=alive),
+            "a record with no owner belongs to nobody",
+        )
+
+    def test_a_live_neighbours_files_survive_a_full_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for index in range(8):
+                jobs_store.save_job(
+                    {
+                        "job_id": f"job-mine{index:02d}",
+                        "state": "done",
+                        "server_pid": os.getpid(),
+                        "started_at": 100.0 + index,
+                        "finished_at": 200.0 + index,
+                    },
+                    tmp,
+                )
+            jobs_store.save_job(
+                {
+                    "job_id": "job-neighbour",
+                    "state": "done",
+                    "server_pid": 4242,
+                    "started_at": 1.0,
+                    "finished_at": 2.0,
+                },
+                tmp,
+            )
+
+            jobs_store.evict_on_disk(tmp, max_jobs=3, alive=lambda pid: pid in {os.getpid(), 4242})
+
+            survivors = {p.stem for p in Path(tmp).glob("*.json")}
+            self.assertIn(
+                "job-neighbour",
+                survivors,
+                "the oldest record was a live neighbour's and was deleted anyway",
+            )

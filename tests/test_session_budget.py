@@ -249,3 +249,30 @@ def test_installers_do_not_park_lanes_in_a_sibling_directory() -> None:
     assert "${LANES_EXPORT}" in env_body.group(1)
     assert "GROK_DELEGATE_LANES_PARENT" not in env_body.group(1)
 
+
+
+def test_russian_test_verbs_route_like_the_english_ones() -> None:
+    """The one asymmetry the 0.27.0 vocabulary left, and only that one.
+
+    English `tests?` was in `_VERIFY_WORDS` and Russian had no form of it at
+    all, so `тест репозитория` fell through to `operate` while `test the
+    repository` chose `verify`. The neighbouring gaps a first pass wanted to
+    close -- `посмотри`, `глянь`, `установи` -- are not gaps: English has no
+    `look`/`glance` here either, and `_SETUP_WORDS` is the Grok CLI installer
+    rather than a package manager. Adding them would have created the asymmetry
+    this test exists to forbid.
+    """
+    from grok_delegate.session import _auto_mode
+
+    gate = {"binary_ok": True, "auth_ok": True, "roots_ok": True, "ready": True, "roots": ["x"]}
+    for russian, english in (
+        ("тест репозитория", "test the repository"),
+        ("протестируй мост", "test the bridge"),
+        ("посмотри код", "look at the code"),
+        ("глянь diff", "glance at the diff"),
+    ):
+        assert _auto_mode(gate, "auto", russian) == _auto_mode(gate, "auto", english), (
+            f"{russian!r} -> {_auto_mode(gate, 'auto', russian)} but "
+            f"{english!r} -> {_auto_mode(gate, 'auto', english)}"
+        )
+    assert _auto_mode(gate, "auto", "тест репозитория") == "verify"

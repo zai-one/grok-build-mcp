@@ -350,9 +350,33 @@ def load_jobs(
     return loaded
 
 
+def _evictable(rec: "Mapping[str, Any] | None", *, owner_pid: int, alive: AliveCheck) -> bool:
+    """Whether this file is ours to delete.
+
+    The default directory is per-user, chosen because one process serves every
+    project a host opens -- but two hosts on one machine, a Cursor and a Claude,
+    share it too, and eviction walks the whole directory. Without this check
+    either process trims the other's finished records to make room, and the
+    neighbour answers JOB_UNKNOWN for completed work the moment it restarts:
+    the exact failure persistence was turned on to prevent, one level out.
+    """
+    if not isinstance(rec, Mapping):
+        return True  # unreadable debris belongs to nobody
+    raw = rec.get("server_pid")
+    try:
+        pid = int(raw)
+    except (TypeError, ValueError):
+        return True
+    if pid == owner_pid:
+        return True
+    return not alive(pid)
+
+
 def evict_on_disk(
     jobs_dir: str | Path,
     max_jobs: int = DEFAULT_MAX_JOBS,
+    *,
+    alive: AliveCheck = is_process_alive,
 ) -> int:
     """Delete oldest finished job files until at most *max_jobs* remain.
 
@@ -389,9 +413,16 @@ def evict_on_disk(
                 mtime = 0.0
             records.append((mtime, False, entry))
             continue
+        if not _evictable(rec, owner_pid=os.getpid(), alive=alive):
+            continue
+        # Same key the in-memory cap uses, so the two sets of 64 track each
+        # other. Disk sorted by `started_at` while memory sorted by
+        # `finished_at`, which diverges as soon as jobs finish out of start
+        # order -- reachable with GROK_DELEGATE_CONCURRENCY above one.
+        finished = _as_float(rec.get("finished_at"), default=0.0)
         started = _as_float(rec.get("started_at"), default=0.0)
         is_active = str(rec.get("state") or "") in {STATE_RUNNING, STATE_UNKNOWN}
-        records.append((started, is_active, entry))
+        records.append((finished or started, is_active, entry))
 
     if len(records) <= cap:
         return 0
