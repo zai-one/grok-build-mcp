@@ -48,20 +48,36 @@ No arguments.
 
 ## Recommended call sequence
 
+There is one cycle, and it is the navigator. This table used to describe the
+typed path as though it were the recommended one, which is how a host ended up
+running a different loop from the one `AGENTS.md`, the README and the skill all
+prescribe.
+
 | Step | Tool | Host cost tip |
 |---|---|---|
 | 1 | `grok_agent_status` | Once per session — not every turn |
-| 2 | `grok_agent_economy` | Once — load playbook |
-| 3 | `grok_agent_consult` or `grok_agent_review` | Q&A / critique without worktrees |
-| 4 | `grok_agent_execute` | One focused objective + artifacts + 1–3 cheap tests |
-| 5 | `grok_agent_poll` | `job_id` only; read summary / files / tests / blocked_reason |
-| 6 | Human | Merge `grok/*` after review |
+| 2 | `grok_agent_session_begin` | Give it `project_root`, `expected_artifacts`, `test_commands` — a card built without them guesses |
+| 3 | `grok_agent_session_next` | Execute only the card it returns, and loop until `kind: end` |
+| 4 | `grok_agent_session_end` | Closes the session; the lane stays for review |
+| 5 | Human | Merge `grok/*` after review |
+
+The typed tools (`consult` → `execute` → `poll` → `review`) are the fallback:
+for a host without the navigator, or when a card is rejected by a schema. They
+take the same packet.
+
+| Step | Tool | Host cost tip |
+|---|---|---|
+| 1 | `grok_agent_consult` or `grok_agent_review` | Q&A / critique without worktrees |
+| 2 | `grok_agent_execute` | One focused objective + artifacts + 1–3 cheap tests |
+| 3 | `grok_agent_poll` | `job_id` only; read summary / files / tests / blocked_reason |
 
 ## Anti-waste rules (for host agents)
 
 1. **Don't** paste large source trees into `objective` — point at paths.
 2. **Don't** use `execute` for questions — use `consult`.
-3. **Don't** set `max_turns` near the hard cap (60) for routine work.
+3. **Don't** lower the worker's `max_turns` or `reasoning_effort` to save money.
+   Economy here is about what the *host* reads back, not about how hard Grok
+   thinks; both knobs belong to the operator.
 4. **Don't** re-send the full goal on every poll.
 5. **Don't** request full event transcripts unless debugging.
 6. **Don't** stack concurrent jobs; cancel stale ones.

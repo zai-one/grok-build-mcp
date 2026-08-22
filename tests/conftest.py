@@ -17,7 +17,13 @@ import pytest
 
 @pytest.fixture(scope="session", autouse=True)
 def _isolated_jobs_dir() -> "object":
-    with tempfile.TemporaryDirectory(prefix="grok-delegate-tests-jobs-") as tmp:
+    # ignore_cleanup_errors because a server subprocess started by a test may
+    # still hold a job file open when the session ends, and on Windows an open
+    # handle makes the directory unremovable -- which turned a green run into
+    # a teardown ERROR and a non-zero exit.
+    with tempfile.TemporaryDirectory(
+        prefix="grok-delegate-tests-jobs-", ignore_cleanup_errors=True
+    ) as tmp:
         previous = os.environ.get("GROK_DELEGATE_JOBS_DIR")
         os.environ["GROK_DELEGATE_JOBS_DIR"] = tmp
         try:

@@ -371,3 +371,48 @@ def test_consult_does_not_steal_a_verify_session_poll_slot(tmp_path, monkeypatch
     card = nxt.get("card") or {}
     assert card.get("args", {}).get("job_id") != "job-from-consult"
     assert card.get("tool") != "grok_agent_poll"
+
+
+def test_a_fitted_poll_spends_the_budget_it_was_given() -> None:
+    """Respecting the cap is half the promise; the other half is using it.
+
+    Measured when the budget first started counting the compatibility copy: a
+    saturating poll came back at 2 947 B against a 16 384 B cap, with the diff
+    dropped whole and a 6 000-character summary cut to 313. Two passes were
+    trimming the same record against different priority orders -- the inner one
+    protected the diff, the outer one then dropped it -- and the overage was
+    charged to a single copy of a record the wire carries twice, so every step
+    cut about twice what it needed to.
+    """
+    from grok_delegate.economy import (
+        ECONOMY_MAX_RECORD,
+        fit_poll_budget,
+        tool_result_wire_size,
+    )
+
+    record = {
+        "ok": True,
+        "job_id": "j",
+        "state": "done",
+        "result": {
+            "status": "completed",
+            "summary": "S" * 6_000,
+            "unified_diff": "+x\n" * 2_000,
+            "changed_files": [f"src/module_{i}.py" for i in range(40)],
+        },
+    }
+    fitted = fit_poll_budget(record)
+    size = tool_result_wire_size(fitted)
+    result = fitted["result"]
+
+    assert size <= ECONOMY_MAX_RECORD, "the cap is the promise"
+    assert size >= ECONOMY_MAX_RECORD * 0.6, (
+        f"only {size} B of {ECONOMY_MAX_RECORD} used; the host paid for a budget "
+        "it did not receive"
+    )
+    assert len(result["summary"]) == 6_000, (
+        "the worker's answer is what the host reads first; the raw diff is on "
+        "the lane branch and the receipt says where"
+    )
+    assert result.get("unified_diff"), "trimmed, not dropped"
+    assert "unified_diff" in (fitted.get("economy_trimmed") or [])

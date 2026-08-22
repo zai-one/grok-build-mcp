@@ -39,7 +39,17 @@ def economy_enabled(env: Mapping[str, str] | None = None) -> bool:
     return str(source.get("GROK_DELEGATE_ECONOMY", "")).strip().lower() in _TRUE
 
 
-def compact_poll_enabled(env: Mapping[str, str] | None = None) -> bool:
+def compact_poll_enabled(
+    env: Mapping[str, str] | None = None, *, job_id: str | None = None
+) -> bool:
+    """Whether this record should be compacted.
+
+    ``job_id`` is what makes the session-scoped answer possible: a navigator
+    compacts its own job's polls and must not compact a neighbouring project's,
+    and without the id the only honest answers were "everyone" or "no one" --
+    the first leaked across projects, the second made session_begin's promise
+    of a small receipt empty.
+    """
     source = env if env is not None else os.environ
     raw = str(source.get("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "")).strip().lower()
     if raw in {"0", "false", "no", "off"}:
@@ -49,7 +59,7 @@ def compact_poll_enabled(env: Mapping[str, str] | None = None) -> bool:
     try:
         from .session import session_compact_active
 
-        if session_compact_active():
+        if session_compact_active(job_id):
             return True
     except Exception:
         pass
@@ -112,7 +122,7 @@ def _clip_bytes(value: Any, limit: int) -> str:
 
 def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
     """Shrink a job/receipt for host-agent context windows."""
-    if not compact_poll_enabled():
+    if not compact_poll_enabled(job_id=str(record.get("job_id") or "").strip() or None):
         return dict(record)
     keep_keys = (
         "ok",
@@ -225,9 +235,15 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
 #: preview for each, and a job producing many files carried every path, and
 #: neither could be cut -- so the record came back at 138 KB against a 16 KiB
 #: budget with nothing said about it.
+#: What gives way first when a poll will not fit, and how little of it may
+#: remain. The diff moved ahead of the summary once the budget started counting
+#: the compatibility copy: the cap then buys about half as much text, and the
+#: old order spent it on 4 010 characters of raw diff while cutting the worker's
+#: answer to 313. The diff is the one field a reader can always get in full --
+#: it is on the lane branch, and the receipt says where.
 _TRIM_ORDER: tuple[tuple[str, int], ...] = (
-    ("events", 1), ("summary", 300), ("diffstat", 200),
-    ("unified_diff", 512), ("full_changed_files", 4), ("changed_files", 4),
+    ("events", 1), ("unified_diff", 512), ("diffstat", 200),
+    ("summary", 1_200), ("full_changed_files", 4), ("changed_files", 4),
     ("artifacts", 4), ("tests", 1),
 )
 
@@ -279,8 +295,10 @@ def tool_result_wire_size(value: Any) -> int:
 
     Dual copy does not make a 16 KiB envelope impossible -- it halves the
     inner record. Fitting the inner object to 16 KiB and then sending 32 KB
-    was the lie; the 2.17x (14 923 B record → 32 345 B JSON-RPC result) is
-    the number this measures.
+    was the lie; the 2.17x measured before this existed (14 923 B record -> 32 345 B
+    assembled result) is what this counts. The JSON-RPC frame around it
+    is a few dozen bytes more; the doubling is the compatibility copy,
+    not the envelope.
     """
     return wire_size(assemble_tool_result(value))
 
@@ -296,25 +314,26 @@ def fit_poll_budget(record: dict[str, Any], cap: int = 0) -> dict[str, Any]:
     The cap is the assembled tools/call result. A 14 923 B inner record was
     32 345 B on the wire (2.17x) when the budget ignored the compatibility
     copy; dual copy halves the inner object rather than doubling the bill.
+
+    One pass, not two. Budgeting the nested receipt first and then the whole
+    record again cut the same fields twice against different priority orders:
+    the inner pass shrank a 6 000-char summary to 313 to protect the diff, the
+    outer pass then dropped the diff anyway, and the result was 2 947 B against
+    a 16 384 B budget.
     """
     cap = cap or ECONOMY_MAX_RECORD
     if tool_result_wire_size(record) <= cap:
         return record
+    _fit_record_budget(record, cap, measure=tool_result_wire_size)
+    # A trim inside `result` is a trim the reader has to know about, and the
+    # reader is looking at the envelope: without this, a poll came back at
+    # exactly the budget with nothing saying what had been cut to get there.
     nested = record.get("result")
     if isinstance(nested, dict):
-        # Budget the nested receipt against what the envelope leaves it, then
-        # against its own duplicate: assembled tools/call carries this object
-        # twice. Measured 2.17x, so half the remaining cap is the inner target
-        # and the outer pass trims rather than dropping.
-        envelope = wire_size({k: v for k, v in record.items() if k != "result"})
-        _fit_record_budget(nested, max(1_024, (cap - envelope) // 2))
-        # A trim inside `result` is a trim the reader has to know about, and the
-        # reader is looking at the envelope: without this, a poll came back at
-        # exactly the budget with nothing saying what had been cut to get there.
         for key in ("economy_trimmed", "economy_dropped", "economy_budget_chars"):
             if key in nested and key not in record:
                 record[key] = nested[key]
-    return _fit_record_budget(record, cap, measure=tool_result_wire_size)
+    return record
 
 
 def _fit_record_budget(
@@ -345,9 +364,30 @@ def _fit_record_budget(
     if size() <= cap:
         return out
 
+    def holders() -> "list[dict[str, Any]]":
+        """Where the fat fields live: at the top level, or under `result`.
+
+        Compaction lifts them up; the typed path leaves them nested. Only the
+        top level was scanned, so an uncompacted poll skipped the ordered trim
+        entirely and went straight to dropping whole fields by weight.
+        """
+        nested = out.get("result")
+        return [out, nested] if isinstance(nested, dict) else [out]
+
+    def bytes_per_char() -> float:
+        """How much one cut character is worth against `measure`.
+
+        The assembled result carries the record twice, so removing n characters
+        removes about 2n bytes from it. Charging the full overage to a single
+        copy overshot by that factor on every step and threw away content the
+        budget could have paid for.
+        """
+        inner = wire_size(out)
+        return max(1.0, size() / inner) if inner else 1.0
+
     trimmed: list[str] = []
 
-    def note(key: str) -> None:
+    def note(key: str, owner: "dict[str, Any] | None" = None) -> None:
         if key not in trimmed:
             trimmed.append(key)
         # Markers are part of the record they describe. Adding them after the
@@ -356,35 +396,47 @@ def _fit_record_budget(
         # twice, once per copy.
         out["economy_trimmed"] = trimmed
         out["economy_budget_chars"] = cap
+        # And on the record that actually lost the field: a host reading the
+        # receipt alone must not see a shortened diff with nothing saying so.
+        if owner is not None and owner is not out:
+            owner["economy_trimmed"] = list(trimmed)
+            owner["economy_budget_chars"] = cap
 
     # Test rows are mostly preview text, and the preview is the part a reader can
     # lose. Shrink it before dropping whole rows, so a job with many declared
     # commands still shows which ones ran and how they ended.
-    if size() > cap and isinstance(out.get("tests"), list):
-        rows = out["tests"]
-        for row in rows:
+    for holder in holders():
+        if size() <= cap or not isinstance(holder.get("tests"), list):
+            continue
+        for row in holder["tests"]:
             if isinstance(row, dict) and isinstance(row.get("output_preview"), str):
                 preview = row["output_preview"]
                 if len(preview) > _TEST_PREVIEW_FLOOR:
                     row["output_preview"] = preview[:_TEST_PREVIEW_FLOOR] + "…(truncated)"
-                    note("tests")
+                    note("tests", holder)
 
     for key, floor in _TRIM_ORDER:
         for _ in range(8):  # halving converges; the bound stops a pathological value
             over = size() - cap
             if over <= 0:
                 break
-            value = out.get(key)
+            owner = next(
+                (holder for holder in holders() if key in holder and holder[key]), None
+            )
+            if owner is None:
+                break
+            value = owner[key]
+            need = max(1, int(over / bytes_per_char()))
             if isinstance(value, str) and len(value) > floor:
                 # Same marker the per-field clip uses: one truncation convention
                 # on the wire, and `economy_trimmed` to say the budget caused it.
-                keep = max(floor, len(value) - over - 48)
-                out[key] = value[:keep].removesuffix("\n…(truncated)") + "\n…(truncated)"
+                keep = max(floor, len(value) - need - 48)
+                owner[key] = value[:keep].removesuffix("\n…(truncated)") + "\n…(truncated)"
             elif isinstance(value, list) and len(value) > floor:
-                out[key] = value[: max(floor, len(value) // 2)]
+                owner[key] = value[: max(floor, len(value) // 2)]
             else:
                 break
-            note(key)
+            note(key, owner)
         if size() <= cap:
             break
 
@@ -442,21 +494,25 @@ def economy_playbook() -> dict[str, Any]:
             "this machine/VPS, poll compact receipts, merge as a human."
         ),
         "do": [
-            "Confirm grok CLI + login (self-test auth present) before other tools.",
-            "Call grok_agent_status once per session (not every turn).",
-            "Prefer grok_agent_consult / grok_agent_review for Q&A and critique.",
-            "For writes: one focused grok_agent_execute with a tight objective, "
-            "expected_artifacts, and 1–3 cheap test_commands.",
+            "Call grok_agent_status once per session (not every turn); it also "
+            "reports whether the CLI is installed and logged in.",
+            "Then grok_agent_session_begin, and execute only the card that "
+            "grok_agent_session_next hands back, until it returns kind=end.",
+            "Give session_begin project_root, expected_artifacts and "
+            "test_commands: an execute card built without them guesses.",
+            "Typed tools (consult / execute / poll / review) are the fallback "
+            "for a host without the navigator, or when a card is rejected.",
             "Poll with grok_agent_poll using job_id; do not re-send the full goal.",
             "Read summary + changed_files + diffstat + bounded unified_diff + tests + worktree_path.",
             "Never request full event transcripts or raw tool dumps unless debugging.",
-            "Set max_turns low (8–16) and reasoning_effort low|medium unless stuck.",
             "One job at a time; cancel stale jobs instead of stacking.",
         ],
         "dont": [
             "Don't paste large source trees into the objective — point at paths.",
             "Don't use execute for questions (use consult).",
-            "Don't set max_turns near the hard cap (60) for routine work.",
+            "Don't lower the worker's max_turns or reasoning_effort to save "
+            "money: economy here means the host reads a compact receipt, not "
+            "that Grok thinks less. Those two are the operator's to set.",
             "Don't put OAuth/API keys or GROK_AGENT_SECRET in MCP config.",
             "Don't push/merge from the agent — human reviews the grok/* branch.",
         ],

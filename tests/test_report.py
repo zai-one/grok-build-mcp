@@ -231,10 +231,20 @@ class WiringAuditTests(unittest.TestCase):
             jobs.configure_jobs_dir(None)
             jobs.reset_jobs_for_tests()
 
-    def test_server_leaves_jobs_in_memory_when_env_is_unset(self) -> None:
-        from grok_delegate import server
+    def test_server_persists_jobs_when_the_env_says_nothing(self) -> None:
+        """Unset used to mean off, and that is how a finished job was lost.
 
-        self.assertIsNone(server.configure_durable_jobs({}))
+        A poll after a restart answered JOB_UNKNOWN for work that had completed
+        on a lane branch, because the persistence layer only woke for an env var
+        nothing sets. The operator still opts out, explicitly.
+        """
+        from grok_delegate import jobs, jobs_store, server
+
+        try:
+            self.assertEqual(server.configure_durable_jobs({}), jobs_store.default_jobs_dir())
+            self.assertIsNone(server.configure_durable_jobs({"GROK_DELEGATE_JOBS_DIR": "off"}))
+        finally:
+            jobs.configure_jobs_dir(None)
 
     def test_jobs_exports_its_public_surface(self) -> None:
         from grok_delegate import jobs

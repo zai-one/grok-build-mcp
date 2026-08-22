@@ -28,7 +28,105 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
-## Unreleased
+## 0.27.0 — What the host is told is now true
+
+### One tools/call answer cost twice what the budget promised
+
+Every answer goes out twice -- `structuredContent` for a modern client and a
+`content.text` copy for an old one -- and the copy was pretty-printed. Measured:
+a poll record fitted to the 16 KiB cap left as a 32 345 B JSON-RPC result, and
+`tools/list` cost 44 341 B with `indent=2` against 25 849 B without. The budget
+was being enforced against the inner record while the host paid for the whole
+result.
+
+`content.text` is serialised compactly now, and the cap is measured on the
+assembled result, so 16 KiB means 16 KiB on the wire. The duplicate copy stays:
+removing it would break clients that read only `content.text`.
+
+Respecting the cap is half the promise; the other half is spending it. Since the
+budget now buys about half as much text, the fitter had to stop wasting it: it
+trims in one pass reaching into `result` where the fat fields live on the typed
+path, and it divides the overage by the measured duplication instead of charging
+all of it to a single copy. `unified_diff` also gives way before `summary` now --
+the diff is the one field a reader can always get in full, because it is on the
+lane branch and the receipt says where. A saturating poll comes back at 15 208 B
+of 16 384 with the worker's answer intact.
+
+### A compact poll dropped sixty events and reported four of four
+
+`compact_job_record` cut `events` to the last four without a count, while
+`changed_files` beside it reported `_omitted` and `_total`. Fixing that alone
+was not enough: `_bounded_poll` then overwrote `events_total` with the length of
+the already-shortened list, so the host was told `events_total: 4` next to
+`events_omitted: 60` -- two fields contradicting each other, which is worse than
+the silence it replaced.
+
+### A consult or review job was never bound to the session that started it
+
+Only execute, fix and start bound their job, so a brainstorm session whose
+consult had finished still reported `"job": "none"` at `session_end` and the
+worker's answer was simply lost. Read-only jobs bind now, by matching
+`correlation_id` and never onto a session that already has a job or that emits
+a poll card of its own.
+
+### `session_begin` changed every other project served by the same process
+
+It wrote `GROK_DELEGATE_ECONOMY` and `GROK_DELEGATE_ECONOMY_COMPACT_POLL` into
+the process environment and set a module global, so one navigator in one project
+compacted every later poll for every project, with no way back and nothing said
+about it. The environment is the operator's again; the compact preference is a
+field on the session and applies to that session's own job.
+
+### One navigator step spent two budgets
+
+`session_next` charged both a poll and a tool call per card, so the documented
+`host_budget=small` had three polls and five tool calls left after the first
+card and the loop the skill prescribes starved after three more. A step costs
+one poll; tool calls are charged where a tool is actually reported.
+
+### `intent=auto` could not read Russian
+
+Mode words were matched with `[a-z]+`, which does not tokenise Cyrillic at all,
+so every Russian goal fell through to `operate` -- including for the operator of
+this project, who writes Russian. Measured before: `check the repository` chose
+`verify` while `проверь репозиторий` chose `operate`. Russian verbs and stems
+are in the vocabulary now, and `explain` joined the English side to match
+`разбери`.
+
+### A blocked job polled back as `ok: true`
+
+The poll envelope was a literal `True`, so a host that reads the top-level flag
+saw success for a job whose receipt said `blocked` with a failed test.
+**Breaking:** `ok` on a poll now reflects the job -- false for `blocked` and
+`failed` -- rather than reporting that the poll call itself worked. A job with
+no result yet is still `ok: true`.
+
+### The installer put lanes where the documentation forbids them
+
+`install.sh` and `install.ps1` pinned `GROK_DELEGATE_LANES_PARENT` to a
+`.grok-mcp-lanes` directory beside the project, while README, AGENTS.md and the
+lane code all say `<project>/.grok/lanes` -- inside the project, gitignored, so
+pytest and indexers skip it. A fresh install therefore parked unmerged work in
+an undocumented sibling. The installers no longer set the variable unless
+`--lanes` was given.
+
+### `grok_agent_economy` described a cycle nobody runs
+
+The playbook still walked a host through status - consult - execute - poll and
+told it to "set max_turns low (8-16) and reasoning_effort low|medium", which is
+the opposite of this project's policy: economy here means the host reads a small
+receipt, not that the worker thinks less, and both knobs belong to the operator.
+It describes the navigator loop now and says so, and `docs/economy.md` -- which
+laid the typed path out as *the* recommended sequence -- puts the navigator
+first and names the typed tools as the fallback they are.
+
+### An execute card with nothing to go on guessed a path and a command
+
+Given no `expected_artifacts` and no `test_commands`, the card fell back to
+`["src"]` -- not a directory in this repository -- and `python -m pytest -q`,
+which is not a command on a default Windows install where the launcher is `py`.
+A command the worker cannot run is worse than none: the gate refuses it, and on
+this CLI a refusal ends the turn.
 
 ### A finished job was lost the moment the server restarted
 

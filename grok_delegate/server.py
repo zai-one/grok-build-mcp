@@ -1422,7 +1422,7 @@ def handle_tool_call(
             # audit came back at 17,725 characters here because compaction is
             # opt-in and the typed path had no ceiling of its own.
             compact = fit_poll_budget(compact)
-            return typed_return({"ok": True, **compact})
+            return typed_return({"ok": _poll_ok(compact), **compact})
         listed = [compact_job_record(j) for j in jobs.list_jobs(limit=limit)]
         return typed_return({"ok": True, "jobs": listed, "economy": economy_enabled()})
 
@@ -2189,21 +2189,33 @@ def configure_logging(env: Mapping[str, str] | None = None) -> Path | None:
 
 
 def configure_durable_jobs(env: Mapping[str, str] | None = None) -> Path | None:
-    """Enable durable job records from GROK_DELEGATE_JOBS_DIR and rehydrate them.
+    """Enable durable job records and rehydrate them. Called at startup.
 
-    R7-D shipped persistence but nothing switched it on, so a live server still kept job
-    state in memory only: a restart lost the status of every lane it had dispatched while
-    the work itself survived on the lane branch. Called at startup; returns the directory
-    in use, or None when the env var is unset (memory-only, previous behaviour).
+    R7-D shipped persistence but nothing switched it on, and neither did anyone
+    else: it woke only for GROK_DELEGATE_JOBS_DIR, which nothing sets, so every
+    default install lost the status of every lane it had dispatched on restart
+    while the work itself survived on the branch. `grok_agent_poll` answered
+    JOB_UNKNOWN for a job that had finished. The directory is resolved now --
+    per-user by default -- and returns None only when an operator turned it off.
     """
-    source = env if env is not None else os.environ
-    raw = (source.get("GROK_DELEGATE_JOBS_DIR") or "").strip()
-    if not raw:
-        return None
-    target = Path(raw)
-    jobs.configure_jobs_dir(target)
-    jobs.rehydrate_jobs(target)
-    return target
+    return jobs.configure_from_env(env)
+
+
+def _poll_ok(record: Mapping[str, Any]) -> bool:
+    """Whether the job is fine -- not whether the poll call reached the registry.
+
+    The envelope said `"ok": True` unconditionally, so a host that reads the
+    top-level flag saw success for a job whose receipt said `blocked` with a
+    failed test. Compaction made it worse by shortening exactly the fields a
+    reader would otherwise have noticed the status in. A job with no result yet
+    is fine: it has not failed, it has not finished.
+    """
+    result = record.get("result")
+    if not isinstance(result, Mapping):
+        return True
+    if result.get("ok") is False:
+        return False
+    return str(result.get("status") or "") not in {"blocked", "failed"}
 
 
 #: A poller wants to know what is happening now, not to re-read the handshake.

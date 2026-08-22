@@ -149,56 +149,38 @@ _DENY_BY_MODE: dict[str, list[str]] = {
 _sessions: dict[str, dict[str, Any]] = {}
 
 
-def session_compact_active() -> bool:
-    """True only for the job this live session owns, while it is compacted.
+def session_compact_active(job_id: str | None = None) -> bool:
+    """True only while a live session that asked for compact owns *job_id*.
 
-    Process-wide True leaked: one session_begin compacted every later
-    grok_agent_poll, neighbour included, with no way back. Always False
-    left *this* session's poll fat -- the host pays for that card (execute
-    plan step 2), not for a tick flag. compact_poll_enabled takes no job_id,
-    so ownership is read off the record sitting in compact_job_record.
+    Both simpler answers were wrong. A module global set by session_begin
+    compacted every later grok_agent_poll in the process, a neighbouring
+    project included, with no way back -- and it also wrote
+    GROK_DELEGATE_ECONOMY* into the environment, which is the operator's.
+    A flat False left this session's own poll fat, which is the receipt the
+    host actually pays for. Ownership is the distinction, so the caller says
+    which job it is asking about.
     """
-    return _live_session_owns_job(_job_id_being_compacted())
+    jid = str(job_id or "").strip()
+    if not jid:
+        return False
+    # A snapshot: this runs on the poll path while another host turn may be
+    # opening or ending a session, and iterating the live dict raises.
+    return any(
+        _session_wants_compact(sess) and str(sess.get("job_id") or "").strip() == jid
+        for sess in list(_sessions.values())
+    )
 
 
 def enable_session_economy() -> None:
     """No-op. Env is the operator's; compact is a field on the session.
 
-    Writing those two GROK_DELEGATE_ECONOMY* vars here is the leak above.
+    Kept because it is still called on the session_begin path: writing those
+    two GROK_DELEGATE_ECONOMY* vars here is the leak described above.
     """
 
 
 def _session_wants_compact(sess: Mapping[str, Any] | None) -> bool:
     return bool(sess) and bool(sess.get("compact")) and not sess.get("ended")
-
-
-def _live_session_owns_job(job_id: str) -> bool:
-    if not job_id:
-        return False
-    for sess in _sessions.values():
-        if not _session_wants_compact(sess):
-            continue
-        if str(sess.get("job_id") or "").strip() == job_id:
-            return True
-    return False
-
-
-def _job_id_being_compacted() -> str:
-    # economy.compact_poll_enabled is a process-wide boolean: the only hook
-    # grok_agent_poll has. A module global on that hook was the neighbour
-    # leak; without a job_id on the hook the record on that stack is the
-    # session's claim.
-    frame = sys._getframe()
-    try:
-        while frame is not None:
-            if frame.f_code.co_name == "compact_job_record":
-                record = frame.f_locals.get("record")
-                if isinstance(record, Mapping):
-                    return str(record.get("job_id") or "").strip()
-            frame = frame.f_back
-    finally:
-        del frame
-    return ""
 
 
 def scrub_secrets(text: str) -> str:
@@ -333,8 +315,12 @@ def _write_task_packet(sess: Mapping[str, Any]) -> dict[str, Any]:
 
     goal = str(sess.get("goal") or "Implement only the listed scope")[:_GOAL_MAX]
     anchors = [p for p in extract_goal_anchors(goal) if not p.startswith(("http://", "https://"))]
-    artifacts = _str_list(sess.get("expected_artifacts"), fallback=anchors[:8] or ["src"])
-    tests = _str_list(sess.get("test_commands"), fallback=["python -m pytest -q"])
+    # A host that gave neither gets a guess, and both guesses were bad: "src"
+    # is not a path in this repository, and Windows commonly has no `python` on
+    # PATH at all -- only `py`. A guess the worker cannot run is worse than an
+    # empty list, because the gate then refuses the command it was told to run.
+    artifacts = _str_list(sess.get("expected_artifacts"), fallback=anchors[:8])
+    tests = _str_list(sess.get("test_commands"), fallback=_default_test_command())
     return {
         "objective": goal or "Implement only the listed scope",
         "project_root": _session_project_root(sess),
@@ -473,6 +459,16 @@ _INSTALL_PS1 = (
 )
 
 
+def _default_test_command() -> list[str]:
+    """What to run when the host named no test command.
+
+    `python -m pytest -q` was the old fallback and it is not a command on a
+    default Windows install, where the launcher is `py`. An unrunnable default
+    is refused by the permission gate, and a refusal ends the worker's turn.
+    """
+    return ["py -3 -m pytest -q" if os.name == "nt" else "python3 -m pytest -q"]
+
+
 def _install_command() -> str:
     """The installer the host can actually run.
 
@@ -500,7 +496,7 @@ _VERIFY_WORDS = re.compile(
     r")\b"
 )
 _BRAINSTORM_WORDS = re.compile(
-    r"(?i)\b(brainstorm|design|options|разбер\w*|изуч\w*|расскаж\w*)\b|\bhow should\b"
+    r"(?i)\b(brainstorm|design|options|explain|разбер\w*|изуч\w*|расскаж\w*)\b|\bhow should\b"
 )
 _SETUP_WORDS = re.compile(r"(?i)\b(install|setup)\b")
 
