@@ -98,6 +98,7 @@ try:
         session_tick,
     )
     from .economy import (  # type: ignore[no-redef]
+        assemble_tool_result,
         compact_job_record,
         economy_enabled,
         economy_playbook,
@@ -168,6 +169,7 @@ except ImportError:  # flat import when package dir is on sys.path
         session_tick,
     )
     from grok_delegate.economy import (  # noqa: E402
+        assemble_tool_result,
         compact_job_record,
         economy_enabled,
         economy_playbook,
@@ -1186,6 +1188,43 @@ def _schema_violation(schema: Any, arguments: Mapping[str, Any], prefix: str = "
     return None
 
 
+def _bind_read_only_job(job_id: str, *, correlation_id: str | None) -> str | None:
+    """Attach a consult/review job to the session that started it.
+
+    ``bind_session_job`` falls back to the newest write session without a job.
+    A consult going through that path steals the execute poll slot and still
+    leaves the brainstorm session with job_id None, which is the failure
+    session_end reported as ``"job": "none"`` after the worker had finished.
+    Bind only by matching correlation_id, never onto execute/fix/verify
+    (those emit a poll card), never onto a session that already has a job.
+    """
+    try:
+        from .session import _session_correlation_id, _sessions
+    except ImportError:
+        from session import _session_correlation_id, _sessions  # type: ignore[no-redef]
+
+    cid = str(correlation_id or "").strip() or None
+    if not cid:
+        return None
+    for sess in reversed(list(_sessions.values())):
+        if sess.get("ended"):
+            continue
+        # execute/fix/verify all emit a poll card once they have a job_id.
+        # Parking a consult there is the steal; brainstorm is the session
+        # that must learn about the job, and it is none of these.
+        if sess.get("mode") in {"execute", "fix", "verify"}:
+            continue
+        if sess.get("job_id"):
+            continue
+        if _session_correlation_id(sess) != cid:
+            continue
+        sid = str(sess.get("session_id") or "") or None
+        if not sid:
+            continue
+        return bind_session_job(job_id, session_id=sid)
+    return None
+
+
 def handle_tool_call(
     name: str,
     arguments: Mapping[str, Any] | None,
@@ -1424,11 +1463,18 @@ def handle_tool_call(
             lane=str(args.get("lane") or "") or None,
             grok_bin=grok_bin,
         )
-        if result.get("job_id") and name in {TOOL_AGENT_EXECUTE, TOOL_AGENT_FIX, TOOL_AGENT_START}:
-            bind_session_job(
-                str(result["job_id"]),
-                correlation_id=str(typed_task.get("correlation_id") or "") or None,
-            )
+        if result.get("job_id"):
+            cid = str(typed_task.get("correlation_id") or "") or None
+            if name in {TOOL_AGENT_EXECUTE, TOOL_AGENT_FIX, TOOL_AGENT_START}:
+                bind_session_job(str(result["job_id"]), correlation_id=cid)
+            elif name in {TOOL_AGENT_CONSULT, TOOL_AGENT_REVIEW}:
+                # Read-only jobs must not go through bind_session_job's write
+                # fallback: that parks the newest execute session without a
+                # job, which is the poll slot a consult must not steal, and
+                # still leaves the brainstorm session that started it with
+                # job_id None -- session_end then reported "job": "none" on a
+                # consult that had already completed.
+                _bind_read_only_job(str(result["job_id"]), correlation_id=cid)
         return typed_return(result, typed_task)
 
     if name in STATUS_TOOLS:
@@ -2062,16 +2108,12 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
             # one request, and reusing it afterwards addresses a call the client
             # has already had its answer to.
             _PROGRESS_TOKEN = None
-        payload = {
-            "content": [
-                {
-                    "type": "text",
-                    "text": json.dumps(tool_result, ensure_ascii=False, indent=2),
-                }
-            ],
-            "structuredContent": tool_result,
-            "isError": not bool(tool_result.get("ok")),
-        }
+        # content.text is the compatibility copy: old clients never read
+        # structuredContent. indent=2 cost 1.72x on tools/list-shaped payloads
+        # (25 849 B compact vs 44 341 B); a fitted 14 923 B poll left as
+        # 32 345 B JSON-RPC (2.17x) once that pretty copy sat next to
+        # structuredContent. The duplicate stays. It is compact.
+        payload = assemble_tool_result(tool_result)
         return None if is_notification else _jsonrpc_result(req_id, payload)
 
     if method == "ping":
@@ -2228,10 +2270,17 @@ def _bounded_poll(record: dict[str, Any], limit: int) -> dict[str, Any]:
         events = holder.get("events")
         if not isinstance(events, list):
             continue
-        total = len(events)
-        if total > limit:
+        current = len(events)
+        # compact_job_record already counted 64 in / 4 out. Re-reading
+        # len(events) here reported events_total=4, which is the silent drop
+        # this function exists to prevent.
+        prior_total = holder.get("events_total")
+        total = prior_total if isinstance(prior_total, int) and prior_total > current else current
+        if current > limit:
             holder["events"] = events[-limit:]
             holder["events_omitted"] = total - limit
+        elif total > current:
+            holder["events_omitted"] = total - current
         holder["events_total"] = total
     return out
 

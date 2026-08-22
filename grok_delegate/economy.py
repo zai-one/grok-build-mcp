@@ -19,10 +19,17 @@ ECONOMY_MAX_SUMMARY = 1_500
 ECONOMY_MAX_EVENTS = 4
 ECONOMY_MAX_CHANGED_FILES = 24
 ECONOMY_MAX_UNIFIED_DIFF = 16_384
-#: What one compact poll may cost the host, whole. The per-field caps above bound
-#: each field on its own and sum to well over this; the record is fitted to it
-#: after assembly so the promise is about the thing the host actually pays for.
+#: What one tools/call answer may cost the host, whole. That is the assembled
+#: MCP result -- structuredContent plus the compatibility content.text copy --
+#: not the inner record. Measured on this tree: a 14 923 B fitted poll left
+#: the server as a 32 345 B JSON-RPC result (2.17x) because the budget was
+#: enforced on the inner object while the client paid for both copies.
+#: indent=2 on the text copy was a second tax (1.72x on tools/list-shaped
+#: payloads: 25 849 B compact vs 44 341 B). The duplicate stays -- old clients
+#: read only content.text -- but it is compact, and the record is fitted so
+#: the assembled result itself sits under this cap.
 ECONOMY_MAX_RECORD = 16_384
+_COMPACT_SEPARATORS = (",", ":")
 
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
@@ -168,7 +175,14 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
                 out[key + "_omitted"] = len(value) - ECONOMY_MAX_CHANGED_FILES
                 out[key + "_total"] = len(value)
         elif key == "events" and isinstance(value, list):
+            # Same bookkeeping as changed_files next to it: 64 events arriving
+            # as the last four with events_total and events_omitted both None
+            # reads as "that is all there was", which is the one thing a reader
+            # must not be wrong about.
             out[key] = value[-ECONOMY_MAX_EVENTS:]
+            if len(value) > ECONOMY_MAX_EVENTS:
+                out["events_omitted"] = len(value) - ECONOMY_MAX_EVENTS
+                out["events_total"] = len(value)
         elif key == "tests" and isinstance(value, list):
             slim = []
             for item in value[:16]:
@@ -198,7 +212,7 @@ def compact_job_record(record: Mapping[str, Any]) -> dict[str, Any]:
         else:
             out[key] = value
     out["economy_compact"] = True
-    return _fit_record_budget(out, ECONOMY_MAX_RECORD)
+    return _fit_record_budget(out, ECONOMY_MAX_RECORD, measure=tool_result_wire_size)
 
 
 #: field -> the smallest length worth keeping, in the order a reader can most
@@ -238,6 +252,39 @@ def wire_size(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
 
 
+def assemble_tool_result(tool_result: Any) -> dict[str, Any]:
+    """The MCP tools/call `result` the client is billed for.
+
+    Old clients read only content[].text, so the duplicate of structuredContent
+    stays. It does not have to be pretty: indent=2 cost 1.72x on tools/list-
+    shaped payloads (25 849 B compact vs 44 341 B).
+    """
+    body = tool_result if isinstance(tool_result, Mapping) else {"ok": False}
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": json.dumps(
+                    body, ensure_ascii=False, default=str, separators=_COMPACT_SEPARATORS
+                ),
+            }
+        ],
+        "structuredContent": body,
+        "isError": not bool(body.get("ok")),
+    }
+
+
+def tool_result_wire_size(value: Any) -> int:
+    """Bytes of the assembled tools/call result, both copies included.
+
+    Dual copy does not make a 16 KiB envelope impossible -- it halves the
+    inner record. Fitting the inner object to 16 KiB and then sending 32 KB
+    was the lie; the 2.17x (14 923 B record → 32 345 B JSON-RPC result) is
+    the number this measures.
+    """
+    return wire_size(assemble_tool_result(value))
+
+
 def fit_poll_budget(record: dict[str, Any], cap: int = 0) -> dict[str, Any]:
     """Hold one poll under the budget whether or not compaction is on.
 
@@ -245,25 +292,37 @@ def fit_poll_budget(record: dict[str, Any], cap: int = 0) -> dict[str, Any]:
     path had no ceiling at all: a live audit came back at 17,725 characters in a
     single poll against a promise of 16 KiB. The fat fields sit under `result`
     there and at the top level in compact mode, so both are fitted.
+
+    The cap is the assembled tools/call result. A 14 923 B inner record was
+    32 345 B on the wire (2.17x) when the budget ignored the compatibility
+    copy; dual copy halves the inner object rather than doubling the bill.
     """
     cap = cap or ECONOMY_MAX_RECORD
-    if wire_size(record) <= cap:
+    if tool_result_wire_size(record) <= cap:
         return record
     nested = record.get("result")
     if isinstance(nested, dict):
-        # Budget the nested receipt against what the envelope leaves it.
+        # Budget the nested receipt against what the envelope leaves it, then
+        # against its own duplicate: assembled tools/call carries this object
+        # twice. Measured 2.17x, so half the remaining cap is the inner target
+        # and the outer pass trims rather than dropping.
         envelope = wire_size({k: v for k, v in record.items() if k != "result"})
-        _fit_record_budget(nested, max(1_024, cap - envelope))
+        _fit_record_budget(nested, max(1_024, (cap - envelope) // 2))
         # A trim inside `result` is a trim the reader has to know about, and the
         # reader is looking at the envelope: without this, a poll came back at
         # exactly the budget with nothing saying what had been cut to get there.
         for key in ("economy_trimmed", "economy_dropped", "economy_budget_chars"):
             if key in nested and key not in record:
                 record[key] = nested[key]
-    return _fit_record_budget(record, cap)
+    return _fit_record_budget(record, cap, measure=tool_result_wire_size)
 
 
-def _fit_record_budget(out: dict[str, Any], cap: int) -> dict[str, Any]:
+def _fit_record_budget(
+    out: dict[str, Any],
+    cap: int,
+    *,
+    measure: Any | None = None,
+) -> dict[str, Any]:
     """Hold the whole record under one budget, not each field under its own.
 
     Per-field caps do not add up to a promise. ``ECONOMY_MAX_UNIFIED_DIFF`` alone
@@ -274,9 +333,14 @@ def _fit_record_budget(out: dict[str, Any], cap: int) -> dict[str, Any]:
     Trimming is ordered by what a reader can most afford to lose, and it is never
     silent: ``economy_trimmed`` names each field that gave way, because a receipt
     that quietly drops half a diff is worse than one that admits it.
+
+    ``measure`` defaults to the inner record. Polls pass ``tool_result_wire_size``
+    so the cap is the assembled tools/call result the client actually receives.
     """
+    size_of = measure or wire_size
+
     def size() -> int:
-        return wire_size(out)
+        return size_of(out)
 
     if size() <= cap:
         return out
@@ -286,11 +350,17 @@ def _fit_record_budget(out: dict[str, Any], cap: int) -> dict[str, Any]:
     def note(key: str) -> None:
         if key not in trimmed:
             trimmed.append(key)
+        # Markers are part of the record they describe. Adding them after the
+        # last measurement is how a receipt came back nine bytes over the cap
+        # it had just been fitted to -- and on the assembled result they cost
+        # twice, once per copy.
+        out["economy_trimmed"] = trimmed
+        out["economy_budget_chars"] = cap
 
     # Test rows are mostly preview text, and the preview is the part a reader can
     # lose. Shrink it before dropping whole rows, so a job with many declared
     # commands still shows which ones ran and how they ended.
-    if wire_size(out) > cap and isinstance(out.get("tests"), list):
+    if size() > cap and isinstance(out.get("tests"), list):
         rows = out["tests"]
         for row in rows:
             if isinstance(row, dict) and isinstance(row.get("output_preview"), str):
