@@ -10,6 +10,7 @@ sibling .grok-mcp-lanes pytest would walk.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -87,7 +88,7 @@ def test_a_session_does_not_leave_process_wide_compact_on(monkeypatch, tmp_path)
 
 def test_a_sessions_compact_does_not_clip_a_neighbour_job(monkeypatch, tmp_path) -> None:
     _clear_economy_env(monkeypatch)
-    _session(tmp_path)
+    _session(tmp_path, job_id="sess-job")
     fat = {
         "ok": True,
         "job_id": "neighbour",
@@ -99,19 +100,42 @@ def test_a_sessions_compact_does_not_clip_a_neighbour_job(monkeypatch, tmp_path)
     assert record.get("economy_compact") is not True
 
 
+def _fat_job(job_id: str) -> dict:
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": "completed",
+        "summary": "s" * 5000,
+    }
+
+
+def test_this_sessions_poll_is_compact(monkeypatch, tmp_path) -> None:
+    """The host pays for grok_agent_poll (execute plan step 2), not a tick flag."""
+    _clear_economy_env(monkeypatch)
+    _session(tmp_path, job_id="sess-job")
+    record = compact_job_record(_fat_job("sess-job"))
+    assert record.get("economy_compact") is True
+    assert len(record["summary"]) < 5000
+
+
 def test_this_session_still_reports_compact_on_its_own_tick(monkeypatch, tmp_path) -> None:
     _clear_economy_env(monkeypatch)
-    sid = _session(tmp_path)
+    sid = _session(tmp_path, job_id="sess-job")
+    record = compact_job_record(_fat_job("sess-job"))
+    assert record.get("economy_compact") is True
+    assert len(record["summary"]) < 5000
     out = session_tick(session_id=sid)
     assert out["economy_compact"] is True
 
 
 def test_compact_does_not_outlive_the_session(monkeypatch, tmp_path) -> None:
     _clear_economy_env(monkeypatch)
-    sid = _session(tmp_path)
+    sid = _session(tmp_path, job_id="sess-job")
     assert session_mod._sessions[sid]["compact"] is True
+    assert compact_job_record(_fat_job("sess-job")).get("economy_compact") is True
     session_end(session_id=sid)
     assert session_mod._sessions[sid].get("compact") is False
+    assert compact_job_record(_fat_job("sess-job")).get("economy_compact") is not True
     out = session_tick(session_id=sid)
     assert out["economy_compact"] is False
 
@@ -213,5 +237,15 @@ def test_installers_do_not_park_lanes_in_a_sibling_directory() -> None:
     assert ".grok-mcp-lanes" not in sh
     assert ".grok/lanes" in ps1
     assert ".grok/lanes" in sh
+    # The override must stay unset unless the operator passed --lanes.
+    # Banning the old sibling name is not the invariant: a renamed sibling
+    # would still park unmerged work outside <project>/.grok/lanes.
     assert "GROK_DELEGATE_LANES_PARENT" not in ps1
+    assert re.search(r'(?m)^LANES_PARENT=""$', sh)
+    assert re.search(r'(?m)^LANES_EXPORT=""$', sh)
+    assert 'if [ -n "$LANES_PARENT" ]' in sh
+    env_body = re.search(r'cat > "\$ENV_FILE" <<ENV\n(.*?)\nENV', sh, re.S)
+    assert env_body is not None
+    assert "${LANES_EXPORT}" in env_body.group(1)
+    assert "GROK_DELEGATE_LANES_PARENT" not in env_body.group(1)
 

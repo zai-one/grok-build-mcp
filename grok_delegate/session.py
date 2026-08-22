@@ -150,15 +150,15 @@ _sessions: dict[str, dict[str, Any]] = {}
 
 
 def session_compact_active() -> bool:
-    """Process-wide compact is only what the operator set in the environment.
+    """True only for the job this live session owns, while it is compacted.
 
-    session_begin used to flip a module global and setdefault
-    GROK_DELEGATE_ECONOMY / GROK_DELEGATE_ECONOMY_COMPACT_POLL, so one
-    navigator in one project compacted every later poll in this process —
-    including a neighbour — with no way back. Compact now lives on the
-    session that asked for it.
+    Process-wide True leaked: one session_begin compacted every later
+    grok_agent_poll, neighbour included, with no way back. Always False
+    left *this* session's poll fat -- the host pays for that card (execute
+    plan step 2), not for a tick flag. compact_poll_enabled takes no job_id,
+    so ownership is read off the record sitting in compact_job_record.
     """
-    return False
+    return _live_session_owns_job(_job_id_being_compacted())
 
 
 def enable_session_economy() -> None:
@@ -170,6 +170,35 @@ def enable_session_economy() -> None:
 
 def _session_wants_compact(sess: Mapping[str, Any] | None) -> bool:
     return bool(sess) and bool(sess.get("compact")) and not sess.get("ended")
+
+
+def _live_session_owns_job(job_id: str) -> bool:
+    if not job_id:
+        return False
+    for sess in _sessions.values():
+        if not _session_wants_compact(sess):
+            continue
+        if str(sess.get("job_id") or "").strip() == job_id:
+            return True
+    return False
+
+
+def _job_id_being_compacted() -> str:
+    # economy.compact_poll_enabled is a process-wide boolean: the only hook
+    # grok_agent_poll has. A module global on that hook was the neighbour
+    # leak; without a job_id on the hook the record on that stack is the
+    # session's claim.
+    frame = sys._getframe()
+    try:
+        while frame is not None:
+            if frame.f_code.co_name == "compact_job_record":
+                record = frame.f_locals.get("record")
+                if isinstance(record, Mapping):
+                    return str(record.get("job_id") or "").strip()
+            frame = frame.f_back
+    finally:
+        del frame
+    return ""
 
 
 def scrub_secrets(text: str) -> str:
