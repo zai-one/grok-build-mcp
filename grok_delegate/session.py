@@ -147,18 +147,58 @@ _DENY_BY_MODE: dict[str, list[str]] = {
 }
 
 _sessions: dict[str, dict[str, Any]] = {}
-_compact_session = False
 
 
 def session_compact_active() -> bool:
-    return _compact_session or compact_poll_enabled()
+    """True only for the job this live session owns, while it is compacted.
+
+    Process-wide True leaked: one session_begin compacted every later
+    grok_agent_poll, neighbour included, with no way back. Always False
+    left *this* session's poll fat -- the host pays for that card (execute
+    plan step 2), not for a tick flag. compact_poll_enabled takes no job_id,
+    so ownership is read off the record sitting in compact_job_record.
+    """
+    return _live_session_owns_job(_job_id_being_compacted())
 
 
 def enable_session_economy() -> None:
-    global _compact_session
-    _compact_session = True
-    os.environ.setdefault("GROK_DELEGATE_ECONOMY", "1")
-    os.environ.setdefault("GROK_DELEGATE_ECONOMY_COMPACT_POLL", "1")
+    """No-op. Env is the operator's; compact is a field on the session.
+
+    Writing those two GROK_DELEGATE_ECONOMY* vars here is the leak above.
+    """
+
+
+def _session_wants_compact(sess: Mapping[str, Any] | None) -> bool:
+    return bool(sess) and bool(sess.get("compact")) and not sess.get("ended")
+
+
+def _live_session_owns_job(job_id: str) -> bool:
+    if not job_id:
+        return False
+    for sess in _sessions.values():
+        if not _session_wants_compact(sess):
+            continue
+        if str(sess.get("job_id") or "").strip() == job_id:
+            return True
+    return False
+
+
+def _job_id_being_compacted() -> str:
+    # economy.compact_poll_enabled is a process-wide boolean: the only hook
+    # grok_agent_poll has. A module global on that hook was the neighbour
+    # leak; without a job_id on the hook the record on that stack is the
+    # session's claim.
+    frame = sys._getframe()
+    try:
+        while frame is not None:
+            if frame.f_code.co_name == "compact_job_record":
+                record = frame.f_locals.get("record")
+                if isinstance(record, Mapping):
+                    return str(record.get("job_id") or "").strip()
+            frame = frame.f_back
+    finally:
+        del frame
+    return ""
 
 
 def scrub_secrets(text: str) -> str:
@@ -448,10 +488,20 @@ def _install_command() -> str:
 #: "verify" -- the filename decided the mode.
 _PATHISH = re.compile(r"\S*[\\/]\S*|\S+\.(?:py|ts|tsx|js|md|json|toml|yaml|yml)\b")
 _EXECUTE_WORDS = re.compile(
-    r"(?i)\b(fix|implement|build|add|create|update|rewrite|refactor|port|migrate|write)\b"
+    r"(?i)\b("
+    r"fix|implement|build|add|create|update|rewrite|refactor|port|migrate|write|"
+    r"почин\w*|исправ\w*|пофикс\w*|напиш\w*|сдела\w*|добав\w*|реализу\w*|обнов\w*"
+    r")\b"
 )
-_VERIFY_WORDS = re.compile(r"(?i)\b(review|verify|check|audit|tests?)\b")
-_BRAINSTORM_WORDS = re.compile(r"(?i)\b(brainstorm|design|options)\b|\bhow should\b")
+_VERIFY_WORDS = re.compile(
+    r"(?i)\b("
+    r"review|verify|check|audit|tests?|"
+    r"провер\w*|ревью\w*|отревьюй\w*|аудит\w*|проаудируй\w*|сверь\w*"
+    r")\b"
+)
+_BRAINSTORM_WORDS = re.compile(
+    r"(?i)\b(brainstorm|design|options|разбер\w*|изуч\w*|расскаж\w*)\b|\bhow should\b"
+)
 _SETUP_WORDS = re.compile(r"(?i)\b(install|setup)\b")
 
 #: Matched in this order once no leading verb decided it.
@@ -462,6 +512,9 @@ _MODE_WORDS = (
     ("install", _SETUP_WORDS),
 )
 _FILLER = frozenset({"please", "can", "you", "could", "lets", "let", "us", "we", "i", "now", "just"})
+#: Letters only, including Cyrillic. `[a-z]+` dropped "проверь" so auto
+#: never saw the leading verb and those goals fell through to operate.
+_WORD = re.compile(r"[^\W\d_]+")
 
 
 def _leading_verb_mode(goal: str) -> str | None:
@@ -471,8 +524,10 @@ def _leading_verb_mode(goal: str) -> str | None:
     update landed" is a question about state, but it contains "update". Goals
     are written as imperatives, so the first real word is the better witness --
     and when it says nothing, the ordered scan below still gets a turn.
+    `[a-z]+` is why "проверь репозиторий" did not agree with "check the
+    repository": the Cyrillic verb was not a token.
     """
-    for word in re.findall(r"[a-z]+", goal.lower()):
+    for word in _WORD.findall(goal.lower()):
         if word in _FILLER:
             continue
         for mode, pattern in _MODE_WORDS:
@@ -697,6 +752,9 @@ def session_begin(
         "deny_tools": deny,
         "tool_calls_used": 0,
         "polls_used": 0,
+        # Navigator receipts stay small for *this* session only. Putting the
+        # same switch on the process env compacted every neighbour.
+        "compact": True,
         "started": True,
         "project_root": stored_root,
         "roots": list(gate.get("roots") or [])[:8],
@@ -862,7 +920,9 @@ def session_tick(
         "blockers": blockers[:8],
         "suggested_host_action": suggested,
         "host_message": scrub_secrets(host_message)[:_HOST_MSG_MAX],
-        "economy_compact": not verbose and session_compact_active(),
+        "economy_compact": not verbose and (
+            _session_wants_compact(sess) or compact_poll_enabled()
+        ),
     }
     if verbose and compact is not None:
         out["job"] = compact
@@ -899,9 +959,11 @@ def session_next(
                 "card": {"kind": "end", "why": "no session"},
             }
         )
-    # count as a poll/tool for budget
+    # One next is one poll. Charging tool_calls here too meant host_budget=small
+    # (4 polls / 6 tools) had 3 polls and 5 tools left after the first card, so
+    # the skill loop starved after three more steps. Tools are charged on
+    # tool_used, which is the host reporting a tool it actually ran.
     sess["polls_used"] = int(sess.get("polls_used") or 0) + 1
-    sess["tool_calls_used"] = int(sess.get("tool_calls_used") or 0) + 1
     budget = dict(sess.get("budget") or _BUDGET_PRESETS["small"])
     max_t = int(budget.get("max_tool_calls") or 6)
     max_p = int(budget.get("max_polls") or 4)
@@ -1233,10 +1295,9 @@ def session_end(
         out["issue_repo"] = "zai-one/grok-mcp"
     if sid and sid in _sessions:
         _sessions[sid]["ended"] = True
+        _sessions[sid]["compact"] = False
     return _shrink(out)
 
 
 def reset_sessions_for_tests() -> None:
-    global _compact_session
     _sessions.clear()
-    _compact_session = False
