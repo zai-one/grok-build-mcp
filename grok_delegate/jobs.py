@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 try:
     from . import jobs_store  # type: ignore[no-redef]
@@ -92,6 +92,24 @@ def _persist(record: "dict[str, Any]") -> None:
             jobs_store.evict_on_disk(_JOBS_DIR, max_jobs=MAX_JOBS)
     except Exception:  # noqa: BLE001 — a jobs-dir problem must not fail the lane
         pass
+
+
+def configure_from_env(env: "Mapping[str, str] | None" = None) -> "Path | None":
+    """Point persistence at its configured directory and load what is there.
+
+    Startup calls this, so a poll after a restart answers with the finished
+    job's result instead of JOB_UNKNOWN. Returns the directory in use, or None
+    when the operator disabled persistence.
+    """
+    target = jobs_store.resolve_jobs_dir(env)
+    configure_jobs_dir(target)
+    if target is None:
+        return None
+    try:
+        rehydrate_jobs(target)
+    except Exception:  # noqa: BLE001 — an unreadable jobs dir must not stop the server
+        pass
+    return target
 
 
 def rehydrate_jobs(jobs_dir: str | Path | None = None) -> int:

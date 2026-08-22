@@ -44,6 +44,45 @@ JOB_RECORD_SCHEMA = "grok-job-record.v2"
 
 AliveCheck = Callable[[int], bool]
 
+#: Values of GROK_DELEGATE_JOBS_DIR that mean "keep jobs in memory only".
+#: An empty value is not one of them: unset now means the default below, and an
+#: operator turning persistence off has to say so.
+JOBS_DIR_DISABLED = frozenset({"0", "off", "false", "no", "none", "disabled"})
+
+
+def default_jobs_dir() -> Path:
+    """Per-user state directory for job records.
+
+    Not inside the project, though the lanes are: one server process serves
+    every project the host opens, the registry is process-wide, and rehydration
+    happens at startup before any project root is known. A per-project path
+    would restore whichever project happened to start the server.
+
+    Records hold what a receipt holds, redacted on the way in by
+    ``_serialize_record``; they are capped at MAX_JOB_FILE_BYTES each and
+    evicted down to DEFAULT_MAX_JOBS.
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    else:
+        base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "grok-delegate" / "jobs"
+
+
+def resolve_jobs_dir(env: Mapping[str, str] | None = None) -> Path | None:
+    """Where to persist job records, or None when the operator turned it off.
+
+    Unset used to mean off, which made every default install lose a finished
+    job's result on restart and answer JOB_UNKNOWN for work that was done.
+    """
+    source = env if env is not None else os.environ
+    raw = (source.get("GROK_DELEGATE_JOBS_DIR") or "").strip()
+    if raw and raw.lower() in JOBS_DIR_DISABLED:
+        return None
+    if raw:
+        return Path(raw)
+    return default_jobs_dir()
+
 
 def job_filename(job_id: str) -> str:
     """Stable, filesystem-safe filename for a job id (no path separators)."""
@@ -470,6 +509,9 @@ def _as_float(value: Any, *, default: float = 0.0) -> float:
 
 __all__ = [
     "DEFAULT_MAX_JOBS",
+    "JOBS_DIR_DISABLED",
+    "default_jobs_dir",
+    "resolve_jobs_dir",
     "MAX_JOB_FILE_BYTES",
     "JOB_RECORD_SCHEMA",
     "STATE_DONE",

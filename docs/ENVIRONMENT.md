@@ -60,7 +60,7 @@ defaults are the product.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `GROK_DELEGATE_JOBS_DIR` | unset (memory only) | Persist job records so they survive a restart. |
+| `GROK_DELEGATE_JOBS_DIR` | per-user state dir | Where job records are persisted so a poll after a restart returns the result instead of `JOB_UNKNOWN`. Default `%LOCALAPPDATA%\grok-delegate\jobs` on Windows, `$XDG_STATE_HOME/grok-delegate/jobs` (else `~/.local/state/...`) elsewhere. Set a path to move it, or `off` to keep jobs in memory only. |
 | `GROK_DELEGATE_VERDICTS_DIR` | unset | Where lane verdicts are written. |
 | `GROK_DELEGATE_QUEUE` | unset | Queue file for the unattended lane driver (`python -m grok_delegate.driver`). |
 | `GROK_DELEGATE_LOG_LEVEL` | `INFO` | Server log level. |

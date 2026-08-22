@@ -11,9 +11,24 @@ are not treated as isolation proof.
   artifacts are read back after the agent stops.
 - Consult/skeptic use `read-only`; execute/fix use `workspace`. Role/profile
   mismatches fail closed.
-- Permission requests are deny-by-default. Writes must resolve inside cwd.
-  Reads/searches and writes must resolve inside cwd. Execute permission accepts
-  only an exact packet `test_commands` entry after argv/path validation.
+- Permission requests are deny-by-default. Writes and searches must resolve
+  inside cwd. Execute permission accepts only an exact packet `test_commands`
+  entry after argv/path validation.
+- **Reads are not gated, and the bridge does not claim they are.** The gate can
+  only judge what the CLI asks about, and Grok CLI 1.0.5 does not ask before
+  reading: an instrumented run recorded zero calls to `permission_decision` for
+  reads while the worker opened a `.env` and returned its contents. Neither
+  `--deny Read(*)` nor `--sandbox strict` changed that. The deny list for read
+  paths is kept because another CLI, or another version, may start asking — but
+  it is not a control you can rely on today.
+
+  What protects a secret is therefore the *tree*, not the gate: a lane is a
+  checkout of a git ref, so a gitignored `.env` is not in it, and a read-only
+  role can be pointed at a lane with `review_lane` for the same reason. What a
+  job genuinely needs and git does not carry crosses through `mount_paths`,
+  which refuses credentials by name. On top of that, the outbound redactor
+  removes what it recognises from every receipt — but it recognises secrets by
+  shape, so an unusual one can survive it.
 - `git push`, merge, pull, rebase, reset, clean and checkout are rejected, as
   are destructive filesystem, network and credential-related commands.
 - Generated ACP argv cannot contain `--always-approve` or

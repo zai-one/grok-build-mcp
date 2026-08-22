@@ -28,6 +28,64 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## Unreleased
+
+### A finished job was lost the moment the server restarted
+
+`grok_agent_poll` answered `JOB_UNKNOWN` for work that had completed: the
+worker's answer was on disk in the CLI's transcript, the code was committed to
+the lane branch, and the bridge had no record of either. An orchestrator reading
+that answer scores a success as a failure and does the work again.
+
+The persistence layer was not missing. It has written records atomically,
+rehydrated them tolerantly and downgraded a `running` record from a dead server
+since R7-D -- but only when `GROK_DELEGATE_JOBS_DIR` was set, and nothing set
+it, so in every default install the whole layer was unreachable code.
+
+**Breaking:** job records are now persisted by default, to
+`%LOCALAPPDATA%\grok-delegate\jobs` on Windows and
+`$XDG_STATE_HOME/grok-delegate/jobs` (else `~/.local/state/...`) elsewhere. A
+per-user directory rather than a per-project one because a single server process
+serves every project the host opens and rehydration happens before any project
+root is known. Records hold what a receipt holds, redacted on the way in, capped
+at 1 MB each and evicted to the newest 64. Set `GROK_DELEGATE_JOBS_DIR` to move
+them, or to `off` to keep the previous memory-only behaviour; an empty value now
+means the default rather than "off".
+
+### `tests_skipped_reason: null` claimed the verifier had run when it never started
+
+The schema documents `null` as "the verifier ran and these are its results", and
+thirteen early-return paths -- a cancel before start, a failed diff snapshot, a
+lane that could not be found -- left it null with an empty `tests`. That is
+indistinguishable from a clean verifier pass on a job that never reached
+preflight. Those receipts now report `JOB_ENDED_EARLY`, with `blocked_reason`
+naming the specific cause, and a cancelled job reports `CANCELLED`.
+
+The receipt schema also described ten fields fewer than a receipt carries.
+`ok`, `lane_commit`, `worker_written_files`, `foreign_changed_files`,
+`stop_reason`, `error`, `agent_version` and the three pids are documented now --
+`lane_commit` in particular is the difference between "the work is on a branch"
+and "the work exists only in a worktree".
+
+### The strongest schema check in the suite could skip itself
+
+`test_validates_against_the_real_metaschema` called `skipTest` when `jsonschema`
+was absent, so on any machine without the `[test]` extra the hardest contract in
+the suite silently disappeared and the run was still green. It fails now, naming
+the install command, which is what `scripts/routines.py` already did.
+
+### `docs/SECURITY.md` promised a gate on reads that does not run
+
+The document listed reads beside writes as though both were gated. Grok CLI
+1.0.5 does not ask permission before reading -- an instrumented run recorded
+zero calls to the gate while the worker opened a `.env` and returned its
+contents, and neither `--deny Read(*)` nor `--sandbox strict` changed that.
+AGENTS.md has said so since that measurement; the security document, where a
+reader most needs it, still did not. It now describes what actually protects a
+secret: the lane is built from a git ref, so a gitignored `.env` is not in it.
+
+---
+
 ## 0.26.1 — What the local run could not see
 
 ### A deep frame still killed the reader on 3.10 and 3.13

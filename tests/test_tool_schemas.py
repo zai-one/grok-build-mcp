@@ -144,15 +144,22 @@ class ToolSchemaConformanceTests(unittest.TestCase):
                 )
 
     def test_validates_against_the_real_metaschema(self) -> None:
-        """Strongest check available, when the optional validator is installed.
+        """The strongest schema check there is, and it must not opt out.
 
-        The hand-written assertions above cover the known-fatal spellings and run
-        everywhere with no dependency; this one catches whatever they do not.
+        This used to `skipTest` when jsonschema was absent, which meant the
+        hardest contract in the suite disappeared on exactly the machines that
+        had not installed the test extra -- a green run that had never checked
+        the thing it is named after. `scripts/routines.py` fails on a missing
+        validator; the suite now agrees with it. The dependency is declared in
+        `[project.optional-dependencies].test`, so the message names the cure.
         """
         try:
             from jsonschema.validators import Draft202012Validator
-        except ImportError:  # pragma: no cover - optional test dependency
-            self.skipTest("jsonschema not installed")
+        except ImportError as exc:  # pragma: no cover - depends on the env
+            self.fail(
+                "jsonschema is required to validate the tool schemas: "
+                f"install it with `pip install -e .[test]` ({exc})"
+            )
 
         for tool in self.tools:
             with self.subTest(tool=tool["name"]):

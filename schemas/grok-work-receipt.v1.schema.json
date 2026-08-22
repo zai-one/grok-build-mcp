@@ -179,9 +179,10 @@
         "CANCELLED",
         "NO_CHANGES",
         "NO_TEST_COMMANDS",
+        "JOB_ENDED_EARLY",
         null
       ],
-      "description": "Why tests is empty. null means the verifier ran and these are its results."
+      "description": "Why `tests` is empty. null means the verifier ran and these are its results, so it is never the answer for a job that ended before the verifier: those report JOB_ENDED_EARLY, and `blocked_reason` names the specific cause."
     },
     "mounted_paths": {
       "type": "array",
@@ -223,6 +224,92 @@
         "type": "string"
       },
       "description": "Paths that appeared between the worker finishing and the verifier finishing, so an artifact the test suite wrote is not counted as delivered work."
+    },
+    "ok": {
+      "type": "boolean",
+      "description": "Whether this receipt reports success. Read this, or `status`, rather than the `ok` on the poll envelope, which reports delivery of the record and not the outcome of the job."
+    },
+    "lane_commit": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "What the bridge did with the worker's uncommitted changes after the verifier ran. `committed: false` with a `reason` means the work is in the worktree only.",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "committed": {
+          "type": "boolean"
+        },
+        "sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "worker_written_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Paths the worker itself wrote, before the verifier ran. Compare with `verifier_touched_files`: an expected artifact that appears only there was written by the test run, not delivered."
+    },
+    "foreign_changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Changed paths outside expected_artifacts; drives UNEXPECTED_CHANGED_FILES."
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stop_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "How the agent's turn ended, verbatim from ACP: end_turn, cancelled, max_turns. `cancelled` is not by itself a failure -- turn exhaustion and an output-budget stop both land here, and the verifier still ran."
+    },
+    "agent_version": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Grok CLI version that ran the job."
+    },
+    "agent_pid": {
+      "type": [
+        "integer",
+        "string",
+        "null"
+      ]
+    },
+    "worker_pid": {
+      "type": [
+        "integer",
+        "string",
+        "null"
+      ]
+    },
+    "server_pid": {
+      "type": [
+        "integer",
+        "string",
+        "null"
+      ]
     }
   }
 }

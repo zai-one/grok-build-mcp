@@ -1167,6 +1167,17 @@ def _base_receipt(
         "findings": [],
         "summary": "",
         "blocked_reason": str(blocked_reason) if blocked_reason else None,
+        # A receipt born with a reason is a job that stopped before the verifier
+        # could run, and `tests_skipped_reason: null` is documented to mean the
+        # opposite -- that it ran and had nothing to report. Thirteen early
+        # returns took that default, so an empty `tests` on a lane that never
+        # reached preflight read exactly like a clean verifier pass. The paths
+        # that do run the verifier overwrite this a few lines later.
+        "tests_skipped_reason": (
+            "CANCELLED"
+            if status == "cancelled"
+            else ("JOB_ENDED_EARLY" if blocked_reason else None)
+        ),
         "started_at": started,
         "finished_at": _utc_now(),
     }
