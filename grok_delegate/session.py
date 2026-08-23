@@ -275,6 +275,11 @@ def _session_budget(sess: Mapping[str, Any]) -> dict[str, Any]:
     budget: dict[str, Any] = {
         "max_turns": default_max_turns(),
         "reasoning_effort": default_reasoning_effort(),
+        # The clock belongs here for the same reason the other two do: the card
+        # states it explicitly, so a value invented further down would outrank
+        # the project's own preset. It did -- a `max` project resolving to 3600
+        # got a card carrying 600.
+        "timeout_seconds": ECONOMY_DEFAULT_TIMEOUT_SECONDS,
     }
     root = _session_project_root(sess)
     if not root:
@@ -328,7 +333,6 @@ def _write_task_packet(sess: Mapping[str, Any]) -> dict[str, Any]:
         "expected_artifacts": artifacts,
         "test_commands": tests,
         **_session_budget(sess),
-        "timeout_seconds": ECONOMY_DEFAULT_TIMEOUT_SECONDS,
     }
 
 
@@ -782,8 +786,8 @@ def session_begin(
         "deny_tools": deny,
         "host_script": script,
         "defaults": {
-            **session_defaults,
             "timeout_seconds": ECONOMY_DEFAULT_TIMEOUT_SECONDS,
+            **session_defaults,
         },
         "economy_flags": {
             "economy": True,

@@ -46,9 +46,9 @@ def test_preset_off_is_a_deliberate_no(tmp_path) -> None:
 
 def test_each_preset_carries_its_budget(tmp_path) -> None:
     for preset, expected in (
-        ("cheap", {"reasoning_effort": "low", "max_turns": 12}),
-        ("standard", {"reasoning_effort": "high", "max_turns": 24}),
-        ("max", {"reasoning_effort": "xhigh", "max_turns": 40}),
+        ("cheap", {"reasoning_effort": "low", "max_turns": 12, "timeout_seconds": 1800}),
+        ("standard", {"reasoning_effort": "high", "max_turns": 24, "timeout_seconds": 2400}),
+        ("max", {"reasoning_effort": "xhigh", "max_turns": 40, "timeout_seconds": 3600}),
     ):
         _write(tmp_path, render_config(preset))
         gate = project_gate(tmp_path)
@@ -207,7 +207,7 @@ def test_navigator_defaults_follow_the_project_preset(tmp_path) -> None:
 
     _write(tmp_path, render_config("max"))
     budget = _session_budget({"project_root": str(tmp_path)})
-    assert budget == {"max_turns": 40, "reasoning_effort": "xhigh"}
+    assert budget == {"max_turns": 40, "reasoning_effort": "xhigh", "timeout_seconds": 3600}
 
 
 def test_navigator_falls_back_when_the_project_has_no_config(tmp_path) -> None:
@@ -323,3 +323,94 @@ def test_planning_is_still_allowed_without_a_config(tmp_path) -> None:
         allowed_roots=[root],
     )
     assert out.get("error") != "PROJECT_NOT_ENABLED", out
+
+
+def test_a_preset_that_buys_more_work_also_buys_more_time(tmp_path) -> None:
+    """The clock is part of the budget, and leaving it out made `max` incoherent.
+
+    `max` granted xhigh reasoning and forty turns and then ran them on the same
+    1800 s packet default `cheap` gets for twelve low-effort ones. Measured on a
+    nightly routine over a `max` project: consult jobs dispatched at 02:06 UTC
+    hit the wall near 02:37 and came back `ACP_TIMEOUT` with the answer cut off
+    mid-sentence, on almost every run.
+    """
+    clocks = {}
+    for preset in ("cheap", "standard", "max"):
+        _write(tmp_path, render_config(preset))
+        clocks[preset] = project_gate(tmp_path)["budget"]["timeout_seconds"]
+
+    assert clocks["cheap"] <= clocks["standard"] < clocks["max"], clocks
+    assert clocks["max"] == 3600, "the hardest preset must reach the packet ceiling"
+    assert clocks["cheap"] >= 1800, (
+        "lowering an existing allowance fixes nothing and cuts short a job that used to fit"
+    )
+
+
+def test_the_preset_clock_reaches_the_packet_and_the_task_still_wins(tmp_path) -> None:
+    """A budget nobody applies is decoration; a budget nobody can override is a cage."""
+    from grok_delegate.contracts import validate_task_packet
+
+    _write(tmp_path, render_config("max"))
+    base = {
+        "objective": "find defects, read only",
+        "role": "consult",
+        "project_root": str(tmp_path),
+        "correlation_id": "nightly-cycle",
+    }
+
+    _, resolved = _apply_project_gate(base)
+    task = validate_task_packet(resolved, allowed_roots=[tmp_path])
+    assert task["timeout_seconds"] == 3600, "the preset clock never reached the packet"
+
+    _, resolved = _apply_project_gate({**base, "timeout_seconds": 300})
+    task = validate_task_packet(resolved, allowed_roots=[tmp_path])
+    assert task["timeout_seconds"] == 300, "an explicit task value must still win"
+
+
+def test_a_project_may_state_its_own_clock(tmp_path) -> None:
+    _write(tmp_path, json.dumps({"preset": "cheap", "timeout_seconds": 600}))
+    assert project_gate(tmp_path)["budget"]["timeout_seconds"] == 600
+
+    _write(tmp_path, json.dumps({"preset": "cheap", "timeout_seconds": 99_999}))
+    try:
+        project_gate(tmp_path)
+    except GuardError as exc:
+        assert exc.code == "PROJECT_CONFIG_INVALID"
+    else:
+        raise AssertionError("a clock past the packet ceiling was accepted")
+
+
+def test_the_execute_card_does_not_override_the_clock_it_just_read(tmp_path) -> None:
+    """`_session_budget` exists so a card cannot quietly downgrade the preset.
+
+    It read the preset and then the card hardcoded `timeout_seconds` on the line
+    below the spread, so a `max` project resolving to 3600 s handed the host a
+    card carrying 600 -- a third of what the same job would have got by saying
+    nothing at all. On the navigator path, which is the cycle the skill
+    prescribes.
+    """
+    import subprocess
+
+    from grok_delegate import session as session_module
+
+    for preset, expected in (("max", 3600), ("standard", 2400), ("cheap", 1800)):
+        root = tmp_path / preset
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        _write(root, render_config(preset))
+        session_module.reset_sessions_for_tests()
+        begin = session_module.session_begin(
+            goal="write a new parser",
+            intent="execute",
+            host_budget="small",
+            project_root=str(root),
+            allowed_roots=[root],
+        )
+        card = session_module.session_next(session_id=begin["session_id"]).get("card") or {}
+        task = (card.get("args") or {}).get("task") or {}
+        assert task, f"no execute card for preset {preset}"
+        assert task["timeout_seconds"] == expected, (
+            f"preset {preset} resolves to {expected}s but its card carries "
+            f"{task['timeout_seconds']}s"
+        )
+    session_module.reset_sessions_for_tests()

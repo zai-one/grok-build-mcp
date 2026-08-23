@@ -24,11 +24,22 @@ CONFIG_FILENAME = ".grok-mcp.json"
 
 #: Preset name -> budget the worker runs under. ``off`` carries no budget
 #: because it never reaches the worker.
+#:
+#: The clock is part of the budget, and leaving it out made the preset
+#: incoherent: `max` bought xhigh reasoning and forty turns, then ran them on
+#: the same 1800 s packet default that `cheap` gets for twelve low-effort ones.
+#: Measured on a nightly routine over a `max` project -- consult jobs dispatched
+#: at 02:06 hit the wall near 02:37 and came back ACP_TIMEOUT with the answer
+#: cut mid-sentence, on almost every run.
+#:
+#: Upward only. Dropping `cheap` below the old default would fix nothing and
+#: could cut short a job that used to fit; twelve low-effort turns do not
+#: approach half an hour in the first place.
 PRESETS: dict[str, dict[str, Any]] = {
     "off": {},
-    "cheap": {"reasoning_effort": "low", "max_turns": 12},
-    "standard": {"reasoning_effort": "high", "max_turns": 24},
-    "max": {"reasoning_effort": "xhigh", "max_turns": 40},
+    "cheap": {"reasoning_effort": "low", "max_turns": 12, "timeout_seconds": 1800},
+    "standard": {"reasoning_effort": "high", "max_turns": 24, "timeout_seconds": 2400},
+    "max": {"reasoning_effort": "xhigh", "max_turns": 40, "timeout_seconds": 3600},
 }
 
 PRESET_DESCRIPTIONS: dict[str, str] = {
@@ -38,7 +49,9 @@ PRESET_DESCRIPTIONS: dict[str, str] = {
     "max": "Hardest work on the worker so the host spends the fewest tokens.",
 }
 
-_ALLOWED_KEYS = frozenset({"preset", "model", "reasoning_effort", "max_turns", "note", "$schema"})
+_ALLOWED_KEYS = frozenset(
+    {"preset", "model", "reasoning_effort", "max_turns", "timeout_seconds", "note", "$schema"}
+)
 
 
 def config_path(project_root: Path | str) -> Path:
@@ -103,6 +116,17 @@ def validate_project_config(value: Mapping[str, Any]) -> dict[str, Any]:
         if not 1 <= turns <= 60:
             raise GuardError("PROJECT_CONFIG_INVALID", "max_turns must be between 1 and 60")
         budget["max_turns"] = turns
+    if "timeout_seconds" in value and value["timeout_seconds"] is not None:
+        seconds = value["timeout_seconds"]
+        if not isinstance(seconds, int) or isinstance(seconds, bool):
+            raise GuardError("PROJECT_CONFIG_INVALID", "timeout_seconds must be an integer")
+        # The same bound the task packet enforces, so a config cannot promise a
+        # clock the packet will refuse.
+        if not 1 <= seconds <= 3600:
+            raise GuardError(
+                "PROJECT_CONFIG_INVALID", "timeout_seconds must be between 1 and 3600"
+            )
+        budget["timeout_seconds"] = seconds
 
     if preset == "off" and budget:
         # A budget under `off` is a contradiction the operator should see, not a

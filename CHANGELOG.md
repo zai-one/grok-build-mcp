@@ -28,6 +28,44 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.30.0 — The preset buys the time it asks for
+
+Found by reading what an operator's nightly routines actually got back from the
+bridge, rather than by looking for it in the code.
+
+### `max` asked for the hardest work and gave it the shortest clock
+
+A preset sets `reasoning_effort` and `max_turns` and set nothing else, so `max`
+bought xhigh reasoning and forty turns and then ran them on the same 1800 s
+packet default that `cheap` gets for twelve low-effort ones. Measured on a
+nightly routine over a `max` project: consult jobs dispatched at 02:06 UTC hit
+the wall around 02:37 and came back `ACP_TIMEOUT` -- "timeout during
+session/prompt" -- with the answer cut off mid-sentence inside its second
+finding. Five such losses in one day, on almost every run.
+
+The clock is part of the budget now: `cheap` 1800 s, `standard` 2400 s, `max`
+3600 s, and a project may state `timeout_seconds` in `.grok-mcp.json` the way it
+can already state `max_turns`. An explicit value in the task still wins over
+both.
+
+Upward only. Dropping `cheap` below the old default would fix nothing and could
+cut short a job that used to fit, and twelve low-effort turns do not approach
+half an hour in the first place.
+
+### ...and the navigator card then overrode the preset it had just read
+
+`_session_budget` exists, by its own docstring, so that a card cannot "quietly
+override the very preset the project chose" -- and the execute card spread that
+budget and hardcoded `timeout_seconds` on the line below it. A project on `max`
+resolving to 3600 s handed the host a card carrying **600**: a third of what the
+same job would have got by saying nothing at all, on the cheap cycle the skill
+prescribes as the main path.
+
+The card takes the clock from the budget now. A project with no config still
+gets the economy default of 600 s, unchanged.
+
+---
+
 ## 0.29.0 — What 0.27.0 promised, on the path it is actually used
 
 A Grok audit read this bridge, a second pass checked every one of its claims
