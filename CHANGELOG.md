@@ -28,6 +28,30 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.30.1 — The test, not the bridge
+
+0.30.0's own CI went red on both matrix rows. The bridge is unchanged; two tests
+were wrong.
+
+### A test drove the navigator and only passed where a worker was installed
+
+`test_the_execute_card_does_not_override_the_clock_it_just_read` called
+`session_begin` and took the first card, and which card the navigator offers
+first depends on the gate: with no Grok CLI and no login the first card is not
+the execute one. It passed on the machine that wrote it and failed on
+ubuntu-3.13 and windows-3.10 alike. It calls the packet builder directly now,
+and still fails when the fix it guards is reverted.
+
+### A live HTTP test aborted mid-read under load
+
+`test_a_post_without_content_type_cannot_reach_the_tools` reads the body of a
+415 whose connection the server then closes, and on a loaded Windows machine
+that read has aborted with `ConnectionAbortedError [WinError 10053]` -- once in
+three full-suite runs, never in isolation. The request is retried once; a real
+regression fails both attempts, and the assertions are untouched.
+
+---
+
 ## 0.30.0 — The preset buys the time it asks for
 
 Found by reading what an operator's nightly routines actually got back from the

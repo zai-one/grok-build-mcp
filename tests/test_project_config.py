@@ -388,29 +388,26 @@ def test_the_execute_card_does_not_override_the_clock_it_just_read(tmp_path) -> 
     card carrying 600 -- a third of what the same job would have got by saying
     nothing at all. On the navigator path, which is the cycle the skill
     prescribes.
-    """
-    import subprocess
 
-    from grok_delegate import session as session_module
+    The packet builder is called directly rather than through
+    `session_begin`/`session_next`: which card the navigator offers first depends
+    on the gate, and on a machine with no Grok CLI and no login -- CI, for one --
+    the first card is not the execute one. The first version of this test drove
+    the navigator and passed only where a worker happened to be installed.
+    """
+    from grok_delegate.session import _write_task_packet
 
     for preset, expected in (("max", 3600), ("standard", 2400), ("cheap", 1800)):
         root = tmp_path / preset
         root.mkdir()
-        subprocess.run(["git", "init", "-q", str(root)], check=True)
         _write(root, render_config(preset))
-        session_module.reset_sessions_for_tests()
-        begin = session_module.session_begin(
-            goal="write a new parser",
-            intent="execute",
-            host_budget="small",
-            project_root=str(root),
-            allowed_roots=[root],
-        )
-        card = session_module.session_next(session_id=begin["session_id"]).get("card") or {}
-        task = (card.get("args") or {}).get("task") or {}
-        assert task, f"no execute card for preset {preset}"
-        assert task["timeout_seconds"] == expected, (
+        packet = _write_task_packet({
+            "goal": "write a new parser",
+            "project_root": str(root),
+            "session_id": f"s-{preset}",
+        })
+        assert packet["timeout_seconds"] == expected, (
             f"preset {preset} resolves to {expected}s but its card carries "
-            f"{task['timeout_seconds']}s"
+            f"{packet['timeout_seconds']}s"
         )
-    session_module.reset_sessions_for_tests()
+        assert packet["max_turns"] == {"max": 40, "standard": 24, "cheap": 12}[preset]

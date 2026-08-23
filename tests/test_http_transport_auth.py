@@ -137,23 +137,36 @@ def test_a_post_without_content_type_cannot_reach_the_tools(server: str) -> None
     from urllib.parse import urlparse
 
     parsed = urlparse(server)
-    conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=10)
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode("utf-8")
+
+    def ask() -> tuple[int, str]:
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=10)
+        try:
+            conn.request(
+                "POST",
+                "/mcp",
+                body=body,
+                headers={
+                    "Authorization": f"Bearer {TOKEN}",
+                    "Content-Length": str(len(body)),
+                },
+            )
+            response = conn.getresponse()
+            return response.status, response.read().decode("utf-8")
+        finally:
+            conn.close()
+
+    # The server answers 415 and closes, and reading that body under a loaded
+    # machine has aborted mid-read on Windows: `ConnectionAbortedError [WinError
+    # 10053]`, once in three full-suite runs and never in isolation. One retry,
+    # because a real regression fails both attempts while a dropped socket does
+    # not -- and the assertions below are untouched.
     try:
-        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}).encode("utf-8")
-        conn.request(
-            "POST",
-            "/mcp",
-            body=body,
-            headers={
-                "Authorization": f"Bearer {TOKEN}",
-                "Content-Length": str(len(body)),
-            },
-        )
-        response = conn.getresponse()
-        payload = response.read().decode("utf-8")
-    finally:
-        conn.close()
-    assert response.status == HTTPStatus.UNSUPPORTED_MEDIA_TYPE
+        status, payload = ask()
+    except (ConnectionAbortedError, ConnectionResetError):
+        status, payload = ask()
+
+    assert status == HTTPStatus.UNSUPPORTED_MEDIA_TYPE
     assert "content_type_must_be_json" in payload
 
 
