@@ -97,16 +97,30 @@ class ConcurrencyCeilingTests(unittest.TestCase):
             _CONCURRENCY_CEILING, 4, "a host cannot have a fleet under this ceiling"
         )
 
-    def test_the_default_is_still_one(self) -> None:
-        """A lane is unmerged work; several at once is a decision, not a default."""
+    def test_the_default_is_sized_to_the_machine_not_pinned_at_one(self) -> None:
+        """Pinning it at one was argued from a premise that misses the usage.
+
+        "A lane is unmerged work someone reviews" holds for execute and fix. It
+        does not hold for consult and review, which never prepare a worktree --
+        `agent_runtime` says so itself -- so there is no branch and no git
+        contention, and those are most of what a host dispatches. Serialising
+        them cost an operator six jobs over forty minutes with one of them run.
+        """
         from grok_delegate import agent_runtime
 
-        self.assertEqual(
-            max(1, min(int("1"), _CONCURRENCY_CEILING)),
-            1,
-            "the default must not change when the ceiling does",
-        )
-        self.assertGreaterEqual(agent_runtime._MAX_QUEUED, 1)
+        for cores, expected in ((28, 4), (16, 4), (8, 4), (4, 2), (2, 1), (1, 1)):
+            with self.subTest(cores=cores):
+                self.assertEqual(
+                    max(1, min(4, cores // 2)),
+                    expected,
+                    "a two-core laptop must still get one worker",
+                )
+        self.assertGreaterEqual(agent_runtime._default_concurrency(), 1)
+        self.assertLessEqual(agent_runtime._default_concurrency(), 4)
+
+    def test_an_operator_can_still_pin_it_to_one(self) -> None:
+        """The old behaviour has to remain reachable, exactly."""
+        self.assertEqual(max(1, min(int("1"), _CONCURRENCY_CEILING)), 1)
 
 
 if __name__ == "__main__":

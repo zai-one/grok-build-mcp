@@ -44,20 +44,40 @@ from .runner import (
     worktree_path_for_lane,
 )
 
-#: How many jobs may run at once, and the most an operator may ask for.
+#: How many jobs may run at once, the most an operator may ask for, and what
+#: the bridge picks when nobody says.
 #:
-#: The default stays one: a lane is unmerged work someone has to review, and
-#: several at a time is a decision, not an accident. The ceiling was 2 from the
-#: first commit with nothing written down about why, so a host that wanted a
-#: fleet could not have one at any setting. Measured before raising it, on a
-#: 28-core Windows box: four read-only jobs at concurrency=4 finish in 15 s wall
-#: clock against 13.7 / 30.8 / 95.0 s serialised, and four write jobs each
-#: preparing its own worktree ran together in 124 s with every artifact
-#: produced. Eight is a ceiling rather than a recommendation -- each job is a
-#: CLI process of its own, and the operator sizes it to the machine.
+#: The ceiling was 2 from the first commit with nothing written down about why,
+#: so a host that wanted a fleet could not have one at any setting. Measured on
+#: a 28-core Windows box before raising it: four read-only jobs at concurrency 4
+#: finish in 15 s of wall clock against 13.7 / 30.8 / 95.0 s serialised, and
+#: four write jobs each preparing its own worktree ran together in 124 s with
+#: every artifact produced.
+#:
+#: The default was then 1 for one round, argued from "a lane is unmerged work
+#: someone has to review". That holds for `execute` and `fix`. It does not hold
+#: for `consult` and `review`, which never prepare a worktree at all -- no
+#: branch, nothing to merge, no git contention -- and those are most of what a
+#: host actually dispatches. Serialising them bought nothing and cost an
+#: operator six jobs over forty minutes with one of them run.
+#:
+#: Sized to the machine rather than pinned: half the cores, at most four, at
+#: least one. Each job is a CLI process of its own, so a two-core laptop still
+#: gets one. `GROK_DELEGATE_CONCURRENCY=1` restores the old behaviour exactly.
 _CONCURRENCY_CEILING = 8
+
+
+def _default_concurrency() -> int:
+    cores = os.cpu_count() or 2
+    return max(1, min(4, cores // 2))
+
+
 _CONCURRENCY = max(
-    1, min(int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "1") or "1"), _CONCURRENCY_CEILING)
+    1,
+    min(
+        int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "") or _default_concurrency()),
+        _CONCURRENCY_CEILING,
+    ),
 )
 _MAX_QUEUED = max(1, min(int(os.environ.get("GROK_DELEGATE_MAX_QUEUED", "8") or "8"), 32))
 _EXECUTOR = ThreadPoolExecutor(max_workers=_CONCURRENCY, thread_name_prefix="grok-agent")

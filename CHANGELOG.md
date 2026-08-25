@@ -28,6 +28,29 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.33.0 — Read-only work stops queueing behind itself
+
+0.31.0 raised the concurrency ceiling to 8 and left the default at 1, arguing
+that a lane is unmerged work somebody has to review and a fleet is a decision an
+operator makes. That holds for `execute` and `fix`. It does not hold for
+`consult` and `review`: `agent_runtime` never prepares a worktree for a
+read-only role -- its own comment says "Read-only, and never creating one" -- so
+there is no branch, nothing to merge and no git contention. And those two are
+most of what a host dispatches.
+
+The operator's report from the other side of that decision: six jobs over forty
+minutes, one of them run, five still queued when they cancelled them. Measured
+here: four read-only jobs at concurrency 4 finish in 15 s of wall clock against
+13.7 / 30.8 / 95.0 s serialised.
+
+**Breaking:** `GROK_DELEGATE_CONCURRENCY` now defaults to half the machine's
+cores, at most four and at least one, rather than to 1. A two-core laptop still
+gets one worker; a big box gets four. Each job is a CLI process of its own, so
+the ceiling of 8 remains a ceiling rather than a recommendation, and
+`GROK_DELEGATE_CONCURRENCY=1` restores the strictly serial behaviour exactly.
+
+---
+
 ## 0.32.0 — Let it take as long as it takes
 
 The operator's design, in their words: let the worker answer for as long as it
