@@ -410,6 +410,7 @@ class StdioACPTransport:
         output_limited: str | None = None
         tool_output_seen: dict[str, int] = {}
         denied_tool_calls = 0
+        turns = [0]
         malformed = 0
         request_id = 0
         cancelled = False
@@ -590,6 +591,7 @@ class StdioACPTransport:
                         text_chunks=text_chunks if keep_text else [],
                         tests=tests,
                         tool_state=tool_state,
+                        turns=turns,
                     )
                     compact = _compact_session_update(update)
                     if compact is not None:
@@ -683,6 +685,7 @@ class StdioACPTransport:
                 "stop_reason": stop_reason,
                 "worker_written_files": sorted(written),
                 "denied_tool_calls": denied_tool_calls,
+                "tool_calls_made": turns[0],
                 "summary": _redact_text("".join(text_chunks))[:16_000],
                 "tests": tests,
                 "events": events,
@@ -720,6 +723,7 @@ class StdioACPTransport:
                 # reads as "the worker wrote nothing".
                 "worker_written_files": sorted(written),
                 "denied_tool_calls": denied_tool_calls,
+                "tool_calls_made": turns[0],
                 "summary": _redact_text("".join(text_chunks))[:16_000],
                 "tests": tests,
                 "events": events,
@@ -932,6 +936,7 @@ class WebSocketACPTransport:
         output_limited: str | None = None
         tool_output_seen: dict[str, int] = {}
         denied_tool_calls = 0
+        turns = [0]
         malformed = 0
         cancelled = False
         cancel_deadline: float | None = None
@@ -1116,6 +1121,7 @@ class WebSocketACPTransport:
                         text_chunks=text_chunks if keep_text else [],
                         tests=tests,
                         tool_state=tool_state,
+                        turns=turns,
                     )
                     compact = _compact_session_update(update)
                     if compact is not None:
@@ -1178,6 +1184,7 @@ class WebSocketACPTransport:
                 "status": status, "session_id": session_id, "stop_reason": stop_reason,
                 "worker_written_files": sorted(written),
                 "denied_tool_calls": denied_tool_calls,
+                "tool_calls_made": turns[0],
                 "summary": _redact_text("".join(text_chunks))[:16_000], "tests": tests, "events": events,
                 "agent_version": agent_version, "worker_pid": worker_pid, "agent_pid": worker_pid,
                 "started_at": started, "finished_at": _utc_now(),
@@ -1204,6 +1211,7 @@ class WebSocketACPTransport:
                 ),
                 "session_id": session_id, "worker_written_files": sorted(written),
                 "denied_tool_calls": denied_tool_calls,
+                "tool_calls_made": turns[0],
                 "summary": _redact_text("".join(text_chunks))[:16_000],
                 "tests": tests, "events": events, "worker_pid": worker_pid, "agent_pid": worker_pid,
                 "started_at": started, "finished_at": _utc_now(), "blocked_reason": exc.code,
@@ -1936,6 +1944,7 @@ def _consume_update(
     text_chunks: list[str],
     tests: list[dict[str, Any]],
     tool_state: dict[str, dict[str, Any]],
+    turns: "list[int] | None" = None,
 ) -> None:
     kind = str(update.get("sessionUpdate") or "")
     if kind == "agent_message_chunk":
@@ -1948,6 +1957,14 @@ def _consume_update(
         # Bounded: a stream inventing a new toolCallId per frame would otherwise
         # grow this dictionary for as long as the wire backstop allows, which is
         # 64x the output cap.
+        # How many tool calls the agent opened before it stopped. Measured
+        # against the packet: a job asking for max_turns=2 made seven of these
+        # and still completed, so a tool call is NOT an ACP turn and the two
+        # must not be compared -- the count is diagnostic on its own. It is a
+        # counter rather than len(tool_state) because that dict is capped and
+        # evicts.
+        if turns is not None and tool_id not in tool_state:
+            turns[0] += 1
         if len(tool_state) >= _TOOL_STATE_MAX and tool_id not in tool_state:
             tool_state.pop(next(iter(tool_state)), None)
         tool_state[tool_id] = dict(update)

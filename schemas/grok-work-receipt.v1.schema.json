@@ -310,6 +310,20 @@
         "string",
         "null"
       ]
+    },
+    "stop_detail": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Why a turn that ended as ACP_STOP_cancelled ended. That code covers an operator's cancel and a turn the CLI ended after the bridge refused a permission request or could not run a declared test command -- things a host acts on differently. One of permission_refused, test_command_<reason>, or null when the cancel has no further explanation."
+    },
+    "tool_calls_made": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "How many tool calls the agent opened before the turn ended. Diagnostic only: measured against the packet, a job asking for max_turns=2 made seven of these and completed, so a tool call is not an ACP turn and the two must not be compared."
     }
   }
 }

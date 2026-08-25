@@ -28,6 +28,56 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.31.0 — A fleet is allowed, and a cancel says why
+
+An operator reported three measured symptoms: `QUEUE_FULL` at concurrency 1,
+wide packets dying on `ACP_TIMEOUT`, and a parallel launch killing the previous
+job with `ACP_STOP_cancelled`, three times out of three. Two of those are real
+and one is a misreading the bridge invited.
+
+### `GROK_DELEGATE_CONCURRENCY` was clamped to two, since the first commit
+
+`min(..., 2)`, no comment, no measurement -- so a host that asked for eight
+workers got two, and any batch it dispatched became a queue behind one worker,
+with `QUEUE_FULL` at the tenth call. Measured before changing it, on a 28-core
+Windows box: four read-only jobs at concurrency 4 finish in **15 s** of wall
+clock, where three at concurrency 1 took 13.7, 30.8 and 95.0 seconds -- the last
+one mostly waiting. Four write jobs, each preparing its own worktree, ran
+together in 124 s with every artifact produced.
+
+The ceiling is 8 now. **The default is still 1**: a lane is unmerged work
+somebody has to review, and several at a time is a decision an operator makes,
+not one the bridge makes for them. Eight is a ceiling rather than a
+recommendation -- each job is a CLI process of its own.
+
+### `ACP_STOP_cancelled` was three different things wearing one name
+
+An operator's cancel, a worker that ran out of turns, and a turn the CLI ended
+because the bridge refused a permission request all arrive under that code, and
+a host has to act on them differently.
+
+Reproduced while investigating the report: a **single** execute job -- no
+parallelism anywhere -- came back `cancelled` with its artifact written, because
+its declared test command failed argv validation, the CLI ended the turn on the
+refusal, and the only trace of the cause was `tests[0].not_run_reason` several
+levels down. That is why a parallel launch looked like it was killing its
+neighbours: the receipt gave no way to tell what had actually stopped each one.
+
+Receipts carry `stop_detail` now, and it names the cause from evidence the
+receipt already had: `permission_refused: <n> call(s)`,
+`test_command_<reason>: <command>`, or null when a cancel genuinely has no
+further explanation. It never contradicts `blocked_reason` -- it explains it.
+
+They also carry `tool_calls_made`, which is new: `turns_used` had been declared
+in the audit record since it was written and never once computed, so nothing
+could say how much work a stopped job had done. It is diagnostic only, and
+deliberately not compared to `max_turns` -- measured on a live job, a packet
+asking for two turns produced seven tool calls and completed, so the two are not
+the same thing and a branch guessing at exhaustion from them was dropped rather
+than shipped.
+
+---
+
 ## 0.30.1 — The test, not the bridge
 
 0.30.0's own CI went red on both matrix rows. The bridge is unchanged; two tests

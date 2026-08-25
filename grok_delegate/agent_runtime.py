@@ -44,7 +44,21 @@ from .runner import (
     worktree_path_for_lane,
 )
 
-_CONCURRENCY = max(1, min(int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "1") or "1"), 2))
+#: How many jobs may run at once, and the most an operator may ask for.
+#:
+#: The default stays one: a lane is unmerged work someone has to review, and
+#: several at a time is a decision, not an accident. The ceiling was 2 from the
+#: first commit with nothing written down about why, so a host that wanted a
+#: fleet could not have one at any setting. Measured before raising it, on a
+#: 28-core Windows box: four read-only jobs at concurrency=4 finish in 15 s wall
+#: clock against 13.7 / 30.8 / 95.0 s serialised, and four write jobs each
+#: preparing its own worktree ran together in 124 s with every artifact
+#: produced. Eight is a ceiling rather than a recommendation -- each job is a
+#: CLI process of its own, and the operator sizes it to the machine.
+_CONCURRENCY_CEILING = 8
+_CONCURRENCY = max(
+    1, min(int(os.environ.get("GROK_DELEGATE_CONCURRENCY", "1") or "1"), _CONCURRENCY_CEILING)
+)
 _MAX_QUEUED = max(1, min(int(os.environ.get("GROK_DELEGATE_MAX_QUEUED", "8") or "8"), 32))
 _EXECUTOR = ThreadPoolExecutor(max_workers=_CONCURRENCY, thread_name_prefix="grok-agent")
 _ADMISSION = threading.BoundedSemaphore(_CONCURRENCY + _MAX_QUEUED)
@@ -601,9 +615,16 @@ def run_task(
                     "summary": redact_text(str(result.get("summary") or "")),
                     "tests": verified_tests,
                     "tests_skipped_reason": tests_skipped,
+                    # `ACP_STOP_cancelled` alone cannot say whether the operator
+                    # cancelled, the worker ran out of turns, or the CLI ended
+                    # the turn because the gate refused something.
+                    "stop_detail": stop_detail(
+                        {**result, "tests": verified_tests, "max_turns": task.get("max_turns")}
+                    ),
                     "artifacts": _present_artifacts(cwd, task),
                     "output_truncated": bool(result.get("output_truncated")),
                     "output_payload_bytes": result.get("output_payload_bytes"),
+            "tool_calls_made": result.get("tool_calls_made"),
                     "output_cap_bytes": result.get("output_cap_bytes"),
                 }
             )
@@ -759,6 +780,11 @@ def run_task(
             "unified_diff": diff.get("unified_diff") or "",
             "tests": verified_tests,
             "tests_skipped_reason": tests_skipped,
+            # See stop_detail: the one field that separates a cancel from turn
+            # exhaustion from a refusal the CLI turned into a cancel.
+            "stop_detail": stop_detail(
+                {**result, "tests": verified_tests, "max_turns": task.get("max_turns")}
+            ),
             "verifier_touched_files": verifier_touched,
             # Paths the permission gate actually let the worker write. Anything
             # else that moved in the tree belongs to somebody else -- another
@@ -777,6 +803,7 @@ def run_task(
             # the adapter's own return value.
             "output_truncated": bool(result.get("output_truncated")),
             "output_payload_bytes": result.get("output_payload_bytes"),
+                    "tool_calls_made": result.get("tool_calls_made"),
             "output_cap_bytes": result.get("output_cap_bytes"),
             "agent_version": result.get("agent_version"),
             "server_pid": os.getpid(),
@@ -1141,6 +1168,45 @@ def _run_owned_process(
         "cancelled": cancelled, "output_limited": output_limited.is_set(),
         "spawn_seconds": spawn_seconds,
     }
+
+
+def stop_detail(result: "Mapping[str, Any]") -> str | None:
+    """Why the turn ended, when `blocked_reason` cannot say.
+
+    `ACP_STOP_cancelled` covers an operator's cancel, a worker that ran out of
+    turns, and a turn the CLI ended after the bridge refused a permission
+    request -- three things a host has to act on differently. Reproduced: a
+    single execute job whose declared test command failed argv validation came
+    back `cancelled` with the artifact written, and the only trace of the cause
+    was `tests[0].not_run_reason: invalid_command`.
+
+    This reads the evidence the receipt already carries and names the cause in
+    one field. It never contradicts `blocked_reason`; it explains it.
+    """
+    if str(result.get("blocked_reason") or "") != "ACP_STOP_cancelled":
+        return None
+    # An integer, not a list: `acp.py` counts refusals rather than collecting
+    # them, and reading it as a list made this branch dead on arrival.
+    denied = result.get("denied_tool_calls")
+    if isinstance(denied, bool):
+        denied = None
+    if isinstance(denied, int) and denied > 0:
+        return f"permission_refused: {denied} call(s)"
+    if isinstance(denied, list) and denied:
+        first = denied[0]
+        what = first.get("command") if isinstance(first, Mapping) else None
+        return f"permission_refused: {str(what)[:120]}" if what else "permission_refused"
+    for row in result.get("tests") or []:
+        if not isinstance(row, Mapping):
+            continue
+        reason = str(row.get("not_run_reason") or "")
+        if reason and reason != "ok":
+            return f"test_command_{reason}: {str(row.get('command') or '')[:120]}"
+    # No turn-exhaustion branch on purpose. The bridge can count the tool calls
+    # an agent opened, and measurement says that is not an ACP turn: a job with
+    # max_turns=2 made seven tool calls and completed. Comparing them would put
+    # a confident wrong reason where there is honestly none.
+    return None
 
 
 def _base_receipt(
