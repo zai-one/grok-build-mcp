@@ -30,6 +30,7 @@ defaults are the product.
 | `GROK_DELEGATE_SANDBOX` | per profile | Overrides the CLI sandbox profile the bridge asks for. |
 | `GROK_DELEGATE_BIN` | `grok` | Which Grok CLI to run. A client can never choose this. |
 | `GROK_DELEGATE_EXPECTED_AGENT_VERSION` | unset (unpinned) | Opt-in CLI version check. A mismatch is a warning, never a refusal. |
+| `GROK_DELEGATE_POLL_WAIT_SECONDS` | `0` | How long a navigator poll card asks the bridge to wait before answering, up to 1800. `grok_agent_poll` blocks until the job is terminal and emits `notifications/progress` while it waits, which is how a host follows a long job instead of checking once. Off by default: a blocking call is only safe when the host's own request timeout is longer than the block. |
 | `GROK_DELEGATE_CONCURRENCY` | `1` | Jobs in flight at once, capped at 8. The default stays one because a lane is unmerged work someone has to review; raise it when you want a fleet and the machine can hold one (each job is a CLI process of its own). Measured: four read-only jobs at 4 finish in 15 s where three at 1 took 13.7 / 30.8 / 95.0 s. |
 | `GROK_DELEGATE_MAX_QUEUED` | `8` | Jobs allowed to wait, capped at 32. |
 

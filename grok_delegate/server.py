@@ -444,7 +444,7 @@ _TASK_PACKET_PROPERTIES: dict[str, Any] = {
     "reasoning_effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"]},
     "permission_profile": {"type": "string", "enum": ["read-only", "workspace"]},
     "max_turns": {"type": "integer", "minimum": 1, "maximum": 60},
-    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
     "inputs": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
     "constraints": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},
     "acceptance_criteria": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 2000}},

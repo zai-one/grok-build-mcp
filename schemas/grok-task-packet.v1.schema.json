@@ -71,8 +71,9 @@
     "timeout_seconds": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 3600,
-      "default": 1800
+      "maximum": 86400,
+      "default": 1800,
+      "description": "Wall clock the job may take. A backstop rather than a budget: the bridge returns a job id and the host polls, so a long job is a normal job. Default 1800; presets give 1800 / 2400 / 3600."
     },
     "inputs": {
       "$ref": "#/$defs/boundedStringArray"

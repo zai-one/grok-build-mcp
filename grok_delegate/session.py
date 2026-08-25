@@ -146,6 +146,11 @@ _DENY_BY_MODE: dict[str, list[str]] = {
     "feedback": ["grok_agent_execute", "grok_agent_fix", "grok_agent_start"],
 }
 
+#: Mirrors server.MAX_POLL_WAIT_SECONDS. Imported lazily there and duplicated
+#: here rather than imported, because session.py must not depend on server.py --
+#: server.py already imports this module.
+_POLL_WAIT_CEILING = 1800
+
 _sessions: dict[str, dict[str, Any]] = {}
 
 
@@ -346,12 +351,44 @@ def _read_task_packet(sess: Mapping[str, Any], *, role: str) -> dict[str, Any]:
     }
 
 
+def poll_wait_seconds(env: "Mapping[str, str] | None" = None) -> int:
+    """How long a navigator poll card asks the bridge to wait. 0 keeps the
+    check-once behaviour every host has had until now.
+
+    Bounded by the tool's own maximum so a card can never ask for something the
+    schema refuses.
+    """
+    source = env if env is not None else os.environ
+    raw = str(source.get("GROK_DELEGATE_POLL_WAIT_SECONDS", "") or "").strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return max(0, min(value, _POLL_WAIT_CEILING))
+
+
 def compile_card_args(tool: str, sess: Mapping[str, Any], step: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Build typed MCP arguments for a navigator card. Poll never gets session_id."""
     step = step or {}
     if tool in {"grok_agent_poll", "grok_agent_cancel"}:
         jid = str(sess.get("job_id") or "").strip()
-        return {"job_id": jid} if jid else {}
+        if not jid:
+            return {}
+        args: dict[str, Any] = {"job_id": jid}
+        wait = poll_wait_seconds()
+        if tool == "grok_agent_poll" and wait:
+            # `grok_agent_poll` can block until the job is terminal and emit
+            # notifications/progress while it waits -- the shape a host needs to
+            # follow a long job instead of checking once and wandering off.
+            # Measured on a nightly routine that did the latter: the job died at
+            # 02:37 and the host found out at 02:57. Off unless an operator asks
+            # for it, because a blocking call is only safe when the host's own
+            # request timeout is longer than the block, and that number is the
+            # host's to know.
+            args["wait_seconds"] = wait
+        return args
     if tool in {"grok_agent_execute", "grok_agent_fix"}:
         return {"task": _write_task_packet(sess)}
     if tool == "grok_agent_consult":

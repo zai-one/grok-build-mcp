@@ -34,6 +34,12 @@ PERMISSION_PROFILES = frozenset({"read-only", "workspace"})
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 MAX_OBJECTIVE = 12_000
+
+#: Longest wall clock a task may ask for. The bridge is asynchronous, so
+#: this bounds a wedged worker rather than the work: a host polls and can
+#: cancel, and the default of 1800 still applies to a packet that says
+#: nothing about time.
+MAX_TIMEOUT_SECONDS = 86400
 MAX_ITEM = 2_000
 MAX_ITEMS = 64
 MAX_CORRELATION = 128
@@ -139,7 +145,15 @@ def validate_task_packet(
     max_turns = _bounded_int(
         value.get("max_turns", configured_max_turns(os.environ) or 40), "max_turns", 1, 60
     )
-    timeout = _bounded_int(value.get("timeout_seconds", 1800), "timeout_seconds", 1, 3600)
+    # The wall clock is a backstop, not a budget: this bridge hands back a job
+    # id and the host polls, so a long job is a normal job. One hour was a cap
+    # no setting could raise, and it took answers that were still arriving --
+    # measured on an operator's repository, where dispatches asking for 2400 s
+    # came back ACP_TIMEOUT with the reply cut mid-sentence. Twenty-four hours,
+    # still finite, so a wedged worker is eventually reapable.
+    timeout = _bounded_int(
+        value.get("timeout_seconds", 1800), "timeout_seconds", 1, MAX_TIMEOUT_SECONDS
+    )
     model = _optional_string(value.get("model"), "model", 128) or configured_model(os.environ)
     effort = (
         _optional_string(value.get("reasoning_effort"), "reasoning_effort", 16)

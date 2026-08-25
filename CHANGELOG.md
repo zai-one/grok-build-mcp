@@ -28,6 +28,42 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## 0.32.0 — Let it take as long as it takes
+
+The operator's design, in their words: let the worker answer for as long as it
+needs, and have the MCP watch it and report status back to the agent that called
+it. The bridge is built that way -- a dispatch returns a job id, a poll reports
+phase and elapsed time and can block while emitting `notifications/progress`,
+and cancel ends it -- and two things stopped it from working that way.
+
+### One hour was a ceiling no setting could raise
+
+`timeout_seconds` was bounded at 3600. On the operator's repository, dispatches
+asking for 2400 s came back `ACP_TIMEOUT` with the answer broken mid-sentence --
+the worker had said something useful and the deadline took the rest. A wall
+clock here is a backstop against a wedged worker, not a budget for the work: the
+host is polling, and it can cancel.
+
+The ceiling is 24 hours now. Nothing else moved: a packet that says nothing
+about time still gets 1800 s, and the presets still give 1800 / 2400 / 3600.
+It stays finite so a forgotten job is eventually reapable.
+
+### The navigator's poll card never asked the bridge to watch
+
+`grok_agent_poll` has taken a `wait_seconds` for a while: it blocks until the
+job is terminal, up to half an hour, emitting `notifications/progress`
+throughout. `compile_card_args` handed the host `{"job_id": ...}` and nothing
+else, so the card was a check-once and what happened next was up to whoever read
+it. Measured on a nightly routine that read it slowly: a job died at 02:37 and
+the host found out at 02:57.
+
+`GROK_DELEGATE_POLL_WAIT_SECONDS` makes every poll card carry a wait, bounded by
+the tool's own maximum. **Default 0, which is exactly today's behaviour** -- a
+blocking call is only safe when the host's request timeout is longer than the
+block, and that number belongs to the host rather than to this bridge.
+
+---
+
 ## 0.31.0 — A fleet is allowed, and a cancel says why
 
 An operator reported three measured symptoms: `QUEUE_FULL` at concurrency 1,

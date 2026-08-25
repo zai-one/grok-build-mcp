@@ -122,9 +122,10 @@ def validate_project_config(value: Mapping[str, Any]) -> dict[str, Any]:
             raise GuardError("PROJECT_CONFIG_INVALID", "timeout_seconds must be an integer")
         # The same bound the task packet enforces, so a config cannot promise a
         # clock the packet will refuse.
-        if not 1 <= seconds <= 3600:
+        if not 1 <= seconds <= 86400:
             raise GuardError(
-                "PROJECT_CONFIG_INVALID", "timeout_seconds must be between 1 and 3600"
+                "PROJECT_CONFIG_INVALID",
+                "timeout_seconds must be between 1 and 86400",
             )
         budget["timeout_seconds"] = seconds
 
