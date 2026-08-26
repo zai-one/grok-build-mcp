@@ -6,7 +6,7 @@
 - Версия моста: 0.10.0 (`pyproject.toml`, `grok_delegate/guard.py:22` `SERVER_VERSION`)
 - Ветка: `main`
 - SHA HEAD: `e79e0bf1f173c19173ab855248f170757f63b9dc` (`v0.10.0-2-ge79e0bf`)
-- Репозиторий: `D:\ZAI\MCP\Grok CLI` (zai-one/grok-mcp)
+- Репозиторий: `D:\ZAI\MCP\Grok CLI` (zai-one/grok-build-mcp)
 
 Закрытые в `Service/Handoffs/grok-mcp-production-ready-evidence.md` дефекты (auto/`tests/` как verify, `curl | bash` на Windows, verifier/`tests_skipped_reason`, автокоммит lane, `base_ref` в SHA) **не переоткрывались**.
 

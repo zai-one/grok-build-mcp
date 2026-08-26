@@ -2,7 +2,7 @@
 
 **Hand the coding loop to Grok CLI. Your host reads a receipt, not a repository.**
 
-[![tests](https://github.com/zai-one/grok-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/zai-one/grok-mcp/actions/workflows/tests.yml)
+[![tests](https://github.com/zai-one/grok-build-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/zai-one/grok-build-mcp/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
@@ -59,7 +59,7 @@ The shortest way in is to let the editor install it. Paste this into Claude
 Code, Cursor or Codex, opened in the repository you want to delegate from:
 
 ```text
-Install the grok-delegate MCP bridge from https://github.com/zai-one/grok-mcp
+Install the grok-delegate MCP bridge from https://github.com/zai-one/grok-build-mcp
 into this project. Read its README and docs/EASY.md first, run the installer for
 my platform from the Install section, create .grok-mcp.json with preset
 "standard", then call grok_agent_status and show me what it reports. Auth is
@@ -129,14 +129,14 @@ Zero runtime dependencies otherwise.
 ## Install (one command)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts/install.sh \
   | bash -s -- --project "$HOME/code/my-project"
 ```
 
 Windows (name the project — the default is your whole user profile):
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.ps1))) -Project "$env:USERPROFILE\code\my-project"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts/install.ps1))) -Project "$env:USERPROFILE\code\my-project"
 ```
 
 Then, on macOS/Linux:

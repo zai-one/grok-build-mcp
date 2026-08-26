@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Задача | `.tasks/2026-08-18-http-remote-install.md` |
-| Проект | Grok CLI (`zai-one/grok-mcp`) |
+| Проект | Grok CLI (`zai-one/grok-build-mcp`) |
 | Агент | Cursor Grok 4.6 |
 | Baseline SHA | `faab02ec430dd8f9c127741132be986b278a9232` |
 | Итоговый SHA | незакоммичено; HEAD всё ещё `faab02ec`; ветка `grok/http-remote-install` |

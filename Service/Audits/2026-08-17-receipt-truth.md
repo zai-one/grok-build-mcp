@@ -2,7 +2,7 @@
 
 Мета:
 
-- Репозиторий: `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-mcp`)
+- Репозиторий: `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-build-mcp`)
 - HEAD: `e79e0bf1f173c19173ab855248f170757f63b9dc` (`e79e0bf docs(audits): a home for independent audit findings`)
 - Ветка: `main`
 - Версия моста: `0.10.0` (`grok_delegate/guard.py` `SERVER_VERSION`, `pyproject.toml`)

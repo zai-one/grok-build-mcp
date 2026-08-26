@@ -2,7 +2,7 @@
 
 Срез: потоки, процессы, таймауты, отмена, файловые блокировки, состояние между запусками. Не трогал permission-гейт, содержимое receipt, схемы MCP, качество тестов как отдельную тему.
 
-- Репозиторий: `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-mcp`), ветка `main`
+- Репозиторий: `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-build-mcp`), ветка `main`
 - Baseline SHA: `e79e0bf1f173c19173ab855248f170757f63b9dc`
 - Версия: `SERVER_VERSION = "0.10.0"` (`grok_delegate/guard.py:22`)
 - Читал: `AGENTS.md`, `Service/Handoffs/grok-mcp-production-ready-evidence.md` (закрытое не повторяю), `grok_delegate/acp.py`, `agent_runtime.py`, `jobs.py`, `jobs_store.py`, `runner.py` (`prepare_worktree`), `server.py` (`configure_durable_jobs`, `shutdown_runtime`), связанные тесты в `tests/test_round8_bridge.py`, `tests/test_jobs_durable.py`

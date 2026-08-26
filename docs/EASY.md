@@ -7,14 +7,14 @@
 **macOS / Linux** — change the project folder:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts/install.sh \
   | bash -s -- --project "$HOME/code/my-project"
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.ps1))) -Project "$env:USERPROFILE\code\my-project"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts/install.ps1))) -Project "$env:USERPROFILE\code\my-project"
 ```
 
 `irm ... | iex` cannot pass `-Project`, and the default is your entire user

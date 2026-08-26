@@ -38,9 +38,9 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://zai.one"
-Repository = "https://github.com/zai-one/grok-mcp"
-Issues = "https://github.com/zai-one/grok-mcp/issues"
-Changelog = "https://github.com/zai-one/grok-mcp/blob/main/CHANGELOG.md"
+Repository = "https://github.com/zai-one/grok-build-mcp"
+Issues = "https://github.com/zai-one/grok-build-mcp/issues"
+Changelog = "https://github.com/zai-one/grok-build-mcp/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # jsonschema is what makes tests/test_tool_schemas.py actually validate the

@@ -3,12 +3,12 @@
 | | |
 |---|---|
 | Задача | независимый скептик + durable handoff по v0.9.0 (`fix/orchestrator-loop`) |
-| Проект | Grok MCP / `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-mcp`) |
+| Проект | Grok MCP / `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-build-mcp`) |
 | Агент | Cursor Grok 4.6 (скептик; цикл реализации скептика не вызывал) |
 | Baseline SHA | `723abf6c822d58a5bfaefb363fd448ca9f812074` (`main`) |
 | Тег `v0.9.0` | `ed019dff999c325ab1a2f7e657290dee43ee0ac1` |
 | Итоговый SHA | `5278a8824d22d31bd32bbd9fdef0b6d380fff4f9` (follow-up после тега; тег не двигать) |
-| Ветка | `fix/orchestrator-loop` → https://github.com/zai-one/grok-mcp/tree/fix/orchestrator-loop |
+| Ветка | `fix/orchestrator-loop` → https://github.com/zai-one/grok-build-mcp/tree/fix/orchestrator-loop |
 | Дата | 2026-08-16 |
 | **Вердикт** | **GREEN С ОГОВОРКАМИ** |
 

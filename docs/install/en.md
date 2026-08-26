@@ -5,7 +5,7 @@
 **This is the install path.** Full page: **[EASY.md](../EASY.md)**.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts/install.sh \
   | bash -s -- --project "$HOME/code/my-project"
 ```
 

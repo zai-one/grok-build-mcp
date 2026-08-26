@@ -1,7 +1,7 @@
 # Соответствие сетевого MCP-транспорта спецификации
 
 Дата отчёта: 2026-08-18.  
-Объект: неофициальный мост `zai-one/grok-mcp` (`grok-delegate`), ветка `main`, пакетная версия `0.12.0` (`grok_delegate/guard.py:22`, `pyproject.toml`).  
+Объект: неофициальный мост `zai-one/grok-build-mcp` (`grok-delegate`), ветка `main`, пакетная версия `0.12.0` (`grok_delegate/guard.py:22`, `pyproject.toml`).  
 Это **не** номер протокола MCP. Протокол на проводе — строка даты `YYYY-MM-DD`.
 
 Метод: первичная спецификация на `modelcontextprotocol.io` и схема в GitHub; код моста прочитан целиком по HTTP-пути; loopback-probe на `127.0.0.1:18765`.  

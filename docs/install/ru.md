@@ -5,7 +5,7 @@
 Только простой путь. Полная инструкция: **[EASY.md](../EASY.md)** (EN).
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh \
+curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts/install.sh \
   | bash -s -- --project "$HOME/code/my-project"
 grok login
 ```

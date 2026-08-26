@@ -1,7 +1,7 @@
 # Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh | bash -s -- --project "<ROOT>"
+curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts/install.sh | bash -s -- --project "<ROOT>"
 grok login
 ```
 

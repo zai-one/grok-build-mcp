@@ -79,7 +79,7 @@ def test_a_credential_split_across_two_captures_is_redacted_once_joined() -> Non
 @pytest.mark.parametrize(
     "text",
     [
-        "https://github.com/zai-one/grok-mcp",
+        "https://github.com/zai-one/grok-build-mcp",
         "see tests/test_env.py for the fixture",
         "the sk- prefix is short",
         "http://localhost:8080/healthz",

@@ -3,7 +3,7 @@
 Мета:
 
 - дата: 2026-08-18
-- репозиторий: `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-mcp`), ветка `main`
+- репозиторий: `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-build-mcp`), ветка `main`
 - SHA HEAD: `faab02ec430dd8f9c127741132be986b278a9232` (`git rev-parse HEAD`, только чтение)
 - версия: `0.12.0` (`grok_delegate/guard.py:22`, `pyproject.toml`)
 - режим: только чтение и анализ; код не менялся; единственный записанный файл в репозитории — этот

@@ -1,6 +1,6 @@
 # Модель угроз сети — grok-mcp 0.12.0
 
-- Репозиторий: `D:\ZAI\MCP\Grok CLI` (zai-one/grok-mcp)
+- Репозиторий: `D:\ZAI\MCP\Grok CLI` (zai-one/grok-build-mcp)
 - Ветка: main
 - Версия: `0.12.0` (`grok_delegate/guard.py:22`, `pyproject.toml`)
 - Дата: 2026-08-18

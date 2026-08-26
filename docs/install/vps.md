@@ -60,7 +60,7 @@ The bridge never reads `auth.json`.
 ### 2. Install the bridge (Linux)
 
 ```bash
-git clone https://github.com/zai-one/grok-mcp.git <REPO_PATH>
+git clone https://github.com/zai-one/grok-build-mcp.git <REPO_PATH>
 cd <REPO_PATH>
 python3 -m venv .venv
 . .venv/bin/activate

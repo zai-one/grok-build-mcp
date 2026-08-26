@@ -1,6 +1,6 @@
 # Аудит: доки, кроссплатформенность, установка (2026-08-17)
 
-Краткий контекст: репозиторий `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-mcp`), ветка `main`, HEAD `e79e0bf1f173c19173ab855248f170757f63b9dc` (`e79e0bf docs(audits): a home for independent audit findings`). Версия `0.10.0` в `pyproject.toml` и `grok_delegate/guard.py` (`SERVER_VERSION`). Дата аудита: 2026-08-17. ОС аудитора: Windows 11, PowerShell; Grok CLI `1.0.4 (d846eb93d9) [stable]`. Linux/macOS не было.
+Краткий контекст: репозиторий `D:\ZAI\MCP\Grok CLI` (`zai-one/grok-build-mcp`), ветка `main`, HEAD `e79e0bf1f173c19173ab855248f170757f63b9dc` (`e79e0bf docs(audits): a home for independent audit findings`). Версия `0.10.0` в `pyproject.toml` и `grok_delegate/guard.py` (`SERVER_VERSION`). Дата аудита: 2026-08-17. ОС аудитора: Windows 11, PowerShell; Grok CLI `1.0.4 (d846eb93d9) [stable]`. Linux/macOS не было.
 
 Сверка с `Service/Handoffs/grok-mcp-production-ready-evidence.md`: пустой `"env": {}` в Windows-сниппете **исправлен** в текущем `scripts/install.ps1` (сниппет несёт env). `scripts/capture_acp_initialize.py` в текущих операторских доках (`README.md`, `AGENTS.md`, `docs/**`, `skills/grok-mcp/**`, `.github/**`) **не упоминается** — только в CHANGELOG как заменённый и в старом handoff. Unpin по умолчанию в коде держится. Ниже — только то, что снова расходится или не было закрыто evidence.
 
@@ -97,7 +97,7 @@
 - Серьёзность: minor
 - Статус: подтверждено
 - Где: skills/grok-mcp/references/feedback.md:6 (зеркала `.cursor/.claude/.codex/.agents` те же)
-- Написано: «`python scripts/draft_issue.py --repo zai-one/grok-mcp --title "…" --body-file body.md`»
+- Написано: «`python scripts/draft_issue.py --repo zai-one/grok-build-mcp --title "…" --body-file body.md`»
 - На самом деле: файла `scripts/draft_issue.py` в корне нет. Живой скрипт: `skills/grok-mcp/scripts/draft_issue.py`. Плюс `Path.read_text()` без `encoding` (`draft_issue.py:18`) на Windows возьмёт cp1252.
 - Репро: `Test-Path scripts/draft_issue.py` → False; `Test-Path skills/grok-mcp/scripts/draft_issue.py` → True.
 - Последствие для оператора/агента: шаг «завести issue» из skill падает FileNotFound.

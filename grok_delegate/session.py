@@ -493,10 +493,10 @@ def resolve_gate(
 
 
 _INSTALL_SH = (
-    "curl -fsSL https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.sh | bash"
+    "curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts/install.sh | bash"
 )
 _INSTALL_PS1 = (
-    "irm https://raw.githubusercontent.com/zai-one/grok-mcp/main/scripts/install.ps1 | iex"
+    "irm https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts/install.ps1 | iex"
 )
 
 
@@ -1333,7 +1333,7 @@ def session_end(
         )
         out["suggest_issue"] = True
         out["issue_draft"] = scrub_secrets(_clip(draft, 1200))
-        out["issue_repo"] = "zai-one/grok-mcp"
+        out["issue_repo"] = "zai-one/grok-build-mcp"
     if sid and sid in _sessions:
         _sessions[sid]["ended"] = True
         _sessions[sid]["compact"] = False
