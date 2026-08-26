@@ -12,8 +12,7 @@ is the one that is out of date.
 
 | File | Round |
 |---|---|
-| `GOAL-ROUND3.md`, `EVIDENCE.md` | R3 — move into this repository, fix R1–R5 |
-| `GOAL-ROUND4.md`, `EVIDENCE-ROUND4.md` | R4 — CLI coverage, statuses, multi-project, real sandbox |
+| `EVIDENCE.md` | R3 — move into this repository, fix R1–R5 |
 | `GOAL-ROUND7-AUTONOMY.md` | R7 — unattended autonomy (anchors, gates, verdicts, durable jobs) |
 | `GOAL-ROUND8-ACP-MCP-BRIDGE.md`, `ROUND8-HANDOFF.md`, `START-ROUND8.md` | R8 — the working MCP → ACP bridge |
 
