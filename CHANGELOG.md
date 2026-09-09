@@ -28,6 +28,10 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## Unreleased
+
+- Add a Russian product guide and concise agency/contact information in both languages.
+
 ## 0.33.0 — Read-only work stops queueing behind itself
 
 0.31.0 raised the concurrency ceiling to 8 and left the default at 1, arguing

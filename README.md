@@ -1,5 +1,7 @@
 # grok-delegate
 
+[English](README.md) · [Русский](README.ru.md)
+
 **Hand the coding loop to Grok CLI. Your host reads a receipt, not a repository.**
 
 [![tests](https://github.com/zai-one/grok-build-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/zai-one/grok-build-mcp/actions/workflows/tests.yml)
@@ -9,9 +11,7 @@
 [![Version](https://img.shields.io/badge/version-0.33.0-informational.svg)](pyproject.toml)
 [![Built by ZAI.ONE](https://img.shields.io/badge/built%20by-ZAI.ONE-111111.svg)](https://zai.one)
 
-> Built by **[ZAI.ONE](https://zai.one)** — international internet agency.
-> Marketing and development under one roof. We ship software for a living, and
-> we pay for the tokens; that is where this came from.
+> By [ZAI.ONE](https://zai.one), a digital agency for websites, SEO, advertising and analytics.
 
 Claude Code, Cursor and Codex spend most of their context on the cheapest part
 of the work: the edit → run tests → read output → fix loop. `grok-delegate` is
@@ -37,11 +37,9 @@ flowchart LR
     X --> H
 ```
 
-Against the full job record it replaces, that receipt is **61–88% smaller**.
-Worth stating precisely, because the honest version sells better than the
-brochure one: against *reading the diff yourself* it only wins once the diff
-passes the 16 KiB cap. On a one-file change the saving is in not pulling the
-record at all.
+The receipt keeps the host focused on changed files, test results and a capped
+diff. It limits how much job output enters the host context; it does not promise
+a fixed token saving for every task. See [receipt behavior](docs/economy.md).
 
 ## Is this for you
 
@@ -157,12 +155,13 @@ Merge `~/.config/grok-mcp/mcp/claude_desktop.snippet.json` into Claude/Cursor �
 
 ## Host loop
 
-Once it is wired, the whole protocol is three steps:
+Once it is wired, use this loop:
 
 1. `grok_agent_session_begin({"goal":"…","host_budget":"small"})`
 2. Loop `grok_agent_session_next` → execute only the `card` it hands you
    (`host_cmd` | `mcp_tool` | `end`)
-3. Stop when `done=true`
+3. Stop polling when `done=true`.
+4. Finish with `grok_agent_session_end`.
 
 The **`grok-mcp`** skill enforces this shape, so a host that loads it does not
 have to be told twice. Execute cards carry a full `task`; a poll card is
@@ -353,40 +352,9 @@ python -m grok_delegate.server
 
 ---
 
-## Who builds this
+## Built by ZAI.ONE
 
-<div align="center">
-
-## [ZAI.ONE](https://zai.one)
-
-**International internet agency — marketing and development under one roof**
-
-*Strategy · Brand & design · Video production · PR & events · Web, SEO,
-advertising and analytics*
-
-</div>
-
-ZAI.ONE is a full-cycle agency: one team takes a product from positioning and offer
-through the creative and the site to the traffic and the numbers that say
-whether it worked. No handoffs between four vendors who each blame the other
-three.
-
-`grok-delegate` came out of that work rather than a lab. Agency delivery runs
-across many repositories at once, and an editor that re-reads a repository to
-confirm a change bills for every token it spends doing it. Moving the loop to a
-cheaper worker only pays if the result can be trusted without re-reading —
-which is why the effort here went into evidence rather than throughput. The
-bridge runs the tests itself, gates the receipt, and refuses to call an
-unverified job done. That is the same standard we hold delivery to.
-
-| | |
-|---|---|
-| **Marketing** | positioning, offer and messaging, launch planning, PR and events, creative, video and photo production |
-| **Development** | websites and web products, SEO, advertising, analytics, AI tooling and automation — this repository is a sample of it |
-
-**Talk to us:** [zai.one](https://zai.one) ·
-[contact@zai.one](mailto:contact@zai.one) ·
-[Telegram](https://t.me/Zai_one_bot)
+[ZAI.ONE](https://zai.one) is a digital agency working on websites, SEO, advertising and analytics. We also build tools that connect AI assistants to everyday work. [Talk to us on Telegram](https://t.me/zai_one) about setup, automation or an integration for your team.
 
 ---
 
