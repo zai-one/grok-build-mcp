@@ -231,6 +231,7 @@ TOOL_AGENT_FIX = "grok_agent_fix"
 TOOL_AGENT_ECONOMY = "grok_agent_economy"
 TOOL_AGENT_PROJECT = "grok_agent_project"
 TOOL_AGENT_UPDATE = "grok_agent_update"
+TOOL_AGENT_CHECK_UPDATE = "grok_agent_check_update"
 TOOL_AGENT_SESSION_BEGIN = "grok_agent_session_begin"
 TOOL_AGENT_SESSION_TICK = "grok_agent_session_tick"
 TOOL_AGENT_SESSION_NEXT = "grok_agent_session_next"
@@ -1294,6 +1295,19 @@ def handle_tool_call(
             )
         return typed_return(_handle_update_tool(bool(args.get("confirm"))))
 
+    if name == TOOL_AGENT_CHECK_UPDATE:
+        unknown = sorted(set(args) - {"force"})
+        if unknown:
+            return typed_return(
+                structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}")
+            )
+        force = args.get("force", False)
+        if not isinstance(force, bool):
+            return typed_return(structured_error("ARGUMENTS_INVALID", "force must be a boolean"))
+        from .update_check import check_for_update
+
+        return typed_return({"ok": True, **check_for_update(force=force)})
+
     if name == TOOL_AGENT_PROJECT:
         unknown = sorted(set(args) - {"project_root", "preset", "note"})
         if unknown:
@@ -1762,6 +1776,27 @@ def list_tools() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": TOOL_AGENT_CHECK_UPDATE,
+            "description": (
+                "Compare the installed bridge version with the latest GitHub release of "
+                "zai-one/grok-build-mcp. Returns current/latest version, release notes link and "
+                "the update command to suggest. Read-only: never installs. One anonymous GitHub "
+                "API call (3 s timeout), cached 24 h unless force=true; offline gives "
+                "status=unavailable. Off with GROK_DELEGATE_DISABLE_UPDATE_CHECK=1."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "force": {
+                        "type": "boolean",
+                        "description": "Bypass the 24 h cache and ask GitHub now.",
+                        "default": False,
+                    }
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": TOOL_AGENT_PROJECT,
             "description": (
                 "Read or set this project's Grok preset (.grok-mcp.json). Without `preset` "
@@ -1981,6 +2016,7 @@ _STARTS_JOB = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint"
 _SESSION_STATE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
 _TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
     TOOL_AGENT_ECONOMY: _READ_LOCAL,
+    TOOL_AGENT_CHECK_UPDATE: {**_READ_CLI, "idempotentHint": True},
     # Pulls and reinstalls the operator's checkout when confirm=true.
     TOOL_AGENT_UPDATE: {
         "readOnlyHint": False,
@@ -2140,6 +2176,15 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
             "capabilities": {"tools": {}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
         }
+        # Cache-only: initialize never waits on the network for this line.
+        try:
+            from .update_check import cached_update_hint
+
+            hint = cached_update_hint()
+        except Exception:  # noqa: BLE001 -- a hint must never break the handshake
+            hint = None
+        if hint:
+            result["instructions"] = hint
         return None if is_notification else _jsonrpc_result(req_id, result)
 
     if method == "notifications/initialized":
@@ -2157,6 +2202,14 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
                 prime_auth_probe_async()
             except Exception:
                 pass
+        # Refresh a stale release cache on a daemon thread for the next
+        # initialize/status. Off with GROK_DELEGATE_DISABLE_UPDATE_CHECK=1.
+        try:
+            from .update_check import refresh_in_background
+
+            refresh_in_background()
+        except Exception:  # noqa: BLE001 -- never fail a notification
+            pass
         return None
 
     if method == "tools/list":

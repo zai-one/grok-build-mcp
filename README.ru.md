@@ -41,6 +41,10 @@ curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts
 
 Обычный цикл: `grok_agent_session_begin` → выполнение карточек `grok_agent_session_next` → `grok_agent_session_end`. Проект должен разрешить работу через `.grok-mcp.json`; доступ к каталогу сам по себе не включает задания. [Режимы проекта](README.md#turning-the-bridge-on-for-a-project).
 
+## Обновления
+
+`grok_agent_check_update` сравнивает запущенную версию с [последним релизом на GitHub](https://github.com/zai-one/grok-build-mcp/releases) и возвращает ссылку на заметки к релизу и команду, которую стоит предложить (`grok_agent_update` в клоне, иначе `pip install --upgrade "grok-delegate @ git+…@vX"`). Сам ничего не устанавливает. Делает один анонимный запрос к GitHub API с таймаутом 3 с, результат кэшируется на 24 ч; без сети возвращает `status: unavailable`. Если в кэше есть более новый релиз, `initialize` добавляет однострочную подсказку, а статус — блок `update.release`. Отключить: `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1`.
+
 ## Документация
 
 [Быстрый старт](docs/EASY.md) · [Переменные окружения](docs/ENVIRONMENT.md) · [Примеры](examples/) · [Безопасность](SECURITY.md) · [История изменений](CHANGELOG.md)

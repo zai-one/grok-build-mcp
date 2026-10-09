@@ -33,3 +33,21 @@ def _isolated_jobs_dir() -> "object":
                 os.environ.pop("GROK_DELEGATE_JOBS_DIR", None)
             else:
                 os.environ["GROK_DELEGATE_JOBS_DIR"] = previous
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_release_check() -> "object":
+    """Never reach GitHub from a test run, including server subprocesses.
+
+    tests/test_update_check.py opts back in per test with a mocked fetch and a
+    temporary cache directory.
+    """
+    previous = os.environ.get("GROK_DELEGATE_DISABLE_UPDATE_CHECK")
+    os.environ["GROK_DELEGATE_DISABLE_UPDATE_CHECK"] = "1"
+    try:
+        yield None
+    finally:
+        if previous is None:
+            os.environ.pop("GROK_DELEGATE_DISABLE_UPDATE_CHECK", None)
+        else:
+            os.environ["GROK_DELEGATE_DISABLE_UPDATE_CHECK"] = previous

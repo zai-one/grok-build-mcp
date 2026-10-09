@@ -65,6 +65,7 @@ PROMISES: dict[str, str] = {
     # --- misc ------------------------------------------------------------------
     "preset": "project_config writes it; presets tested",
     "confirm": "grok_agent_update refuses to act without it",
+    "force": "bypasses the 24 h release cache; tests/test_update_check.py::test_offline_and_stale_cache",
     "plan_only": "plan path returns argv without spawning",
     "json_schema": "validate_json_schema",
     "rules": "passed through to argv",

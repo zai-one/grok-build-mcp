@@ -14,6 +14,11 @@ Three copies of the code exist at once — the remote, the checkout, and the
 process already in memory. A fix that reached the first two can still look
 unfixed until step 3.
 
+Not a git checkout, or want the release view? `grok_agent_check_update` compares
+the running version with the latest GitHub release and returns the release
+notes link plus the command to suggest. It is read-only and cached for 24 h.
+Tell the user; do not run the command for them unless they ask.
+
 Manual equivalent, if the tool is unavailable:
 
 ```bash

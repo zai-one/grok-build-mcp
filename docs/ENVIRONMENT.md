@@ -40,6 +40,7 @@ defaults are the product.
 |---|---|---|
 | `GROK_DELEGATE_ECONOMY` | off | Smaller default turn/timeout/effort, and compact polls unless told otherwise. |
 | `GROK_DELEGATE_ECONOMY_COMPACT_POLL` | follows economy | Force compact poll payloads on or off. |
+| `GROK_DELEGATE_DISABLE_UPDATE_CHECK` | off | `1` turns off the release check: `grok_agent_check_update` answers `disabled`, and nothing asks GitHub after `initialize`. The check is one anonymous `api.github.com` request with a 3 s timeout, cached 24 h; it only suggests a command and never installs. |
 | `GROK_DELEGATE_PREWARM` | on | Start the session probe (`grok models`, ~12.7 s) in the background at `initialize` instead of inside the first call. |
 | `GROK_DELEGATE_SPAWN_PRIORITY` | on | Give a subprocess spawn a fair share of the GIL for the moment it takes. Measured: 1280 ms without, 23 ms with, under sixteen busy threads. |
 

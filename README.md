@@ -263,6 +263,19 @@ When one is available, `grok_agent_update` previews the exact steps; called with
 refuses on a dirty checkout -- staying a version behind beats overwriting
 uncommitted work. The server cannot restart itself, so that last step is yours.
 
+`grok_agent_check_update` answers the release-level question for any install,
+including one that is not a git checkout: it compares the running version with
+the [latest GitHub release](https://github.com/zai-one/grok-build-mcp/releases)
+and returns the release notes link and the command to suggest
+(`grok_agent_update` in a checkout, otherwise
+`pip install --upgrade "grok-delegate @ git+…@vX"`). It never installs. It makes
+one anonymous GitHub API request with a 3 s timeout and caches the answer for
+24 h. Offline it returns `status: unavailable`. `initialize` and the status
+`update.release` block read only that cache: when it knows of a newer release,
+`initialize` carries a one-line `instructions` hint. After `initialize`, a stale
+cache is refreshed on a background thread. Set
+`GROK_DELEGATE_DISABLE_UPDATE_CHECK=1` to turn all of it off.
+
 ### Turning the bridge on for a project
 
 The bridge is off in every project until that project says otherwise. A project
