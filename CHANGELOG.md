@@ -38,6 +38,10 @@ Release procedure is in [AGENTS.md](AGENTS.md).
   keywords, so they read the same under the 2020-12 default dialect (SEP-1613).
   `2026-07-28` is still not claimed: it removes `initialize` and the
   server-initiated `roots/list` this bridge relies on.
+- **Tool annotations.** Every tool in `tools/list` now carries
+  `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint`, so hosts can
+  skip confirmation for status and poll calls and ask before `grok_agent_update`
+  or `grok_agent_cancel`. They are hints only; the guard still decides.
 - Add a Russian product guide and concise agency/contact information in both languages.
 
 ## 0.33.0 — Read-only work stops queueing behind itself

@@ -1962,7 +1962,64 @@ def list_tools() -> list[dict[str, Any]]:
             "inputSchema": _INSPECT_SCHEMA,
         },
     ]
-    return primary + compatibility
+    tools = primary + compatibility
+    for tool in tools:
+        hints = _TOOL_ANNOTATIONS.get(tool["name"])
+        if hints:
+            tool["annotations"] = dict(hints)
+    return tools
+
+
+# MCP tool annotations (spec 2025-06-18+): hints for the host's confirmation UI,
+# never a security boundary -- the guard, allowlisted roots and worktree
+# isolation stay the enforcement. "Read-only" means no change to the operator's
+# files, git state or jobs; a tool that starts a Grok session is not read-only
+# even when that session is, because it spends quota and creates a job.
+_READ_LOCAL = {"readOnlyHint": True, "openWorldHint": False}
+_READ_CLI = {"readOnlyHint": True, "openWorldHint": True}
+_STARTS_JOB = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}
+_SESSION_STATE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+_TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
+    TOOL_AGENT_ECONOMY: _READ_LOCAL,
+    # Pulls and reinstalls the operator's checkout when confirm=true.
+    TOOL_AGENT_UPDATE: {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+    TOOL_AGENT_PROJECT: {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    TOOL_AGENT_SESSION_BEGIN: _SESSION_STATE,
+    TOOL_AGENT_SESSION_TICK: _SESSION_STATE,
+    TOOL_AGENT_SESSION_NEXT: _SESSION_STATE,
+    TOOL_AGENT_SESSION_END: _SESSION_STATE,
+    TOOL_AGENT_STATUS: _READ_CLI,
+    TOOL_AGENT_START: _STARTS_JOB,
+    TOOL_AGENT_POLL: _READ_LOCAL,
+    TOOL_AGENT_CANCEL: {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    TOOL_AGENT_CONSULT: _STARTS_JOB,
+    TOOL_AGENT_REVIEW: _STARTS_JOB,
+    TOOL_AGENT_EXECUTE: _STARTS_JOB,
+    TOOL_AGENT_FIX: _STARTS_JOB,
+    TOOL_DELEGATE: _STARTS_JOB,
+    TOOL_PLAN: _STARTS_JOB,
+    TOOL_START: _STARTS_JOB,
+    TOOL_POLL: _READ_LOCAL,
+    TOOL_STATUS: _READ_CLI,
+    TOOL_DOCTOR: _READ_CLI,
+    TOOL_MODELS: _READ_CLI,
+    TOOL_INSPECT: _READ_CLI,
+}
 
 
 def _jsonrpc_result(req_id: Any, result: Any) -> dict[str, Any]:
