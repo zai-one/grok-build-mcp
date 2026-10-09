@@ -179,18 +179,25 @@ except ImportError:  # flat import when package dir is on sys.path
 SERVER_NAME = "grok-delegate"
 SERVER_VERSION = _guard_server_version
 # Handshake-era revisions this tools-only stdio server actually speaks.
-# 2025-06-18 is the honest latest: we already emit structuredContent, and
-# the 2026-08-18 transport report named this (or 2025-03-26) as the
-# revision to advertise instead of silently staying on the first public
-# snapshot. 2026-07-28 dropped initialize; we do not speak that era.
+# 2025-11-25 is the honest latest: it keeps initialize, and what it changed
+# for a tools-only server is already true here -- input validation failures
+# come back as tool results with isError (SEP-1303), and every inputSchema is
+# plain JSON Schema with no draft-07-only keywords, so the new 2020-12 default
+# dialect (SEP-1613) reads them the same. Everything else in that revision
+# (icons, URL elicitation, sampling tools, experimental tasks, OAuth) is
+# optional and not offered. 2026-07-28 dropped initialize and replaced
+# server-initiated roots/list with multi round-trip requests; we do not speak
+# that era, and a client asking for it is answered with 2025-11-25.
+# https://modelcontextprotocol.io/specification/2025-11-25/changelog
 SUPPORTED_PROTOCOL_VERSIONS = frozenset(
     {
         "2024-11-05",
         "2025-03-26",
         "2025-06-18",
+        "2025-11-25",
     }
 )
-PROTOCOL_VERSION = "2025-06-18"
+PROTOCOL_VERSION = "2025-11-25"
 
 
 def negotiate_protocol_version(requested: object) -> str:

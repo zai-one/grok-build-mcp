@@ -30,6 +30,14 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ## Unreleased
 
+- **MCP 2025-11-25.** `initialize` now echoes `2025-11-25` when asked, and answers
+  it (instead of `2025-06-18`) to an unknown or newer request, including
+  `2026-07-28`. For a tools-only stdio server the revision asks for two things
+  that were already true and are now tested: bad arguments come back as
+  `isError` tool results (SEP-1303), and the schemas carry no draft-07-only
+  keywords, so they read the same under the 2020-12 default dialect (SEP-1613).
+  `2026-07-28` is still not claimed: it removes `initialize` and the
+  server-initiated `roots/list` this bridge relies on.
 - Add a Russian product guide and concise agency/contact information in both languages.
 
 ## 0.33.0 — Read-only work stops queueing behind itself
