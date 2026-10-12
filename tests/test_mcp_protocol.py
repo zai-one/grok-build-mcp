@@ -29,7 +29,7 @@ def _initialize(requested: object | None) -> dict:
 
 
 def test_latest_advertised_version_is_the_named_handshake_revision() -> None:
-    assert PROTOCOL_VERSION == "2025-06-18"
+    assert PROTOCOL_VERSION == "2025-11-25"
     assert PROTOCOL_VERSION in SUPPORTED_PROTOCOL_VERSIONS
 
 
@@ -47,11 +47,11 @@ def test_modern_era_that_dropped_initialize_is_not_claimed() -> None:
         ("2024-11-05", "2024-11-05"),
         ("2025-03-26", "2025-03-26"),
         ("2025-06-18", "2025-06-18"),
-        ("2025-11-25", "2025-06-18"),
-        ("2026-07-28", "2025-06-18"),
-        ("", "2025-06-18"),
-        (None, "2025-06-18"),
-        (1, "2025-06-18"),
+        ("2025-11-25", "2025-11-25"),
+        ("2026-07-28", "2025-11-25"),
+        ("", "2025-11-25"),
+        (None, "2025-11-25"),
+        (1, "2025-11-25"),
     ],
 )
 def test_initialize_echoes_a_supported_handshake_version(requested: object, echoed: str) -> None:
@@ -65,3 +65,28 @@ def test_negotiate_protocol_version_matches_initialize() -> None:
     assert negotiate_protocol_version("2024-11-05") == "2024-11-05"
     assert negotiate_protocol_version("not-a-revision") == PROTOCOL_VERSION
     assert negotiate_protocol_version(None) == PROTOCOL_VERSION
+
+
+def test_tool_input_errors_are_tool_results_not_protocol_errors() -> None:
+    """2025-11-25 SEP-1303: bad arguments must reach the model as isError results."""
+    response = handle_jsonrpc(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "grok_agent_project", "arguments": {"project_root": ""}},
+        }
+    )
+    assert response is not None and "error" not in response
+    assert response["result"]["isError"] is True
+
+
+def test_tool_schemas_use_no_draft07_only_keywords() -> None:
+    """2025-11-25 SEP-1613: schemas without $schema are read as JSON Schema 2020-12."""
+    import json
+
+    from grok_delegate.server import list_tools
+
+    text = json.dumps(list_tools())
+    for keyword in ('"definitions"', '"dependencies"', '"additionalItems"', '"$schema"'):
+        assert keyword not in text

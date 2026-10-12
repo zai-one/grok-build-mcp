@@ -183,8 +183,9 @@ Authorization: Bearer <OPERATOR_BEARER>
 Content-Type: application/json
 ```
 
-`initialize` echoes a handshake-era `protocolVersion`: `2024-11-05` if the
-client asked for it, otherwise `2025-06-18` when the request is unknown or
+`initialize` echoes a handshake-era `protocolVersion`: the revision the
+client asked for when it is one of `2024-11-05`, `2025-03-26`, `2025-06-18`
+or `2025-11-25`, otherwise `2025-11-25` when the request is unknown or
 newer (including `2026-07-28`). A host that requires Streamable HTTP GET/SSE
 will fail; use SSH stdio instead:
 

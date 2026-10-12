@@ -117,7 +117,27 @@ def update_report() -> dict[str, Any]:
         return {"available": False, "reason": "CHECK_FAILED"}
     if report.get("available"):
         report["hint"] = "call grok_agent_update with confirm=true, then restart the MCP host"
+    report["release"] = release_report()
     return report
+
+
+def release_report() -> dict[str, Any]:
+    """Latest GitHub release vs this version, from the 24 h cache only.
+
+    Status must stay fast and offline-safe, so it never fetches; the cache is
+    filled by grok_agent_check_update or the refresh after initialize.
+    """
+    try:
+        from .update_check import cached_update_hint, disabled
+
+        if disabled():
+            return {"status": "disabled"}
+        hint = cached_update_hint()
+    except Exception:
+        return {"status": "unavailable"}
+    if hint:
+        return {"status": "update_available", "hint": hint}
+    return {"status": "no_newer_release_cached", "check_with": "grok_agent_check_update"}
 
 
 def _parse_json_stdout(stdout: str) -> Any:

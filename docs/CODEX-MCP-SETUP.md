@@ -51,12 +51,12 @@ allowlisted root is not implicitly trusted.
 1. MCP `initialize` echoes a handshake-era protocol version the server
    speaks. A client that sends `2024-11-05` gets `2024-11-05` back; a
    client that sends an unknown or later revision (including
-   `2026-07-28`) gets `2025-06-18`. `serverInfo.version` is the package
+   `2026-07-28`) gets `2025-11-25`. `serverInfo.version` is the package
    version (`0.33.0` on this line).
-2. `tools/list` must include all 15 `grok_agent_*` tools and all 8
-   `grok_delegate*` compatibility tools — 23 in total. (`grok_agent_project`
-   and `grok_agent_update` arrived after this count was last written; verify it
-   against the server rather than this line, which has now drifted twice.)
+2. `tools/list` must include all 16 `grok_agent_*` tools and all 8
+   `grok_delegate*` compatibility tools — 24 in total (`grok_agent_check_update`
+   is the newest). Verify it against the server rather than this line, which
+   has drifted before.
 3. Call `grok_agent_status`; default transport must be `stdio`, and auto
    behavior must be `stdio-only-no-fallback`.
 4. Start with `grok_agent_consult`, then use a temporary git repository for an

@@ -179,18 +179,25 @@ except ImportError:  # flat import when package dir is on sys.path
 SERVER_NAME = "grok-delegate"
 SERVER_VERSION = _guard_server_version
 # Handshake-era revisions this tools-only stdio server actually speaks.
-# 2025-06-18 is the honest latest: we already emit structuredContent, and
-# the 2026-08-18 transport report named this (or 2025-03-26) as the
-# revision to advertise instead of silently staying on the first public
-# snapshot. 2026-07-28 dropped initialize; we do not speak that era.
+# 2025-11-25 is the honest latest: it keeps initialize, and what it changed
+# for a tools-only server is already true here -- input validation failures
+# come back as tool results with isError (SEP-1303), and every inputSchema is
+# plain JSON Schema with no draft-07-only keywords, so the new 2020-12 default
+# dialect (SEP-1613) reads them the same. Everything else in that revision
+# (icons, URL elicitation, sampling tools, experimental tasks, OAuth) is
+# optional and not offered. 2026-07-28 dropped initialize and replaced
+# server-initiated roots/list with multi round-trip requests; we do not speak
+# that era, and a client asking for it is answered with 2025-11-25.
+# https://modelcontextprotocol.io/specification/2025-11-25/changelog
 SUPPORTED_PROTOCOL_VERSIONS = frozenset(
     {
         "2024-11-05",
         "2025-03-26",
         "2025-06-18",
+        "2025-11-25",
     }
 )
-PROTOCOL_VERSION = "2025-06-18"
+PROTOCOL_VERSION = "2025-11-25"
 
 
 def negotiate_protocol_version(requested: object) -> str:
@@ -224,6 +231,7 @@ TOOL_AGENT_FIX = "grok_agent_fix"
 TOOL_AGENT_ECONOMY = "grok_agent_economy"
 TOOL_AGENT_PROJECT = "grok_agent_project"
 TOOL_AGENT_UPDATE = "grok_agent_update"
+TOOL_AGENT_CHECK_UPDATE = "grok_agent_check_update"
 TOOL_AGENT_SESSION_BEGIN = "grok_agent_session_begin"
 TOOL_AGENT_SESSION_TICK = "grok_agent_session_tick"
 TOOL_AGENT_SESSION_NEXT = "grok_agent_session_next"
@@ -1287,6 +1295,19 @@ def handle_tool_call(
             )
         return typed_return(_handle_update_tool(bool(args.get("confirm"))))
 
+    if name == TOOL_AGENT_CHECK_UPDATE:
+        unknown = sorted(set(args) - {"force"})
+        if unknown:
+            return typed_return(
+                structured_error("ARGUMENTS_UNKNOWN", f"unknown arguments: {', '.join(unknown)}")
+            )
+        force = args.get("force", False)
+        if not isinstance(force, bool):
+            return typed_return(structured_error("ARGUMENTS_INVALID", "force must be a boolean"))
+        from .update_check import check_for_update
+
+        return typed_return({"ok": True, **check_for_update(force=force)})
+
     if name == TOOL_AGENT_PROJECT:
         unknown = sorted(set(args) - {"project_root", "preset", "note"})
         if unknown:
@@ -1755,6 +1776,27 @@ def list_tools() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": TOOL_AGENT_CHECK_UPDATE,
+            "description": (
+                "Compare the installed bridge version with the latest GitHub release of "
+                "zai-one/grok-build-mcp. Returns current/latest version, release notes link and "
+                "the update command to suggest. Read-only: never installs. One anonymous GitHub "
+                "API call (3 s timeout), cached 24 h unless force=true; offline gives "
+                "status=unavailable. Off with GROK_DELEGATE_DISABLE_UPDATE_CHECK=1."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "force": {
+                        "type": "boolean",
+                        "description": "Bypass the 24 h cache and ask GitHub now.",
+                        "default": False,
+                    }
+                },
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": TOOL_AGENT_PROJECT,
             "description": (
                 "Read or set this project's Grok preset (.grok-mcp.json). Without `preset` "
@@ -1955,7 +1997,65 @@ def list_tools() -> list[dict[str, Any]]:
             "inputSchema": _INSPECT_SCHEMA,
         },
     ]
-    return primary + compatibility
+    tools = primary + compatibility
+    for tool in tools:
+        hints = _TOOL_ANNOTATIONS.get(tool["name"])
+        if hints:
+            tool["annotations"] = dict(hints)
+    return tools
+
+
+# MCP tool annotations (spec 2025-06-18+): hints for the host's confirmation UI,
+# never a security boundary -- the guard, allowlisted roots and worktree
+# isolation stay the enforcement. "Read-only" means no change to the operator's
+# files, git state or jobs; a tool that starts a Grok session is not read-only
+# even when that session is, because it spends quota and creates a job.
+_READ_LOCAL = {"readOnlyHint": True, "openWorldHint": False}
+_READ_CLI = {"readOnlyHint": True, "openWorldHint": True}
+_STARTS_JOB = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False, "openWorldHint": True}
+_SESSION_STATE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+_TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
+    TOOL_AGENT_ECONOMY: _READ_LOCAL,
+    TOOL_AGENT_CHECK_UPDATE: {**_READ_CLI, "idempotentHint": True},
+    # Pulls and reinstalls the operator's checkout when confirm=true.
+    TOOL_AGENT_UPDATE: {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+    TOOL_AGENT_PROJECT: {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    TOOL_AGENT_SESSION_BEGIN: _SESSION_STATE,
+    TOOL_AGENT_SESSION_TICK: _SESSION_STATE,
+    TOOL_AGENT_SESSION_NEXT: _SESSION_STATE,
+    TOOL_AGENT_SESSION_END: _SESSION_STATE,
+    TOOL_AGENT_STATUS: _READ_CLI,
+    TOOL_AGENT_START: _STARTS_JOB,
+    TOOL_AGENT_POLL: _READ_LOCAL,
+    TOOL_AGENT_CANCEL: {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    TOOL_AGENT_CONSULT: _STARTS_JOB,
+    TOOL_AGENT_REVIEW: _STARTS_JOB,
+    TOOL_AGENT_EXECUTE: _STARTS_JOB,
+    TOOL_AGENT_FIX: _STARTS_JOB,
+    TOOL_DELEGATE: _STARTS_JOB,
+    TOOL_PLAN: _STARTS_JOB,
+    TOOL_START: _STARTS_JOB,
+    TOOL_POLL: _READ_LOCAL,
+    TOOL_STATUS: _READ_CLI,
+    TOOL_DOCTOR: _READ_CLI,
+    TOOL_MODELS: _READ_CLI,
+    TOOL_INSPECT: _READ_CLI,
+}
 
 
 def _jsonrpc_result(req_id: Any, result: Any) -> dict[str, Any]:
@@ -2076,6 +2176,15 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
             "capabilities": {"tools": {}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
         }
+        # Cache-only: initialize never waits on the network for this line.
+        try:
+            from .update_check import cached_update_hint
+
+            hint = cached_update_hint()
+        except Exception:  # noqa: BLE001 -- a hint must never break the handshake
+            hint = None
+        if hint:
+            result["instructions"] = hint
         return None if is_notification else _jsonrpc_result(req_id, result)
 
     if method == "notifications/initialized":
@@ -2093,6 +2202,14 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
                 prime_auth_probe_async()
             except Exception:
                 pass
+        # Refresh a stale release cache on a daemon thread for the next
+        # initialize/status. Off with GROK_DELEGATE_DISABLE_UPDATE_CHECK=1.
+        try:
+            from .update_check import refresh_in_background
+
+            refresh_in_background()
+        except Exception:  # noqa: BLE001 -- never fail a notification
+            pass
         return None
 
     if method == "tools/list":
