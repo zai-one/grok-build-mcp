@@ -109,9 +109,12 @@ def update_report() -> dict[str, Any]:
     and lives behind grok_agent_update.
     """
     try:
+        from .update_check import disabled
         from .updater import update_status
 
-        report = update_status()
+        # The opt-out covers this ls-remote too: status is called every session,
+        # and a deployment that turned the check off asked for no outbound call.
+        report = update_status(check_remote=not disabled())
     except Exception:
         # Never let an update check be the reason status fails.
         return {"available": False, "reason": "CHECK_FAILED"}

@@ -48,21 +48,78 @@ def _runner(mapping, *, raises=None):
 # --- finding the checkout -----------------------------------------------------
 
 
-def test_checkout_is_found_from_a_git_directory(tmp_path) -> None:
-    (tmp_path / ".git").mkdir()
-    nested = tmp_path / "pkg" / "sub"
-    nested.mkdir(parents=True)
-    assert bridge_checkout_dir(nested) == tmp_path
+def _checkout(root: Path, *, name: str = "grok-delegate", git_file: bool = False) -> Path:
+    """A minimal source checkout of this package under ``root``; returns its __init__.py."""
+    root.mkdir(parents=True, exist_ok=True)
+    if git_file:
+        (root / ".git").write_text("gitdir: ../real/.git", encoding="utf-8")
+    else:
+        (root / ".git").mkdir()
+    (root / "pyproject.toml").write_text(
+        f'[build-system]\nrequires = ["setuptools"]\n\n[project]\nname = "{name}"\nversion = "1.0"\n',
+        encoding="utf-8",
+    )
+    package = root / "grok_delegate"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    return package / "__init__.py"
+
+
+def test_the_real_checkout_is_found(tmp_path) -> None:
+    init = _checkout(tmp_path / "grok-build-mcp")
+    assert bridge_checkout_dir(package_init=init) == tmp_path / "grok-build-mcp"
+    nested = init.parent / "sub"
+    nested.mkdir()
+    assert bridge_checkout_dir(nested, package_init=init) == tmp_path / "grok-build-mcp"
 
 
 def test_checkout_is_found_when_git_is_a_file(tmp_path) -> None:
     """A worktree carries .git as a file; treating it as absent would be wrong."""
-    (tmp_path / ".git").write_text("gitdir: ../real/.git", encoding="utf-8")
-    assert bridge_checkout_dir(tmp_path) == tmp_path
+    init = _checkout(tmp_path / "lane", git_file=True)
+    assert bridge_checkout_dir(package_init=init) == tmp_path / "lane"
+
+
+def test_a_venv_install_inside_a_foreign_repo_is_not_a_checkout(tmp_path) -> None:
+    """pip-installed into another project's venv: the first .git up is not ours."""
+    other = tmp_path / "other-project"
+    (other / ".git").mkdir(parents=True)
+    (other / "pyproject.toml").write_text('[project]\nname = "other-project"\n', encoding="utf-8")
+    site = other / ".venv" / "lib" / "python3.13" / "site-packages" / "grok_delegate"
+    site.mkdir(parents=True)
+    (site / "__init__.py").write_text("", encoding="utf-8")
+    assert bridge_checkout_dir(package_init=site / "__init__.py") is None
+
+
+def test_a_bridge_clone_whose_venv_holds_a_pip_copy_is_not_this_checkout(tmp_path) -> None:
+    """Right name, wrong files: the running package is the venv copy, not the clone's."""
+    root = tmp_path / "grok-build-mcp"
+    _checkout(root)
+    site = root / ".venv" / "lib" / "site-packages" / "grok_delegate"
+    site.mkdir(parents=True)
+    (site / "__init__.py").write_text("", encoding="utf-8")
+    assert bridge_checkout_dir(package_init=site / "__init__.py") is None
+
+
+def test_a_checkout_of_another_distribution_is_rejected(tmp_path) -> None:
+    init = _checkout(tmp_path / "fork", name="something-else")
+    assert bridge_checkout_dir(package_init=init) is None
 
 
 def test_no_checkout_is_a_legitimate_answer(tmp_path) -> None:
     assert bridge_checkout_dir(tmp_path / "nowhere-at-all") is None
+    loose = tmp_path / "loose" / "grok_delegate"
+    loose.mkdir(parents=True)
+    (loose / "__init__.py").write_text("", encoding="utf-8")
+    assert bridge_checkout_dir(package_init=loose / "__init__.py") is None
+
+
+def test_the_running_package_is_judged_by_its_own_files() -> None:
+    """Whatever the install, the answer is either None or a root holding this very package."""
+    import grok_delegate
+
+    root = bridge_checkout_dir()
+    if root is not None:
+        assert (root / "grok_delegate" / "__init__.py").resolve() == Path(grok_delegate.__file__).resolve()
 
 
 # --- reading the two sides ----------------------------------------------------
@@ -192,8 +249,16 @@ def test_update_tool_is_listed() -> None:
     assert "grok_agent_update" in {tool["name"] for tool in list_tools()}
 
 
-def test_update_tool_previews_without_confirm() -> None:
+def test_update_tool_previews_without_confirm(monkeypatch) -> None:
     """Preview must never mutate anything, whatever the answer turns out to be."""
+    import grok_delegate.updater as updater
+
+    # A fake git: the real one would ls-remote GitHub from a test.
+    monkeypatch.setattr(
+        updater,
+        "default_git_runner",
+        _runner({"rev-parse": _Result(stdout=LOCAL + "\n"), "ls-remote": _Result(stdout=f"{REMOTE}\trefs/heads/main\n")}),
+    )
     result = handle_tool_call("grok_agent_update", {})
     assert result["applied"] is False
     assert "plan" in result
@@ -212,6 +277,25 @@ def test_status_carries_the_update_block() -> None:
     report = update_report()
     assert "available" in report
     assert isinstance(report["available"], bool)
+
+
+def test_the_opt_out_keeps_status_off_the_network(monkeypatch) -> None:
+    """GROK_DELEGATE_DISABLE_UPDATE_CHECK also stops the status call's ls-remote."""
+    import grok_delegate.updater as updater
+    from grok_delegate.status import update_report
+
+    seen: list[list[str]] = []
+
+    def run(argv, **_kwargs):
+        seen.append(list(argv))
+        return _Result(stdout=LOCAL + "\n")
+
+    monkeypatch.setenv("GROK_DELEGATE_DISABLE_UPDATE_CHECK", "1")
+    monkeypatch.setattr(updater, "default_git_runner", run)
+    monkeypatch.setattr(updater, "bridge_checkout_dir", lambda *a, **k: Path("checkout"))
+    report = update_report()
+    assert report["available"] is False and report["reason"] == "REMOTE_CHECK_DISABLED"
+    assert all("ls-remote" not in argv for argv in seen)
 
 
 # --- the output ceiling must follow the turn budget ---------------------------
@@ -242,3 +326,20 @@ def test_a_missing_turn_budget_falls_back_to_the_default() -> None:
 
     assert output_cap_for({}) == DEFAULT_OUTPUT_BYTES
     assert output_cap_for({"max_turns": "nonsense"}) == DEFAULT_OUTPUT_BYTES
+
+
+def test_the_project_name_is_read_without_tomllib(tmp_path, monkeypatch) -> None:
+    """Python 3.10 has no tomllib; the [project] name must still be found, and only there."""
+    import sys
+
+    from grok_delegate.updater import _declared_name
+
+    monkeypatch.setitem(sys.modules, "tomllib", None)
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[tool.other]\nname = "decoy"\n\n[project]\nversion = "1"\nname = "grok-delegate"\n\n[tool.x]\nname = "y"\n',
+        encoding="utf-8",
+    )
+    assert _declared_name(pyproject) == "grok-delegate"
+    pyproject.write_text('[tool.other]\nname = "grok-delegate"\n', encoding="utf-8")
+    assert _declared_name(pyproject) is None

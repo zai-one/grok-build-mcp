@@ -25,6 +25,12 @@ def _print(msg: str) -> None:
 
 def _run_self_test() -> int:
     """Find binary, version, auth, drive real JSON-RPC path for status tools."""
+    from .update_check import DISABLE_ENV
+
+    # Verifying an install must not reach GitHub: no release check, and no
+    # `git ls-remote` from the status call. This process exits right after.
+    os.environ[DISABLE_ENV] = "1"
+
     from . import server
     from .guard import validate_grok_bin
     from .status import (
