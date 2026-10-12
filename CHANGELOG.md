@@ -28,7 +28,10 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
-## Unreleased
+## 0.34.0 — The host learns what a tool does, and when to update
+
+The bridge now speaks MCP 2025-11-25, labels every tool with what it touches,
+and can tell a host that a newer release exists without ever installing it.
 
 - **MCP 2025-11-25.** `initialize` now echoes `2025-11-25` when asked, and answers
   it (instead of `2025-06-18`) to an unknown or newer request, including
@@ -74,6 +77,8 @@ Release procedure is in [AGENTS.md](AGENTS.md).
   `--self-test` sets it, so verifying an install makes no call to GitHub. It is
   documented in `.env.example`; HTTP/server deployments that must not make
   outbound calls should set it.
+
+---
 
 ## 0.33.0 — Read-only work stops queueing behind itself
 
