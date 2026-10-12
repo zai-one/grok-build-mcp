@@ -38,20 +38,78 @@ def default_git_runner(argv: list[str], *, timeout: float = GIT_TIMEOUT_SECONDS)
     )
 
 
-def bridge_checkout_dir(start: Path | str | None = None) -> Path | None:
-    """The git checkout this package was imported from, or None.
+#: The distribution a checkout's ``pyproject.toml`` must declare to count as ours.
+DISTRIBUTION = "grok-delegate"
+
+_PROJECT_TABLE = re.compile(r"^\[project\]\s*$", re.MULTILINE)
+_NEXT_TABLE = re.compile(r"^\[", re.MULTILINE)
+_NAME_LINE = re.compile(r"""^name\s*=\s*["']([^"'\n]+)["']""", re.MULTILINE)
+
+
+def _canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).strip().lower()
+
+
+def _declared_name(pyproject: Path) -> str | None:
+    """``[project] name`` from a pyproject.toml, or None when it cannot be read."""
+    try:
+        if pyproject.stat().st_size > 1_048_576:
+            return None
+        text = pyproject.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+    try:
+        import tomllib
+    except ImportError:  # Python 3.10: the [project] table is simple enough to scan
+        table = _PROJECT_TABLE.search(text)
+        if table is None:
+            return None
+        body = text[table.end() :]
+        following = _NEXT_TABLE.search(body)
+        match = _NAME_LINE.search(body[: following.start()] if following else body)
+        return match.group(1) if match else None
+    try:
+        name = tomllib.loads(text).get("project", {}).get("name")
+    except (tomllib.TOMLDecodeError, AttributeError):
+        return None
+    return name if isinstance(name, str) else None
+
+
+def _same_file(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=True) == right.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+
+
+def bridge_checkout_dir(
+    start: Path | str | None = None, *, package_init: Path | str | None = None
+) -> Path | None:
+    """This package's own git checkout, or None.
 
     None is a legitimate answer: a wheel install has no checkout to compare, and
-    reporting that honestly beats guessing at a directory.
+    reporting that honestly beats guessing at a directory. The nearest ``.git``
+    above the package is accepted only when its ``pyproject.toml`` declares this
+    distribution and its ``grok_delegate/__init__.py`` *is* the running package.
+    Without that, a pip install into the venv of some other project would make
+    ``grok_agent_update`` pull and reinstall that project.
     """
+    running = Path(package_init) if package_init is not None else Path(__file__).with_name("__init__.py")
     if start is None:
-        start = Path(__file__).resolve().parent
+        start = running.parent
     here = Path(start).resolve()
     for candidate in (here, *here.parents):
         marker = candidate / ".git"
         # A worktree carries `.git` as a file, not a directory.
         if marker.is_dir() or marker.is_file():
-            return candidate
+            name = _declared_name(candidate / "pyproject.toml")
+            if (
+                name is not None
+                and _canonical(name) == DISTRIBUTION
+                and _same_file(candidate / "grok_delegate" / "__init__.py", running)
+            ):
+                return candidate
+            return None
     return None
 
 
@@ -124,11 +182,13 @@ def update_status(
     checkout: Path | str | None = None,
     remote: str = "origin",
     branch: str = "main",
+    check_remote: bool = True,
 ) -> dict[str, Any]:
     """Whether the running bridge is behind its remote.
 
     ``available`` is True only when both SHAs are known and differ, so an
     unreachable network reads as "cannot tell", never as "up to date".
+    ``check_remote=False`` stops before ``ls-remote`` (no network) and says so.
     """
     runner = git_runner or default_git_runner
     root = checkout if checkout is not None else bridge_checkout_dir()
@@ -147,6 +207,10 @@ def update_status(
     out["local_sha"] = local_head(root, git_runner=runner)
     if out["local_sha"] is None:
         out["reason"] = "LOCAL_HEAD_UNKNOWN"
+        return out
+
+    if not check_remote:
+        out["reason"] = "REMOTE_CHECK_DISABLED"
         return out
 
     out["remote_sha"] = remote_head(root, git_runner=runner, remote=remote, branch=branch)

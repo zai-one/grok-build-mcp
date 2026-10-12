@@ -50,6 +50,30 @@ Release procedure is in [AGENTS.md](AGENTS.md).
   `update.release` block to status, without any network call on either path.
   Off with `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1`.
 - Add a Russian product guide and concise agency/contact information in both languages.
+- **The release check no longer recommends updating the wrong repository.**
+  A checkout was any directory with `.git` and a `pyproject.toml`, so a bridge
+  pip-installed into another project's venv was told to `git pull` and
+  `pip install -e .`, and `grok_agent_update confirm=true` would have done it to
+  that project. A checkout now counts only when its `pyproject.toml` declares
+  `grok-delegate` and its `grok_delegate/__init__.py` is the running package;
+  anything else is a release install and gets the `pip install --upgrade` line.
+- **The release check asks GitHub less, and only believes plain tags.** A failed
+  check is not retried for 30 minutes (status `unavailable`, plus the last good
+  answer when there is one), `force=true` is honoured at most once a minute, and
+  the startup refresh follows the same rules -- before, an offline host retried
+  on every call and every connect. The 3 s deadline now covers the DNS lookup.
+  Only a tag of the form `v1.2.3` is reported; anything else, from GitHub or from
+  an edited cache file, never reaches a version field, a command or the
+  `initialize` hint, and a cached link outside this repository's releases is
+  dropped.
+- **A running version that is not a plain version reads as `unknown`**, not
+  `up_to_date`: a local `0.34.0.dev1` build could not be compared, and saying it
+  was current was a guess.
+- `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1` now also stops the status `update`
+  block before its `git ls-remote` (reason `REMOTE_CHECK_DISABLED`), and
+  `--self-test` sets it, so verifying an install makes no call to GitHub. It is
+  documented in `.env.example`; HTTP/server deployments that must not make
+  outbound calls should set it.
 
 ## 0.33.0 — Read-only work stops queueing behind itself
 

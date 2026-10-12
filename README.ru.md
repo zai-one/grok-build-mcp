@@ -43,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts
 
 ## Обновления
 
-`grok_agent_check_update` сравнивает запущенную версию с [последним релизом на GitHub](https://github.com/zai-one/grok-build-mcp/releases) и возвращает ссылку на заметки к релизу и команду, которую стоит предложить (`grok_agent_update` в клоне, иначе `pip install --upgrade "grok-delegate @ git+…@vX"`). Сам ничего не устанавливает. Делает один анонимный запрос к GitHub API с таймаутом 3 с, результат кэшируется на 24 ч; без сети возвращает `status: unavailable`. Если в кэше есть более новый релиз, `initialize` добавляет однострочную подсказку, а статус — блок `update.release`. Отключить: `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1`.
+`grok_agent_check_update` сравнивает запущенную версию с [последним релизом на GitHub](https://github.com/zai-one/grok-build-mcp/releases) и возвращает ссылку на заметки к релизу и команду, которую стоит предложить (`grok_agent_update` в клоне, иначе `pip install --upgrade "grok-delegate @ git+…@vX"`). Сам ничего не устанавливает. Делает один анонимный запрос к GitHub API с таймаутом 3 с, результат кэшируется на 24 ч; без сети возвращает `status: unavailable` и не повторяет запрос 30 минут, а `force=true` срабатывает не чаще раза в минуту. Если в кэше есть более новый релиз, `initialize` добавляет однострочную подсказку, а статус — блок `update.release`. Отключить (вместе с `git ls-remote` в статусе): `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1`.
 
 ## Документация
 

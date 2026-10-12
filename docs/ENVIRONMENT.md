@@ -40,7 +40,7 @@ defaults are the product.
 |---|---|---|
 | `GROK_DELEGATE_ECONOMY` | off | Smaller default turn/timeout/effort, and compact polls unless told otherwise. |
 | `GROK_DELEGATE_ECONOMY_COMPACT_POLL` | follows economy | Force compact poll payloads on or off. |
-| `GROK_DELEGATE_DISABLE_UPDATE_CHECK` | off | `1` turns off the release check: `grok_agent_check_update` answers `disabled`, and nothing asks GitHub after `initialize`. The check is one anonymous `api.github.com` request with a 3 s timeout, cached 24 h; it only suggests a command and never installs. |
+| `GROK_DELEGATE_DISABLE_UPDATE_CHECK` | off | `1` turns off the release check: `grok_agent_check_update` answers `disabled`, nothing asks GitHub after `initialize`, and the status `update` block stops before its `git ls-remote` (reason `REMOTE_CHECK_DISABLED`). Unless disabled, the server calls `api.github.com` (anonymous, at most once a day) when a client connects, so set it on HTTP/server deployments that must not make outbound calls. The check has a 3 s deadline including DNS, is cached 24 h, retries a failed attempt only after 30 min, honours `force` at most once a minute, and only ever reports a plain version tag; it suggests a command and never installs. `grok_agent_update` stays available as an explicit operator action. |
 | `GROK_DELEGATE_PREWARM` | on | Start the session probe (`grok models`, ~12.7 s) in the background at `initialize` instead of inside the first call. |
 | `GROK_DELEGATE_SPAWN_PRIORITY` | on | Give a subprocess spawn a fair share of the GIL for the moment it takes. Measured: 1280 ms without, 23 ms with, under sixteen busy threads. |
 

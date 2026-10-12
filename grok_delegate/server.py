@@ -1781,8 +1781,9 @@ def list_tools() -> list[dict[str, Any]]:
                 "Compare the installed bridge version with the latest GitHub release of "
                 "zai-one/grok-build-mcp. Returns current/latest version, release notes link and "
                 "the update command to suggest. Read-only: never installs. One anonymous GitHub "
-                "API call (3 s timeout), cached 24 h unless force=true; offline gives "
-                "status=unavailable. Off with GROK_DELEGATE_DISABLE_UPDATE_CHECK=1."
+                "API call (3 s timeout), cached 24 h unless force=true (honoured once a minute); "
+                "offline gives status=unavailable and is retried after 30 min. "
+                "Off with GROK_DELEGATE_DISABLE_UPDATE_CHECK=1."
             ),
             "inputSchema": {
                 "type": "object",
