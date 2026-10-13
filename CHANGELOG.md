@@ -28,18 +28,21 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
-## Unreleased
+## 0.35.0 — The host learns where to start, and installs as a plugin
 
-- License: LicenseRef-ZAI-ONE 2.0 (source-available). Free install and use for yourself and your organisation, including commercial work; issues and pull requests welcome; copying code into other projects, redistribution, embedding and competing hosted services need written permission. Releases published under MIT before 2026-10-13 stay MIT for those versions (see NOTICE). README first screen: one-line scope, why this MCP, maintenance and update check.
+The host learns where to start without reading the docs, and can install the
+bridge as a plugin pinned to this release. The license moves to
+LicenseRef-ZAI-ONE 2.0.
 
-The host learns where to start without reading the docs, and can install the bridge as a plugin.
-
+- **License: LicenseRef-ZAI-ONE 2.0** (source-available). Free install and use for yourself and your organisation, including commercial work; issues and pull requests welcome; copying code into other projects, redistribution, embedding and competing hosted services need written permission. Releases published under MIT before 2026-10-13 stay MIT for those versions (see NOTICE). Package metadata and both plugin manifests now say `LicenseRef-ZAI-ONE`. README first screen: one-line scope, why this MCP, maintenance and update check.
 - `initialize` now always returns router `instructions` (≤1200 chars: session loop, typed fallback, never push/merge); the cached update line is appended as before.
 - Every tool has a `title`; four long descriptions shortened to ≤300 chars (`grok_delegate/agent_layer.py`).
 - New MCP prompts `delegate_task`, `review_diff`; resources `grok://guide/index` and `grok://guide/{topic}` serve the skill references (shipped in the wheel as `grok_delegate/guide/`, kept identical by `scripts/sync_skills.py`). Capabilities now advertise `prompts` and `resources`.
 - `skills/grok-mcp/SKILL.md` frontmatter follows the Agent Skills spec (`version` moved under `metadata`; `license`, `compatibility` added).
-- Packaging: `.claude-plugin/plugin.json` + `marketplace.json` (`/plugin marketplace add zai-one/grok-build-mcp`), `.cursor-plugin/plugin.json`; README uvx/plugin snippets for Claude Code, Cursor, Codex, Claude Desktop.
+- Packaging: `.claude-plugin/plugin.json` + `marketplace.json` (`/plugin marketplace add zai-one/grok-build-mcp`), `.cursor-plugin/plugin.json`; README uvx/plugin snippets for Claude Code, Cursor, Codex, Claude Desktop. The plugins and snippets install `git+https://github.com/zai-one/grok-build-mcp@v0.35.0`, so a plugin install no longer floats with `main`.
 - CI: `scripts/token_budget.py --strict` (skills spec + L0 budget) and `scripts/verify_skills.py`.
+
+---
 
 ## 0.34.0 — The host learns what a tool does, and when to update
 
