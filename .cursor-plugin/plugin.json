@@ -6,7 +6,7 @@
   "author": { "name": "ZAI.ONE" },
   "homepage": "https://github.com/zai-one/grok-build-mcp",
   "repository": "https://github.com/zai-one/grok-build-mcp",
-  "license": "MIT",
+  "license": "LicenseRef-ZAI-ONE",
   "keywords": ["mcp", "grok", "coding-agent", "delegation", "worktree"],
   "category": "developer-tools",
   "skills": "./skills/",

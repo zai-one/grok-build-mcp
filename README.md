@@ -64,7 +64,7 @@ own work: this one commits to a `grok/*` branch and stops there, on purpose.
 
 - Actively maintained by ZAI.ONE: current version 0.34.0; release notes in [CHANGELOG.md](CHANGELOG.md) and [Releases](https://github.com/zai-one/grok-build-mcp/releases).
 - Built-in update check: ask the assistant to run `grok_agent_check_update` (public GitHub API, no credentials, cached; nothing is installed automatically; `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1` turns it off).
-- Follows current MCP practice: tool annotations (read-only / destructive hints), toolsets and read-only mode, server `instructions`, prompts and resources, structured errors with recovery hints, secrets kept out of tool output, a token budget for tool descriptions enforced in tests.
+- Follows current MCP practice: tool annotations (read-only / destructive hints), server `instructions`, prompts and resources, structured errors with recovery hints, secrets kept out of tool output, a token budget for tool descriptions enforced in tests.
 - CI runs the test suite on Linux and Windows for every pull request.
 
 ## Give this to your assistant
