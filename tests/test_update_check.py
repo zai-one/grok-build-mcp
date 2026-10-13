@@ -7,6 +7,8 @@ import urllib.error
 
 import pytest
 
+from grok_delegate.agent_layer import ROUTER_INSTRUCTIONS
+
 from grok_delegate import __version__, update_check
 from grok_delegate.server import handle_jsonrpc, handle_tool_call, list_tools
 from grok_delegate.status import release_report
@@ -169,7 +171,7 @@ def test_a_shell_shaped_tag_reaches_nothing(enabled) -> None:
     for fragment in ("9.9.9", "curl", "IFS", "|sh"):
         assert fragment not in serialized
     init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}
-    assert "instructions" not in handle_jsonrpc(init)["result"]
+    assert handle_jsonrpc(init)["result"]["instructions"] == ROUTER_INSTRUCTIONS
     assert update_check.cached_update_hint() is None
     assert "curl" not in update_check.cache_path().read_text(encoding="utf-8")
 
@@ -189,7 +191,7 @@ def test_a_poisoned_cache_is_not_believed(enabled) -> None:
     )
     assert update_check.cached_update_hint() is None
     init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}
-    assert "instructions" not in handle_jsonrpc(init)["result"]
+    assert handle_jsonrpc(init)["result"]["instructions"] == ROUTER_INSTRUCTIONS
     # A good version with a foreign link: the version is kept, the link is not.
     path.write_text(
         json.dumps({"checked_at": 1_000_000, "latest_version": "v99.0.0", "release_url": "https://evil.example/"}),
@@ -255,7 +257,7 @@ def test_same_version_and_foreign_link(enabled) -> None:
 
 def test_hint_reaches_initialize_and_status_from_cache_only(enabled) -> None:
     init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}
-    assert "instructions" not in handle_jsonrpc(init)["result"]
+    assert handle_jsonrpc(init)["result"]["instructions"] == ROUTER_INSTRUCTIONS
     assert release_report()["status"] == "no_newer_release_cached"
     update_check.check_for_update(fetch=FakeGitHub(_release()))
     instructions = handle_jsonrpc(init)["result"]["instructions"]

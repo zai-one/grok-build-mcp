@@ -21,3 +21,4 @@ Service/Audits/routines-*.json
 
 # Work prompts other sessions drop here. Not this project, never committed.
 .grok-review-input/
+build/

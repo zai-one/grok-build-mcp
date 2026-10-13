@@ -2003,7 +2003,9 @@ def list_tools() -> list[dict[str, Any]]:
         hints = _TOOL_ANNOTATIONS.get(tool["name"])
         if hints:
             tool["annotations"] = dict(hints)
-    return tools
+    from .agent_layer import apply_tool_metadata
+
+    return apply_tool_metadata(tools)
 
 
 # MCP tool annotations (spec 2025-06-18+): hints for the host's confirmation UI,
@@ -2174,7 +2176,7 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
         remember_client_capabilities(params)
         result = {
             "protocolVersion": negotiate_protocol_version(requested),
-            "capabilities": {"tools": {}},
+            "capabilities": {"tools": {}, "prompts": {}, "resources": {}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
         }
         # Cache-only: initialize never waits on the network for this line.
@@ -2184,8 +2186,9 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
             hint = cached_update_hint()
         except Exception:  # noqa: BLE001 -- a hint must never break the handshake
             hint = None
-        if hint:
-            result["instructions"] = hint
+        from .agent_layer import ROUTER_INSTRUCTIONS
+
+        result["instructions"] = ROUTER_INSTRUCTIONS + (f" {hint}" if hint else "")
         return None if is_notification else _jsonrpc_result(req_id, result)
 
     if method == "notifications/initialized":
@@ -2239,6 +2242,29 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
         # structuredContent. The duplicate stays. It is compact.
         payload = assemble_tool_result(tool_result)
         return None if is_notification else _jsonrpc_result(req_id, payload)
+
+    if method in {"prompts/list", "prompts/get", "resources/list", "resources/templates/list", "resources/read"}:
+        if is_notification:
+            return None
+        from . import agent_layer
+
+        if method == "prompts/list":
+            return _jsonrpc_result(req_id, {"prompts": agent_layer.PROMPTS})
+        if method == "resources/list":
+            return _jsonrpc_result(req_id, {"resources": agent_layer.list_resources()})
+        if method == "resources/templates/list":
+            return _jsonrpc_result(req_id, {"resourceTemplates": agent_layer.list_resource_templates()})
+        p = params if isinstance(params, dict) else {}
+        if method == "prompts/get":
+            got = agent_layer.render_prompt(str(p.get("name") or ""), p.get("arguments"))
+            if got is None:
+                return _jsonrpc_error(req_id, -32602, f"unknown prompt: {p.get('name')}")
+            return _jsonrpc_result(req_id, got)
+        got = agent_layer.read_resource(str(p.get("uri") or ""))
+        if got is None:
+            # MCP: resource not found
+            return _jsonrpc_error(req_id, -32002, f"resource not found: {p.get('uri')}")
+        return _jsonrpc_result(req_id, got)
 
     if method == "ping":
         return None if is_notification else _jsonrpc_result(req_id, {})

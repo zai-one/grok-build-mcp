@@ -5,8 +5,10 @@ description: >
   grok_agent_session_next until done. If a card fails schema, fall back to
   typed consult → execute → poll → review. Triggers: grok-mcp, session_next,
   grok login, execute. Never OAuth in config. Unpin is default.
-version: 1.1.0
+license: MIT
+compatibility: Needs the grok-mcp (grok-delegate) MCP server and the Grok CLI after `grok login`.
 metadata:
+  version: "1.1.0"
   short-description: "Session v1.2 navigator — typed cards, unpin default"
 ---
 
@@ -22,7 +24,7 @@ metadata:
 4. Schema / unknown-tool failure → typed consult → execute → poll → review (`references/execute.md`)
 5. When `done=true` → **`grok_agent_session_end`**, then stop
 
-Do **not** open `references/*` unless blocked. Do **not** re-plan. Do **not** pin a Grok CLI version.
+Do **not** open `references/*` unless blocked (same text as MCP resources `grok://guide/{topic}`). Do **not** re-plan. Do **not** pin a Grok CLI version.
 
 ## Never
 

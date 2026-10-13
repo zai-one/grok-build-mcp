@@ -35,6 +35,34 @@ curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts
 
 Установщик готовит конфигурацию подключения. Пошаговый маршрут, ручная установка и расположение файлов — в [руководстве](docs/EASY.md) и [английском README](README.md#install-one-command). После подключения перезапустите MCP и вызовите `grok_agent_status`.
 
+## Установка плагином или через uvx
+
+```bash
+# Claude Code: MCP only
+claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp grok-delegate
+# Claude Code: plugin = MCP + grok-mcp skill
+/plugin marketplace add zai-one/grok-build-mcp
+/plugin install grok-mcp@grok-build-mcp
+```
+
+Cursor: [установка в один клик](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3AiLCJncm9rLWRlbGVnYXRlIl19) или `.cursor/mcp.json`:
+
+```json
+{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp", "grok-delegate"]}}}
+```
+
+Codex `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.grok-mcp]
+command = "uvx"
+args = ["--from", "git+https://github.com/zai-one/grok-build-mcp", "grok-delegate"]
+```
+
+Claude Desktop: тот же блок `mcpServers` в `claude_desktop_config.json`. Skill лежит в `skills/grok-mcp/` (копии для Claude Code, Cursor, Codex в `.claude/`, `.cursor/`, `.codex/`, `.agents/`). Проекты разрешаются через roots хоста или `GROK_DELEGATE_ALLOWED_ROOTS`. Сначала `grok login`. Prompts: `delegate_task`, `review_diff`; справка: `grok://guide/index`.
+
+Примеры задач: «Передай Grok: добавь ретраи в HTTP-клиент, тесты должны пройти», «Попроси Grok проверить последнюю задачу», «grok-mcp работает?», «Включи grok-mcp для этого проекта с пресетом cheap», «Проверь обновление grok-mcp».
+
 ## Первая задача
 
 > Проверь готовность Grok и настройку моего проекта. Затем предложи небольшую задачу с отдельной веткой и конкретной командой тестов. Покажи результат перед слиянием.
