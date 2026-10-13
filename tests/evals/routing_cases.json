@@ -1,0 +1,20 @@
+[
+  {"request": "сделай задачу: добавь эндпоинт /health", "route": "delegate", "tool": "grok_agent_session_begin"},
+  {"request": "реализуй кэширование в клиенте", "route": "delegate", "tool": "grok_agent_session_next"},
+  {"request": "implement a dark theme for the settings screen", "route": "delegate", "tool": "grok_agent_session_begin"},
+  {"request": "build a CLI flag for verbose output", "route": "delegate", "tool": "grok_agent_session_end"},
+  {"request": "сделай ревью моего диффа", "route": "review", "tool": "grok_agent_review"},
+  {"request": "review the diff on this branch", "route": "review", "tool": "grok_agent_review"},
+  {"request": "давай обсудим идеи по архитектуре", "route": "consult", "tool": "grok_agent_consult"},
+  {"request": "brainstorm options before we code", "route": "consult", "tool": "grok_agent_consult"},
+  {"request": "почини падающие тесты", "route": "fix", "tool": "grok_agent_fix"},
+  {"request": "fix the failing CI check", "route": "fix", "tool": "grok_agent_fix"},
+  {"request": "отмени фоновую задачу", "route": "jobs", "tool": "grok_agent_cancel"},
+  {"request": "poll the running job", "route": "jobs", "tool": "grok_agent_poll"},
+  {"request": "мост не работает, проверь здоровье", "route": "health", "tool": "grok_agent_status"},
+  {"request": "which models are available, run doctor", "route": "health", "tool": "grok_agent_status"},
+  {"request": "обнови мост до новой версии", "route": "update", "tool": "grok_agent_check_update"},
+  {"request": "is there an update available?", "route": "update", "tool": "grok_agent_check_update"},
+  {"request": "включи пресет для проекта", "route": "project", "tool": "grok_agent_project"},
+  {"request": "how do I save tokens, economy preset?", "route": "project", "tool": "grok_agent_project"}
+]
