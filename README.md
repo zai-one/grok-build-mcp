@@ -153,6 +153,34 @@ grok login
 
 Merge `~/.config/grok-mcp/mcp/claude_desktop.snippet.json` into Claude/Cursor → restart → `grok_agent_status`.
 
+## Install as a plugin or via uvx
+
+```bash
+# Claude Code: MCP only
+claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp grok-delegate
+# Claude Code: plugin = MCP + grok-mcp skill
+/plugin marketplace add zai-one/grok-build-mcp
+/plugin install grok-mcp@grok-build-mcp
+```
+
+Cursor: [one-click install](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3AiLCJncm9rLWRlbGVnYXRlIl19) or `.cursor/mcp.json`:
+
+```json
+{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp", "grok-delegate"]}}}
+```
+
+Codex `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.grok-mcp]
+command = "uvx"
+args = ["--from", "git+https://github.com/zai-one/grok-build-mcp", "grok-delegate"]
+```
+
+Claude Desktop: the same `mcpServers` block in `claude_desktop_config.json`. The skill ships in `skills/grok-mcp/` (mirrored for Claude Code, Cursor, Codex in `.claude/`, `.cursor/`, `.codex/`, `.agents/`). Projects are allowed through the roots your host declares or `GROK_DELEGATE_ALLOWED_ROOTS`. Run `grok login` first. Prompts: `delegate_task`, `review_diff`; guides: `grok://guide/index`.
+
+Example asks: "Delegate to Grok: add retries to the HTTP client, tests must pass", "Ask Grok to review the last job", "Is grok-mcp healthy?", "Enable grok-mcp for this project with the cheap preset", "Check for a grok-mcp update".
+
 ## Host loop
 
 Once it is wired, use this loop:

@@ -1,0 +1,14 @@
+{
+  "name": "grok-mcp",
+  "displayName": "grok-mcp (unofficial)",
+  "description": "Unofficial bridge: hand coding goals to the local Grok CLI in an isolated git worktree and get a verified receipt. MCP server + grok-mcp skill.",
+  "version": "0.34.0",
+  "author": { "name": "ZAI.ONE" },
+  "homepage": "https://github.com/zai-one/grok-build-mcp",
+  "repository": "https://github.com/zai-one/grok-build-mcp",
+  "license": "MIT",
+  "keywords": ["mcp", "grok", "coding-agent", "delegation", "worktree"],
+  "category": "developer-tools",
+  "skills": "./skills/",
+  "mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp", "grok-delegate"], "env": {"GROK_DELEGATE_ECONOMY": "1", "GROK_DELEGATE_ECONOMY_COMPACT_POLL": "1"}}}
+}

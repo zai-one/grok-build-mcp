@@ -28,6 +28,17 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
+## Unreleased
+
+The host learns where to start without reading the docs, and can install the bridge as a plugin.
+
+- `initialize` now always returns router `instructions` (≤1200 chars: session loop, typed fallback, never push/merge); the cached update line is appended as before.
+- Every tool has a `title`; four long descriptions shortened to ≤300 chars (`grok_delegate/agent_layer.py`).
+- New MCP prompts `delegate_task`, `review_diff`; resources `grok://guide/index` and `grok://guide/{topic}` serve the skill references (shipped in the wheel as `grok_delegate/guide/`, kept identical by `scripts/sync_skills.py`). Capabilities now advertise `prompts` and `resources`.
+- `skills/grok-mcp/SKILL.md` frontmatter follows the Agent Skills spec (`version` moved under `metadata`; `license`, `compatibility` added).
+- Packaging: `.claude-plugin/plugin.json` + `marketplace.json` (`/plugin marketplace add zai-one/grok-build-mcp`), `.cursor-plugin/plugin.json`; README uvx/plugin snippets for Claude Code, Cursor, Codex, Claude Desktop.
+- CI: `scripts/token_budget.py --strict` (skills spec + L0 budget) and `scripts/verify_skills.py`.
+
 ## 0.34.0 — The host learns what a tool does, and when to update
 
 The bridge now speaks MCP 2025-11-25, labels every tool with what it touches,

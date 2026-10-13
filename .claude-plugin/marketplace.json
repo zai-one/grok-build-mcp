@@ -1,0 +1,12 @@
+{
+  "name": "grok-build-mcp",
+  "description": "grok-mcp bridge and skill by ZAI.ONE (unofficial, not affiliated with xAI)",
+  "owner": { "name": "ZAI.ONE", "url": "https://github.com/zai-one" },
+  "plugins": [
+    {
+      "name": "grok-mcp",
+      "source": "./",
+      "description": "Delegate coding goals to the local Grok CLI and get a verified receipt."
+    }
+  ]
+}

@@ -58,7 +58,7 @@ def test_initialize_echoes_a_supported_handshake_version(requested: object, echo
     body = _initialize(requested)
     assert body["result"]["protocolVersion"] == echoed
     assert body["result"]["serverInfo"]["name"] == "grok-delegate"
-    assert body["result"]["capabilities"] == {"tools": {}}
+    assert body["result"]["capabilities"] == {"tools": {}, "prompts": {}, "resources": {}}
 
 
 def test_negotiate_protocol_version_matches_initialize() -> None:

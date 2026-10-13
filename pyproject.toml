@@ -54,5 +54,8 @@ grok-delegate = "grok_delegate.server:main"
 [tool.setuptools.packages.find]
 include = ["grok_delegate*"]
 
+[tool.setuptools.package-data]
+grok_delegate = ["guide/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
