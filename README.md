@@ -4,9 +4,11 @@
 
 **Hand the coding loop to Grok CLI. Your host reads a receipt, not a repository.**
 
+> MCP server that delegates coding tasks from Claude Code, Cursor or Codex to the local Grok CLI in an isolated git worktree and returns a verified receipt (diffstat, capped diff, test results). Unofficial.
+
 [![tests](https://github.com/zai-one/grok-build-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/zai-one/grok-build-mcp/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License: source-available](https://img.shields.io/badge/license-source--available-lightgrey.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
 [![Version](https://img.shields.io/badge/version-0.34.0-informational.svg)](pyproject.toml)
 [![Built by ZAI.ONE](https://img.shields.io/badge/built%20by-ZAI.ONE-111111.svg)](https://zai.one)
@@ -50,6 +52,20 @@ produced itself. Doubly so across several repositories, on a plan you watch.
 **No** — you have no Grok CLI login. The bridge carries no credentials of its
 own and cannot work without one. Also no if you want an agent that merges its
 own work: this one commits to a `grok/*` branch and stops there, on purpose.
+
+## Why this MCP
+
+- Tests are run by the bridge, not by the agent; empty changes, unrequested files or red tests come back as `blocked` with a reason.
+- The host reads a bounded receipt instead of the repository, which keeps its context small.
+- 24 tools, 2 prompts, a resource, skills and a Claude Code plugin; `uvx` and one-command installers for Linux, macOS and Windows.
+- Other Grok MCP servers on GitHub wrap the xAI API ([djtelicloud/grok-mcp-server](https://github.com/djtelicloud/grok-mcp-server)) or pass prompts to the CLI ([BasisSetVentures/grok-cli-mcp](https://github.com/BasisSetVentures/grok-cli-mcp), 3 tools); neither isolates work in a worktree or verifies tests.
+
+## Maintained and up to date
+
+- Actively maintained by ZAI.ONE: current version 0.34.0; release notes in [CHANGELOG.md](CHANGELOG.md) and [Releases](https://github.com/zai-one/grok-build-mcp/releases).
+- Built-in update check: ask the assistant to run `grok_agent_check_update` (public GitHub API, no credentials, cached; nothing is installed automatically; `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1` turns it off).
+- Follows current MCP practice: tool annotations (read-only / destructive hints), toolsets and read-only mode, server `instructions`, prompts and resources, structured errors with recovery hints, secrets kept out of tool output, a token budget for tool descriptions enforced in tests.
+- CI runs the test suite on Linux and Windows for every pull request.
 
 ## Give this to your assistant
 
@@ -404,3 +420,10 @@ python -m grok_delegate.server
 
 Issues and pull requests are welcome — see
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License, use and contributing
+
+- **Use:** you may install and use this MCP server freely for yourself and your organisation, including commercial work. If it helps, please consider giving the repository a ⭐ — appreciated, never required.
+- **Contribute:** [issues](https://github.com/zai-one/grok-build-mcp/issues/new/choose) and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Never post tokens, cookies, sessions or account data.
+- **Not allowed without written permission from ZAI.ONE:** copying code into other projects, forking for redistribution, embedding the server in other products or offering it as a competing service.
+- License: [LicenseRef-ZAI-ONE 2.0](LICENSE) (source-available, not open source). Third-party notices and license history: [NOTICE](NOTICE).

@@ -100,5 +100,4 @@ Do not open public issues that include exploit details before a fix is ready.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the MIT
-License (see `LICENSE`).
+Contributions are accepted under [LICENSE](LICENSE) (LicenseRef-ZAI-ONE 2.0): by submitting a pull request you license your contribution to ZAI.ONE as described there. End users may install and use the server freely; copying code into other projects, redistribution and embedding in other products require written permission from ZAI.ONE.

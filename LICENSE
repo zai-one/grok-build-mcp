@@ -1,16 +1,43 @@
-MIT License
+LicenseRef-ZAI-ONE
+ZAI.ONE Source-Available License, version 2.0
 
-Copyright (c) 2026 Aleksandr / zai-one
+Copyright (c) 2026 Aleksandr / ZAI.ONE. All rights reserved except as granted below.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software is source-available. It is not licensed under MIT, Apache or any
+other open-source license.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Use. You may download, clone, install, configure and run this software, and
+   modify your own installed copy, on systems you control, for your own
+   personal or internal business purposes, including commercial work for your
+   own organisation or for clients you serve directly, against Grok CLI or other
+   accounts you are authorized to use. Copies needed for that use are allowed.
+
+2. Contributions. You may open issues and submit pull requests to the official
+   repository (https://github.com/zai-one/grok-build-mcp). A fork on GitHub made only to prepare a pull request
+   to the official repository is allowed. By submitting a contribution you grant
+   ZAI.ONE a perpetual, worldwide, royalty-free, irrevocable licence to use,
+   modify, relicense and distribute it as part of this software.
+
+3. Not allowed without prior written permission from ZAI.ONE (Aleksandr):
+   a) copying any part of the source code into other projects;
+   b) publishing, redistributing, sublicensing or selling the software or a
+      modified version, including forks kept for redistribution;
+   c) embedding or bundling the software in another product, package, plugin,
+      image or distribution;
+   d) offering the software, or a service substantially built on it, to third
+      parties as a hosted or managed service, or using it to build a competing
+      MCP server or package.
+   Request permission via https://t.me/zai_one or a GitHub issue.
+
+4. Third-party components. Separately identified third-party components keep
+   their own licences; see NOTICE. Nothing here limits rights granted by those
+   licences or by GitHub's Terms of Service for GitHub's own functionality.
+
+5. Earlier releases. Versions released before this licence version keep the
+   licence they were released under; see NOTICE.
+
+6. Termination. If you breach these terms and do not cure the breach within 30
+   days of written notice, your rights under this licence end.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
