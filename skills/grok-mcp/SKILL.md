@@ -5,7 +5,7 @@ description: >
   grok_agent_session_next until done. If a card fails schema, fall back to
   typed consult → execute → poll → review. Triggers: grok-mcp, session_next,
   grok login, execute. Never OAuth in config. Unpin is default.
-license: MIT
+license: LicenseRef-ZAI-ONE
 compatibility: Needs the grok-mcp (grok-delegate) MCP server and the Grok CLI after `grok login`.
 metadata:
   version: "1.1.0"

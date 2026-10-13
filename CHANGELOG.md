@@ -30,6 +30,8 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ## Unreleased
 
+- License: LicenseRef-ZAI-ONE 2.0 (source-available). Free install and use for yourself and your organisation, including commercial work; issues and pull requests welcome; copying code into other projects, redistribution, embedding and competing hosted services need written permission. Releases published under MIT before 2026-10-13 stay MIT for those versions (see NOTICE). README first screen: one-line scope, why this MCP, maintenance and update check.
+
 The host learns where to start without reading the docs, and can install the bridge as a plugin.
 
 - `initialize` now always returns router `instructions` (≤1200 chars: session loop, typed fallback, never push/merge); the cached update line is appended as before.
