@@ -666,7 +666,8 @@ def build_grok_argv(
             )
         argv.append("--fork-session")
     if session_v:
-        # Headless docs: with -r/-c, -s requires --fork-session (else the CLI errors).
+        # CLI reference: -s names a *new* session and --fork-session forks on resume, so -s with -r/-c is
+        # only coherent with --fork-session. Not stated verbatim in the docs; enforced conservatively.
         if resume_active and not fork_session:
             raise GuardError(
                 "SESSION_ID_REQUIRES_FORK",
