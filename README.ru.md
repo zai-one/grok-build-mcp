@@ -20,11 +20,25 @@ MCP-мост запускает Grok CLI на вашей машине. Для и
 
 ## Почему этот MCP
 
-- Ленивая загрузка инструментов (опционально): `GROK_DELEGATE_TOOL_LOADING=lazy` стартует с небольшим ядром и `grok_agent_enable_toolsets`, остальные наборы включаются по запросу (`tools/list_changed`). Стоимость старта (tools/list + instructions, ≈символы/4): eager ≈7466 токенов, lazy ≈1672 токенов (−78%). По умолчанию `eager` — без изменений; если клиент не поддерживает `tools/list_changed`, оставьте `eager` или переподключитесь после включения. Область: включение действует на весь процесс (this JSON-RPC server не умеет видимость инструментов по сессиям). В stdio это один клиент; в общем HTTP включённые одним клиентом наборы видны всем клиентам процесса (каждый вызов по-прежнему проходит свои проверки), поэтому для общего HTTP используйте `eager`.
+- Ленивая загрузка инструментов (опционально): `GROK_DELEGATE_TOOL_LOADING=lazy` (или выбор в мастере настройки) — старт с небольшим ядром, наборы включаются по запросу; см. [Ленивая загрузка инструментов](#ленивая-загрузка-инструментов).
 - Тесты запускает мост, а не агент; пустые изменения, лишние файлы или красные тесты возвращаются как `blocked` с причиной.
 - Хост читает ограниченную квитанцию вместо репозитория, контекст остаётся маленьким.
 - 24 инструмента, 2 промпта, ресурс, skills и плагин Claude Code; `uvx` и установщики одной командой для Linux, macOS и Windows.
 - Другие Grok MCP на GitHub оборачивают xAI API ([djtelicloud/grok-mcp-server](https://github.com/djtelicloud/grok-mcp-server)) или передают промпт в CLI ([BasisSetVentures/grok-cli-mcp](https://github.com/BasisSetVentures/grok-cli-mcp), 3 инструмента); ни один не изолирует работу в worktree и не проверяет тесты.
+
+## Ленивая загрузка инструментов
+
+Ленивая загрузка инструментов (опционально): `GROK_DELEGATE_TOOL_LOADING=lazy` стартует с небольшим ядром и `grok_agent_enable_toolsets`, остальные наборы включаются по запросу (`tools/list_changed`). Стоимость старта (tools/list + instructions, ≈символы/4): eager ≈7466 токенов, lazy ≈1672 токенов (−78%). По умолчанию `eager` — без изменений; если клиент не поддерживает `tools/list_changed`, оставьте `eager` или переподключитесь после включения. Область: включение действует на весь процесс (this JSON-RPC server не умеет видимость инструментов по сессиям). В stdio это один клиент; в общем HTTP включённые одним клиентом наборы видны всем клиентам процесса (каждый вызов по-прежнему проходит свои проверки), поэтому для общего HTTP используйте `eager`.
+
+Клиенты и `notifications/tools/list_changed` (проверено по официальной документации, changelog или заявлениям мейнтейнеров, 2026-10):
+
+| Клиент | `tools/list_changed` | Источник |
+|---|---|---|
+| Claude Code | Да (интерактивно: tools, prompts, resources; `-p`/Agent SDK: только tools) | [docs: Dynamic tool updates](https://code.claude.com/docs/en/mcp) |
+| VS Code (GitHub Copilot) | Да (dynamic tool discovery); новые инструменты могут стать доступны агенту только со следующего хода | [docs](https://code.visualstudio.com/api/extension-guides/ai/mcp), [#303012](https://github.com/microsoft/vscode/issues/303012) |
+| Gemini CLI | Да (обновляет реестр инструментов) | [PR #14375](https://github.com/google-gemini/gemini-cli/pull/14375), [PR #21050](https://github.com/google-gemini/gemini-cli/pull/21050) |
+| Cursor | Ненадёжно: регрессия в 3.12.x подтверждена командой Cursor; после включения перезапустите Cursor | [forum](https://forum.cursor.com/t/mcp-server-regression-does-not-reload-tools-disconnect-does-nothing-ignores-mcp-json-changes-etc/166216) |
+| Claude Desktop, Windsurf, Codex CLI, Cline, Zed, Continue | Не проверено: официальных данных нет; используйте `eager` или переподключитесь после включения | — |
 
 ## Поддержка и обновления
 
