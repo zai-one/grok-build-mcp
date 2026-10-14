@@ -31,7 +31,9 @@ from urllib.parse import quote, urlparse
 
 from .contracts import EVENT_SCHEMA_ID, MAX_EVENTS, bounded_event, build_prompt, redact_text as _redact_text
 from .guard import (
+    ALWAYS_APPROVE_ALIASES,
     ALWAYS_APPROVE_FLAG,
+    NO_AUTO_UPDATE_FLAG,
     GuardError,
     SERVER_VERSION,
     looks_like_secret_path,
@@ -318,6 +320,7 @@ class StdioACPTransport:
             # bridge has.
             "--no-subagents",
             "--disable-web-search",
+            NO_AUTO_UPDATE_FLAG,
             "agent",
             "--no-leader",
         ]
@@ -1585,7 +1588,7 @@ def _permission_params_with_tool_state(
 
 def assert_safe_acp_argv(argv: Sequence[str]) -> None:
     parts = [str(value) for value in argv]
-    if ALWAYS_APPROVE_FLAG in parts:
+    if any(flag in parts for flag in ALWAYS_APPROVE_ALIASES):
         raise GuardError("ALWAYS_APPROVE_FORBIDDEN", "ACP argv must never include --always-approve")
     if "bypassPermissions" in parts:
         raise GuardError("PERMISSION_MODE_FORBIDDEN", "ACP argv must never bypass permissions")

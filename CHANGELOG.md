@@ -31,6 +31,8 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ## Unreleased
 
+- Headless argv follows the Grok CLI reference: `--no-auto-update`, `--yolo`/`--dangerously-skip-permissions` rejected as always-approve aliases, `session_id` with resume/continue requires `fork_session`.
+
 - Instructions are generated from `agent_layer.ROUTES`: one line per intent -> first tool; skill; `grok://guide/<topic>`,
   with fallback to skill grok-mcp, `grok://guide/index` and `grok://guide/tools`.
 - `grok://guide/tools` now ends with a tool map covering every tool.

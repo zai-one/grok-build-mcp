@@ -86,3 +86,33 @@ def test_router_keeps_failure_fallback_and_economy_route():
     assert "consult -> execute -> poll -> review" in router and "One job at a time" in router
     assert "grok_agent_session_end" in router
     assert any(r[0] == "economy" and r[2] == "grok_agent_economy" for r in agent_layer.ROUTES)
+
+
+def test_cli_argv_follows_grok_docs():
+    """docs.x.ai/build/cli: --no-auto-update for automation; --yolo aliases always-approve;
+    -s with -r/-c needs --fork-session."""
+    import pytest
+
+    from grok_delegate import guard
+
+    for alias in ("--yolo", "--dangerously-skip-permissions", "--always-approve"):
+        with pytest.raises(guard.GuardError):
+            guard._assert_no_always_approve(["grok", alias])
+    assert guard.NO_AUTO_UPDATE_FLAG == "--no-auto-update"
+
+
+def test_headless_argv_disables_auto_update_and_guards_session_fork():
+    import pytest
+
+    from grok_delegate import guard
+
+    profile = guard.build_permission_profile()
+    argv = guard.build_grok_argv("goal", "C:/lanes/wt", profile, 5)
+    assert "--no-auto-update" in argv
+    sid = "123e4567-e89b-12d3-a456-426614174000"
+    with pytest.raises(guard.GuardError):
+        guard.build_grok_argv("goal", "C:/lanes/wt", profile, 5, continue_session=True, session_id=sid)
+    forked = guard.build_grok_argv(
+        "goal", "C:/lanes/wt", profile, 5, continue_session=True, fork_session=True, session_id=sid
+    )
+    assert "--fork-session" in forked and sid in forked
