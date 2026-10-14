@@ -78,7 +78,7 @@ def test_enable_registers_tools_and_notifies(monkeypatch, _fresh) -> None:
     assert set(result["added_tools"]) == set(TOOLSETS["jobs"]["tools"])
     assert listed() == CORE | set(TOOLSETS["jobs"]["tools"])
     assert _fresh == [{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}]
-    assert "reconnect" in result["hint"] and "GROK_DELEGATE_TOOL_LOADING=eager" in result["hint"]
+    assert "GROK_DELEGATE_TOOL_LOADING=eager" in result["hint"]
 
 
 def test_enable_is_idempotent(monkeypatch, _fresh) -> None:
@@ -123,3 +123,39 @@ def test_lazy_startup_budget(monkeypatch, capsys) -> None:
     assert costs["lazy"] < costs["eager"]
     with capsys.disabled():
         print(f"\nstartup tokens {json.dumps(costs)}")
+
+
+def _self_test_rows(monkeypatch, capsys, tmp_path, mode: str) -> dict[str, str]:
+    from grok_delegate.__main__ import _run_self_test
+    from grok_delegate.update_check import DISABLE_ENV
+
+    monkeypatch.setenv(DISABLE_ENV, "1")  # the self-test sets it too; monkeypatch restores it
+    monkeypatch.setenv("GROK_DELEGATE_TOOL_LOADING", mode)
+    monkeypatch.setenv("GROK_DELEGATE_BIN", str(tmp_path / "grok"))  # absent: no live CLI calls
+    _run_self_test()
+    rows = {}
+    for line in capsys.readouterr().out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) >= 2 and parts[0] in {"PASS", "FAIL"}:
+            rows[parts[1]] = parts[0]
+    return rows
+
+
+@pytest.mark.parametrize("mode", ["eager", "lazy"])
+def test_self_test_tools_list_passes_in_both_modes(monkeypatch, capsys, tmp_path, mode) -> None:
+    # install.sh exports the chosen mode before --self-test; lazy used to fail rpc_tools_list
+    # (compat tools hidden) and the installer exited 2 suggesting `grok login`.
+    rows = _self_test_rows(monkeypatch, capsys, tmp_path, mode)
+    assert rows.get("rpc_tools_list") == "PASS", rows
+    if mode == "lazy":
+        assert rows.get("rpc_enable_toolsets") == "PASS", rows
+        assert listed() == CORE  # the self-test does not leave toolsets enabled
+
+
+def test_hint_does_not_promise_reconnect_restores_toolsets(monkeypatch) -> None:
+    # Reconnecting a stdio server starts a new process with only the core listed, so the
+    # hint must not offer it as recovery; eager + restart is the working fallback.
+    monkeypatch.setenv("GROK_DELEGATE_TOOL_LOADING", "lazy")
+    hint = call(ENABLE_TOOL, {"toolsets": ["jobs"]})["hint"]
+    assert "reconnect the MCP server" not in hint
+    assert "GROK_DELEGATE_TOOL_LOADING=eager" in hint and "restart" in hint

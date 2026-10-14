@@ -31,7 +31,7 @@ def _run_self_test() -> int:
     # `git ls-remote` from the status call. This process exits right after.
     os.environ[DISABLE_ENV] = "1"
 
-    from . import server
+    from . import lazy_loading, server
     from .guard import validate_grok_bin
     from .status import (
         build_status_report,
@@ -113,26 +113,55 @@ def _run_self_test() -> int:
 
     check("rpc_initialize", _rpc_initialize)
 
-    def _rpc_tools_list() -> tuple[bool, str]:
+    def _listed() -> list[str]:
         resp = server.handle_jsonrpc(
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
         )
         assert resp is not None
-        names = [t["name"] for t in resp["result"]["tools"]]
-        required = {
-            "grok_delegate",
-            "grok_delegate_plan",
-            "grok_delegate_status",
-            "grok_delegate_doctor",
-            "grok_delegate_models",
-            "grok_delegate_inspect",
-            "grok_agent_status",
-            "grok_agent_economy",
-        }
-        missing = sorted(required - set(names))
+        return [t["name"] for t in resp["result"]["tools"]]
+
+    compat_required = {
+        "grok_delegate",
+        "grok_delegate_plan",
+        "grok_delegate_status",
+        "grok_delegate_doctor",
+        "grok_delegate_models",
+        "grok_delegate_inspect",
+    }
+    try:
+        lazy = lazy_loading.is_lazy()
+    except ValueError:  # an invalid mode fails rpc_tools_list below, with the message
+        lazy = False
+
+    def _rpc_tools_list() -> tuple[bool, str]:
+        # Lazy mode starts with the core only; the compat tools appear after enabling.
+        names = _listed()
+        required = (lazy_loading.core_names() | {lazy_loading.ENABLE_TOOL}) if lazy else compat_required
+        missing = sorted((required | {"grok_agent_status", "grok_agent_economy"}) - set(names))
         return not missing, f"tools={names}" if not missing else f"missing={missing}"
 
     check("rpc_tools_list", _rpc_tools_list)
+
+    if lazy:
+
+        def _rpc_enable_toolsets() -> tuple[bool, str]:
+            resp = server.handle_jsonrpc(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": lazy_loading.ENABLE_TOOL, "arguments": {"toolsets": ["compat"]}},
+                }
+            )
+            assert resp is not None
+            try:
+                missing = sorted(compat_required - set(_listed()))
+            finally:
+                lazy_loading.reset()  # leave the process as a fresh lazy session
+            enabled = resp["result"]["structuredContent"].get("ok") is True
+            return enabled and not missing, "compat enabled and listed" if not missing else f"missing={missing}"
+
+        check("rpc_enable_toolsets", _rpc_enable_toolsets)
 
     # Status tools via handle_tool_call (same path as tools/call)
     # Use a temp allowlist so status does not fail on empty roots when env unset.
