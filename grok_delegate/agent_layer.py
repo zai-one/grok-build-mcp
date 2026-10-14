@@ -21,29 +21,29 @@ ROUTES: tuple[tuple[str, str, str, str, str], ...] = (
     ("delegate", "сделай задачу, реализуй, напиши код, implement, build", "grok_agent_session_begin",
      "grok-mcp", "operate"),
     ("review", "ревью, проверь дифф, review, diff", "grok_agent_review", "grok-mcp", "verify"),
-    ("consult", "обсудить, идеи, план, brainstorm, ask, plan", "grok_agent_consult", "grok-mcp",
+    ("consult", "обсудить, идеи, план, brainstorm, plan", "grok_agent_consult", "grok-mcp",
      "brainstorm"),
     ("fix", "починить, падает, тесты, fix, failing, tests", "grok_agent_fix", "grok-mcp", "execute"),
     ("jobs", "фоновая, статус задачи, отменить, job, poll, cancel", "grok_agent_poll", "", "tools"),
-    ("health", "здоровье, не работает, логин, модели, doctor, health, models", "grok_agent_status", "",
+    ("health", "здоровье, не работает, логин, doctor, health, models", "grok_agent_status", "",
      "install"),
-    ("update", "обновить мост, версия, update, version", "grok_agent_check_update", "", "update"),
-    ("project", "настройки проекта, пресет, токены, project, preset, economy", "grok_agent_project", "",
-     "hosts"),
+    ("update", "обновить мост, update, version", "grok_agent_check_update", "", "update"),
+    ("project", "настройки проекта, пресет, project, preset", "grok_agent_project", "", "hosts"),
+    ("economy", "токены, сэкономь, tokens", "grok_agent_economy", "", "operate"),
 )  # fmt: skip
 
 
 def _router() -> str:
     head = (
-        "grok-mcp (unofficial): local Grok CLI codes in an isolated git worktree, returns a verified "
-        "receipt. Loop: grok_agent_session_begin -> grok_agent_session_next (do only the "
-        "card) -> grok_agent_session_end. Prompts: delegate_task, review_diff."
+        "grok-mcp (unofficial): local Grok CLI codes in an isolated git worktree; verified receipt. "
+        "Loop: grok_agent_session_begin -> grok_agent_session_next (do only the card) -> grok_agent_session_end; "
+        "card fails: consult -> execute -> poll -> review. One job at a time. Prompt: delegate_task."
     )
     lines = [f"- {intent}: " + "; ".join(p for p in (tool, skill, topic) if p) for _, intent, tool, skill, topic in ROUTES]
     tail = (
-        "Never push or merge from the bridge; auth is `grok login`, never tokens in config. "
-        "Retry only if the reason says retryable. "
-        "Unsure? skill grok-mcp, grok://guide/index (topics) or grok://guide/tools (every tool)."
+        "Never push/merge from the bridge; auth is `grok login`, no tokens in config. "
+        "Retry only if retryable. "
+        "Unsure? skill grok-mcp, grok://guide/index or grok://guide/tools."
     )
     return "\n".join([head, "Intent -> first tool; skill; grok://guide/<topic>:", *lines, tail])
 

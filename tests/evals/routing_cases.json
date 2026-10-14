@@ -16,5 +16,6 @@
   {"request": "обнови мост до новой версии", "route": "update", "tool": "grok_agent_check_update"},
   {"request": "is there an update available?", "route": "update", "tool": "grok_agent_check_update"},
   {"request": "включи пресет для проекта", "route": "project", "tool": "grok_agent_project"},
-  {"request": "how do I save tokens, economy preset?", "route": "project", "tool": "grok_agent_project"}
+  {"request": "how do I save tokens on this run?", "route": "economy", "tool": "grok_agent_economy"},
+  {"request": "сэкономь токены на этой задаче", "route": "economy", "tool": "grok_agent_economy"}
 ]

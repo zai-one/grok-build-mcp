@@ -34,6 +34,7 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 - Instructions are generated from `agent_layer.ROUTES`: one line per intent -> first tool; skill; `grok://guide/<topic>`,
   with fallback to skill grok-mcp, `grok://guide/index` and `grok://guide/tools`.
 - `grok://guide/tools` now ends with a tool map covering every tool.
+- Router keeps the failure fallback (consult -> execute -> poll -> review, one job at a time); token-economy requests route to `grok_agent_economy`, not `grok_agent_project`.
 - Router eval (`tests/evals/routing_cases.json`, 18 RU/EN requests) fails on any unreachable tool, skill or guide.
 ## 0.35.0 — The host learns where to start, and installs as a plugin
 

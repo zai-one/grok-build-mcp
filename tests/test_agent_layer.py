@@ -79,3 +79,10 @@ def test_plugin_manifests() -> None:
     for manifest in (claude, cursor):
         assert manifest["mcpServers"]["grok-mcp"]["command"] == "uvx"
         assert (ROOT / manifest["skills"] / "grok-mcp" / "SKILL.md").is_file()
+
+
+def test_router_keeps_failure_fallback_and_economy_route():
+    router = agent_layer.ROUTER_INSTRUCTIONS
+    assert "consult -> execute -> poll -> review" in router and "One job at a time" in router
+    assert "grok_agent_session_end" in router
+    assert any(r[0] == "economy" and r[2] == "grok_agent_economy" for r in agent_layer.ROUTES)
