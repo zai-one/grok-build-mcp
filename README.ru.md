@@ -42,7 +42,7 @@ MCP-мост запускает Grok CLI на вашей машине. Для и
 
 ## Поддержка и обновления
 
-- Проект активно поддерживает ZAI.ONE: текущая версия 0.35.0; изменения в [CHANGELOG.md](CHANGELOG.md) и [Releases](https://github.com/zai-one/grok-build-mcp/releases).
+- Проект активно поддерживает ZAI.ONE: текущая версия 0.36.0; изменения в [CHANGELOG.md](CHANGELOG.md) и [Releases](https://github.com/zai-one/grok-build-mcp/releases).
 - Встроенная проверка обновлений: попросите ассистента вызвать `grok_agent_check_update` (публичный GitHub API, без учётных данных, с кэшем; ничего не устанавливается автоматически; отключение: `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1`).
 - Следует актуальным практикам MCP: аннотации инструментов (read-only / destructive), `instructions` сервера, промпты и ресурсы, структурированные ошибки с подсказками, секреты не попадают в ответы, бюджет токенов описаний проверяется в тестах.
 - CI прогоняет тесты на Linux и Windows для каждого pull request.
@@ -70,16 +70,16 @@ curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts
 
 ```bash
 # Claude Code: MCP only
-claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp@v0.35.0 grok-delegate
+claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp@v0.36.0 grok-delegate
 # Claude Code: plugin = MCP + grok-mcp skill
 /plugin marketplace add zai-one/grok-build-mcp
 /plugin install grok-mcp@grok-build-mcp
 ```
 
-Cursor: [установка в один клик](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3BAdjAuMzUuMCIsImdyb2stZGVsZWdhdGUiXX0=) или `.cursor/mcp.json`:
+Cursor: [установка в один клик](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3BAdjAuMzYuMCIsImdyb2stZGVsZWdhdGUiXX0=) или `.cursor/mcp.json`:
 
 ```json
-{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.35.0", "grok-delegate"]}}}
+{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.36.0", "grok-delegate"]}}}
 ```
 
 Codex `~/.codex/config.toml`:
@@ -87,7 +87,7 @@ Codex `~/.codex/config.toml`:
 ```toml
 [mcp_servers.grok-mcp]
 command = "uvx"
-args = ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.35.0", "grok-delegate"]
+args = ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.36.0", "grok-delegate"]
 ```
 
 Claude Desktop: тот же блок `mcpServers` в `claude_desktop_config.json`. Skill лежит в `skills/grok-mcp/` (копии для Claude Code, Cursor, Codex в `.claude/`, `.cursor/`, `.codex/`, `.agents/`). Проекты разрешаются через roots хоста или `GROK_DELEGATE_ALLOWED_ROOTS`. Сначала `grok login`. Prompts: `delegate_task`, `review_diff`; справка: `grok://guide/index`.
