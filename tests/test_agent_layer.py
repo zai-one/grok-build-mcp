@@ -116,3 +116,34 @@ def test_headless_argv_disables_auto_update_and_guards_session_fork():
         "goal", "C:/lanes/wt", profile, 5, continue_session=True, fork_session=True, session_id=sid
     )
     assert "--fork-session" in forked and sid in forked
+
+
+def test_acp_argv_disables_auto_update_and_refuses_approve_aliases():
+    """The ACP worker argv (the path every job takes) gets --no-auto-update, and the ACP guard refuses
+    every documented always-approve alias, not only --always-approve."""
+    import pytest
+
+    from grok_delegate import acp, guard
+
+    transport = acp.StdioACPTransport(grok_bin="grok")
+    argv = transport.build_argv({"max_turns": 4, "reasoning_effort": "low"})
+    assert guard.NO_AUTO_UPDATE_FLAG in argv
+    assert argv.index(guard.NO_AUTO_UPDATE_FLAG) < argv.index("agent")  # a global flag, before the subcommand
+    for alias in guard.ALWAYS_APPROVE_ALIASES:
+        with pytest.raises(guard.GuardError):
+            acp.assert_safe_acp_argv([*argv, alias])
+
+
+def test_bad_tool_loading_value_stops_server_at_start(monkeypatch, capsys):
+    """A typo must not leave a server that answers every request with 'internal error: ValueError'."""
+    from grok_delegate import server
+
+    called = []
+    monkeypatch.setattr(server, "serve_stdio", lambda: called.append("stdio"))
+    monkeypatch.setenv("GROK_DELEGATE_TOOL_LOADING", "1")
+    assert server.main([]) == 2
+    assert not called
+    assert "GROK_DELEGATE_TOOL_LOADING" in capsys.readouterr().err
+    monkeypatch.setenv("GROK_DELEGATE_TOOL_LOADING", "Lazy ")
+    monkeypatch.setattr(server, "shutdown_runtime", lambda: None)
+    assert server.main([]) == 0 and called == ["stdio"]

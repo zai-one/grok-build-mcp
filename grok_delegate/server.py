@@ -2730,6 +2730,15 @@ def main(argv: list[str] | None = None) -> int:
             "NOT an official xAI/Grok product. NOT the product admin-bridge.\n"
         )
         return 0
+    from . import lazy_loading
+
+    try:
+        lazy_loading.mode()
+    except ValueError as exc:
+        # Checked once here: otherwise every initialize / tools/list / tools/call answers an
+        # opaque "internal error: ValueError" and the client never learns which setting is wrong.
+        sys.stderr.write(f"grok-delegate: {exc} (got {os.environ.get(lazy_loading.ENV)!r})\n")
+        return 2
     transport = "stdio"
     host = os.environ.get("GROK_DELEGATE_HTTP_HOST", "127.0.0.1")
     port = int(os.environ.get("GROK_DELEGATE_HTTP_PORT", "8765") or "8765")

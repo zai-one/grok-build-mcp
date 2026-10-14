@@ -28,10 +28,9 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
-
 ## Unreleased
 
-- Optional lazy tool loading (`GROK_DELEGATE_TOOL_LOADING=eager|lazy`, default `eager` = unchanged): lazy lists a small core plus `grok_agent_enable_toolsets` (toolsets with one-line description and token cost); enabling registers the tools at runtime and sends `notifications/tools/list_changed`. Toolsets: meta + session (always listed), jobs, maintenance, compat; a not-yet-enabled tool answers `TOOL_NOT_ENABLED` with the toolset to enable. Allowed roots, project opt-in and confirm gates still apply. `install.sh` asks eager vs lazy (or `--tool-loading`), `install.ps1 -ToolLoading`; documented in docs/ENVIRONMENT.md. Startup tokens (tools/list + instructions, ≈chars/4): eager ≈7466, lazy ≈1672. Scope: enablement is process-wide (this JSON-RPC server has no per-session tool visibility). Over stdio that is one client; in shared HTTP mode one client's enabled toolsets are listed for every client of that process (each call still passes its own gates), so use `eager` for shared HTTP. README lazy section lists verified `tools/list_changed` client support with sources.
+- Optional lazy tool loading (`GROK_DELEGATE_TOOL_LOADING=eager|lazy`, default `eager` = unchanged): lazy lists a small core plus `grok_agent_enable_toolsets` (toolsets with one-line description and token cost); enabling registers the tools at runtime and sends `notifications/tools/list_changed`. Toolsets: meta + session (always listed), jobs, maintenance, compat; a not-yet-enabled tool answers `TOOL_NOT_ENABLED` with the toolset to enable. Allowed roots, project opt-in and confirm gates still apply. `install.sh` asks eager vs lazy (or `--tool-loading`), `install.ps1 -ToolLoading`; documented in docs/ENVIRONMENT.md. Any other value stops the server at start with a message naming the variable. Startup tokens (tools/list + instructions, ≈chars/4): eager ≈7466, lazy ≈1672. Scope: enablement is process-wide (this JSON-RPC server has no per-session tool visibility). Over stdio that is one client; in shared HTTP mode one client's enabled toolsets are listed for every client of that process (each call still passes its own gates), so use `eager` for shared HTTP. README lazy section lists verified `tools/list_changed` client support with sources.
 - Headless argv follows the Grok CLI reference: `--no-auto-update`, `--yolo`/`--dangerously-skip-permissions` rejected as always-approve aliases, `session_id` with resume/continue requires `fork_session` (the reference defines `-s` as a new session ID and `--fork-session` as forking on resume; the bridge refuses the ambiguous combination).
 
 - Instructions are generated from `agent_layer.ROUTES`: one line per intent -> first tool; skill; `grok://guide/<topic>`,
@@ -39,6 +38,7 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 - `grok://guide/tools` now ends with a tool map covering every tool.
 - Router keeps the failure fallback (consult -> execute -> poll -> review, one job at a time); token-economy requests route to `grok_agent_economy`, not `grok_agent_project`.
 - Router eval (`tests/evals/routing_cases.json`, 24 RU/EN requests incl. paraphrases and negative cases) fails on any unreachable tool, skill or guide.
+
 ## 0.35.0 — The host learns where to start, and installs as a plugin
 
 The host learns where to start without reading the docs, and can install the
