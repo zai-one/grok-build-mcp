@@ -5,7 +5,10 @@
 
 param(
   [string]$Project = "$env:USERPROFILE",
-  [string]$HomeDir = "$env:LOCALAPPDATA\grok-mcp"
+  [string]$HomeDir = "$env:LOCALAPPDATA\grok-mcp",
+  # eager = every tool at start (default); lazy = small core + grok_agent_enable_toolsets.
+  [ValidateSet("eager", "lazy")]
+  [string]$ToolLoading = "eager"
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,6 +66,7 @@ $envBody = @"
 `$env:GROK_DELEGATE_ALLOWED_ROOTS = '$Project'
 `$env:GROK_DELEGATE_ECONOMY = '1'
 `$env:GROK_DELEGATE_ECONOMY_COMPACT_POLL = '1'
+`$env:GROK_DELEGATE_TOOL_LOADING = '$ToolLoading'
 "@
 
 Write-Utf8NoBom $envFile $envBody
@@ -86,6 +90,7 @@ $envJson = [ordered]@{
     GROK_DELEGATE_ALLOWED_ROOTS         = $Project
     GROK_DELEGATE_ECONOMY               = "1"
     GROK_DELEGATE_ECONOMY_COMPACT_POLL  = "1"
+    GROK_DELEGATE_TOOL_LOADING          = $ToolLoading
 } | ConvertTo-Json
 
 $claudeSnippet = @"

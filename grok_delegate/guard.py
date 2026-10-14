@@ -31,6 +31,11 @@ RESERVED_LANE_NAMES = frozenset({"dev", "master", "main"})
 _LANE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 ALWAYS_APPROVE_FLAG = "--always-approve"
+# docs.x.ai/build/cli/reference: `--yolo` is an alias of --always-approve and Claude-compatible
+# `--dangerously-skip-permissions` is accepted too; all three bypass tool approval.
+ALWAYS_APPROVE_ALIASES = (ALWAYS_APPROVE_FLAG, "--yolo", "--dangerously-skip-permissions")
+# Headless docs: pass --no-auto-update in scripts/automation to skip background update checks.
+NO_AUTO_UPDATE_FLAG = "--no-auto-update"
 BYPASS_PERMISSIONS_MODE = "bypassPermissions"
 
 # Documented headless interfaces from live ``grok --help`` (R1).
@@ -605,6 +610,7 @@ def build_grok_argv(
         str(turns),
         "--permission-mode",
         mode,
+        NO_AUTO_UPDATE_FLAG,
     ]
 
     if sandbox_v:
@@ -660,6 +666,13 @@ def build_grok_argv(
             )
         argv.append("--fork-session")
     if session_v:
+        # CLI reference: -s names a *new* session and --fork-session forks on resume, so -s with -r/-c is
+        # only coherent with --fork-session. Not stated verbatim in the docs; enforced conservatively.
+        if resume_active and not fork_session:
+            raise GuardError(
+                "SESSION_ID_REQUIRES_FORK",
+                "session_id with resume/continue requires fork_session",
+            )
         argv.extend(["--session-id", session_v])
 
     for rule in allow:
@@ -697,7 +710,8 @@ def _assert_execute_allow_safe(allow: Sequence[str]) -> None:
 
 def _assert_no_always_approve(argv: Sequence[str]) -> None:
     for part in argv:
-        if part == ALWAYS_APPROVE_FLAG or str(part).startswith(f"{ALWAYS_APPROVE_FLAG}="):
+        text = str(part)
+        if any(text == flag or text.startswith(f"{flag}=") for flag in ALWAYS_APPROVE_ALIASES):
             raise GuardError(
                 "ALWAYS_APPROVE_FORBIDDEN",
                 "argv must never include --always-approve",
