@@ -55,6 +55,7 @@ own work: this one commits to a `grok/*` branch and stops there, on purpose.
 
 ## Why this MCP
 
+- Optional lazy tool loading: `GROK_DELEGATE_TOOL_LOADING=lazy` starts with a small core plus `grok_agent_enable_toolsets` and adds toolsets on demand (`tools/list_changed`). Startup cost (tools/list + instructions, ≈chars/4): eager ≈7466 tokens, lazy ≈1672 tokens (−78%). Default `eager` is unchanged; if your client ignores `tools/list_changed`, keep `eager` or reconnect after enabling.
 - Tests are run by the bridge, not by the agent; empty changes, unrequested files or red tests come back as `blocked` with a reason.
 - The host reads a bounded receipt instead of the repository, which keeps its context small.
 - 24 tools, 2 prompts, a resource, skills and a Claude Code plugin; `uvx` and one-command installers for Linux, macOS and Windows.

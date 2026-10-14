@@ -2174,9 +2174,13 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
         # all. Recorded here because initialize is the only place the client
         # says so.
         remember_client_capabilities(params)
+        from . import lazy_loading
+
+        lazy = lazy_loading.is_lazy()
         result = {
             "protocolVersion": negotiate_protocol_version(requested),
-            "capabilities": {"tools": {}, "prompts": {}, "resources": {}},
+            # Lazy tool loading adds tools at runtime, so it declares tools.listChanged.
+            "capabilities": {"tools": {"listChanged": True} if lazy else {}, "prompts": {}, "resources": {}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
         }
         # Cache-only: initialize never waits on the network for this line.
@@ -2189,6 +2193,8 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
         from .agent_layer import ROUTER_INSTRUCTIONS
 
         result["instructions"] = ROUTER_INSTRUCTIONS + (f" {hint}" if hint else "")
+        if lazy:
+            result["instructions"] += "\n" + lazy_loading.ROUTER_LINE
         return None if is_notification else _jsonrpc_result(req_id, result)
 
     if method == "notifications/initialized":
@@ -2217,8 +2223,10 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
         return None
 
     if method == "tools/list":
+        from . import lazy_loading
+
         return None if is_notification else _jsonrpc_result(
-            req_id, {"tools": list_tools()}
+            req_id, {"tools": lazy_loading.visible(list_tools())}
         )
 
     if method == "tools/call":
@@ -2226,6 +2234,15 @@ def handle_jsonrpc(message: Mapping[str, Any]) -> dict[str, Any] | None:
         arguments = params.get("arguments") if isinstance(params, dict) else {}
         if not name:
             return _jsonrpc_error(req_id, -32602, "tools/call requires name")
+        from . import lazy_loading
+
+        if lazy_loading.is_lazy() and (name == lazy_loading.ENABLE_TOOL or lazy_loading.hidden(str(name))):
+            local = (
+                lazy_loading.enable(arguments, list_tools(), _NOTIFIER)
+                if name == lazy_loading.ENABLE_TOOL
+                else lazy_loading.not_enabled(str(name))
+            )
+            return None if is_notification else _jsonrpc_result(req_id, assemble_tool_result(local))
         global _PROGRESS_TOKEN
         _PROGRESS_TOKEN = progress_token_of(params)
         try:
