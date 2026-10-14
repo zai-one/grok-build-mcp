@@ -10,7 +10,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: source-available](https://img.shields.io/badge/license-source--available-lightgrey.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.35.0-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.36.0-informational.svg)](pyproject.toml)
 [![Built by ZAI.ONE](https://img.shields.io/badge/built%20by-ZAI.ONE-111111.svg)](https://zai.one)
 
 > By [ZAI.ONE](https://zai.one), a digital agency for websites, SEO, advertising and analytics.
@@ -77,7 +77,7 @@ Clients and `notifications/tools/list_changed` (verified against official docs, 
 
 ## Maintained and up to date
 
-- Actively maintained by ZAI.ONE: current version 0.35.0; release notes in [CHANGELOG.md](CHANGELOG.md) and [Releases](https://github.com/zai-one/grok-build-mcp/releases).
+- Actively maintained by ZAI.ONE: current version 0.36.0; release notes in [CHANGELOG.md](CHANGELOG.md) and [Releases](https://github.com/zai-one/grok-build-mcp/releases).
 - Built-in update check: ask the assistant to run `grok_agent_check_update` (public GitHub API, no credentials, cached; nothing is installed automatically; `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1` turns it off).
 - Follows current MCP practice: tool annotations (read-only / destructive hints), server `instructions`, prompts and resources, structured errors with recovery hints, secrets kept out of tool output, a token budget for tool descriptions enforced in tests.
 - CI runs the test suite on Linux and Windows for every pull request.
@@ -188,16 +188,16 @@ Merge `~/.config/grok-mcp/mcp/claude_desktop.snippet.json` into Claude/Cursor â†
 
 ```bash
 # Claude Code: MCP only
-claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp@v0.35.0 grok-delegate
+claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp@v0.36.0 grok-delegate
 # Claude Code: plugin = MCP + grok-mcp skill
 /plugin marketplace add zai-one/grok-build-mcp
 /plugin install grok-mcp@grok-build-mcp
 ```
 
-Cursor: [one-click install](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3BAdjAuMzUuMCIsImdyb2stZGVsZWdhdGUiXX0=) or `.cursor/mcp.json`:
+Cursor: [one-click install](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3BAdjAuMzYuMCIsImdyb2stZGVsZWdhdGUiXX0=) or `.cursor/mcp.json`:
 
 ```json
-{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.35.0", "grok-delegate"]}}}
+{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.36.0", "grok-delegate"]}}}
 ```
 
 Codex `~/.codex/config.toml`:
@@ -205,7 +205,7 @@ Codex `~/.codex/config.toml`:
 ```toml
 [mcp_servers.grok-mcp]
 command = "uvx"
-args = ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.35.0", "grok-delegate"]
+args = ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.36.0", "grok-delegate"]
 ```
 
 Claude Desktop: the same `mcpServers` block in `claude_desktop_config.json`. The skill ships in `skills/grok-mcp/` (mirrored for Claude Code, Cursor, Codex in `.claude/`, `.cursor/`, `.codex/`, `.agents/`). Projects are allowed through the roots your host declares or `GROK_DELEGATE_ALLOWED_ROOTS`. Run `grok login` first. Prompts: `delegate_task`, `review_diff`; guides: `grok://guide/index`.

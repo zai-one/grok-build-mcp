@@ -28,13 +28,16 @@ Release procedure is in [AGENTS.md](AGENTS.md).
 
 ---
 
-## Unreleased
+## 0.36.0 — The host loads only the tools it needs, and finds the right one
+
+The host can start with a small core and load more tools on demand, and the
+router points each kind of request at its first tool. Headless runs follow the
+Grok CLI reference and refuse always-approve flags.
 
 - Optional lazy tool loading (`GROK_DELEGATE_TOOL_LOADING=eager|lazy`, default `eager` = unchanged): lazy lists a small core plus `grok_agent_enable_toolsets` (toolsets with one-line description and token cost); enabling registers the tools at runtime and sends `notifications/tools/list_changed`. Toolsets: meta + session (always listed), jobs, maintenance, compat; a not-yet-enabled tool answers `TOOL_NOT_ENABLED` with the toolset to enable. Allowed roots, project opt-in and confirm gates still apply. `install.sh` asks eager vs lazy (or `--tool-loading`), `install.ps1 -ToolLoading`; documented in docs/ENVIRONMENT.md. Any other value stops the server at start with a message naming the variable. Startup tokens (tools/list + instructions, ≈chars/4): eager ≈7466, lazy ≈1672. Scope: enablement is process-wide (this JSON-RPC server has no per-session tool visibility). Over stdio that is one client; in shared HTTP mode one client's enabled toolsets are listed for every client of that process (each call still passes its own gates), so use `eager` for shared HTTP. README lazy section lists verified `tools/list_changed` client support with sources.
 - Fix: with lazy tool loading the installer's `--self-test` no longer fails `rpc_tools_list` (and `install.sh` no longer exits 2 asking for `grok login`): the self-test checks the lazy core, then enables `compat` through `grok_agent_enable_toolsets` and checks the extended list.
 - Fix: the lazy-loading hint and README no longer suggest reconnecting (or restarting Cursor) to see enabled tools; a reconnected stdio server is a new process that lists only the core again, so clients that ignore `tools/list_changed` should use `eager`.
 - Headless argv follows the Grok CLI reference: `--no-auto-update`, `--yolo`/`--dangerously-skip-permissions` rejected as always-approve aliases, `session_id` with resume/continue requires `fork_session` (the reference defines `-s` as a new session ID and `--fork-session` as forking on resume; the bridge refuses the ambiguous combination).
-
 - Instructions are generated from `agent_layer.ROUTES`: one line per intent -> first tool; skill; `grok://guide/<topic>`,
   with fallback to skill grok-mcp, `grok://guide/index` and `grok://guide/tools`.
 - `grok://guide/tools` now ends with a tool map covering every tool.
