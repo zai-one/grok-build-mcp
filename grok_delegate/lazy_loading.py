@@ -4,6 +4,7 @@ GROK_DELEGATE_TOOL_LOADING=eager (default) lists every tool, exactly as before. 
 GROK_DELEGATE_TOOL_LOADING=lazy, tools/list shows only the core (status, update check,
 economy, project preset, the session loop and grok_agent_enable_toolsets); enabling a
 toolset adds its tools for this server process and sends notifications/tools/list_changed.
+Enabled toolsets live in memory only: a restarted (reconnected stdio) server lists the core again.
 Enabled tools keep every gate they had (allowed roots, project opt-in, confirm, sandbox).
 """
 
@@ -47,8 +48,8 @@ TOOLSETS: dict[str, dict[str, Any]] = {
 CORE_TOOLSETS = ("meta", "session")
 ROUTER_LINE = f"Lazy tools: {ENABLE_TOOL}() lists toolsets; {ENABLE_TOOL}(toolsets=[...]) adds them."
 HINT = (
-    "If the new tools do not appear, this client ignores tools/list_changed: re-list tools or reconnect "
-    f"the MCP server, or set {ENV}=eager."
+    "If the new tools do not appear, this client ignores tools/list_changed: re-list tools. Reconnecting "
+    f"starts a new server with only the core, so set {ENV}=eager and restart the MCP server instead."
 )
 ENABLE_SPEC: dict[str, Any] = {
     "name": ENABLE_TOOL,
