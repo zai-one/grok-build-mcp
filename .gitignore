@@ -22,3 +22,23 @@ Service/Audits/routines-*.json
 # Work prompts other sessions drop here. Not this project, never committed.
 .grok-review-input/
 build/
+
+# Personal workspace data; shared AGENTS.md, guides and shipped skills stay public.
+/AGENTS.local.md
+/CLAUDE.local.md
+/docs/engineering/private/
+/docs/engineering/local/
+/.tasks/
+/outputs/
+/audit-screenshots/
+/.claude/settings.local.json
+/.claude/worktrees/
+/.codex/config.local.toml
+/.mcp.local.json
+/mcp-client.json
+/mcp-client.toml
+/.env
+/.env.*
+!/.env.example
+!/.env.sample
+!/.env.template
