@@ -44,4 +44,3 @@ Grok не трогает `main`, не мержит, не пушит. Хост н
 - Не `git config`. Не `--no-verify`. Не force-push. Не pin Grok CLI.
 - Windows: `git commit -m "msg"` (без bash HEREDOC).
 - Тесты: `py -3 -m pytest tests -q`. Красное дерево не пушить.
-

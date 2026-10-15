@@ -53,4 +53,3 @@
 ## GitHub Issue (чтобы следующий агент мог сделать)
 
 Поля: symptom; host (Cursor/Claude/Codex); grok CLI `grok --version`; bridge `SERVER_VERSION` / `grok_agent_status`; excerpt `grok_delegate_doctor` (без секретов); expected vs actual; redacted fixture/logs; repro. Шаблоны: `.github/ISSUE_TEMPLATE/`. Не создавать issue с секретами.
-
