@@ -15,3 +15,10 @@ Read only the task-relevant public documentation. Personal workspace notes are o
 - Process/retry changes: keep cancellations, max-turn stops, pending jobs and concurrent sessions distinct. Preserve bounded serialized wire responses and continuation/truncation indicators.
 - CLI compatibility: preserve ACP v1 support without hardcoding a current model or CLI version. Defaults belong to the installed CLI unless explicitly configured.
 - Releases: keep pyproject version, SERVER_VERSION in grok_delegate/guard.py, README badge and docs/CODEX-MCP-SETUP.md consistent. Preserve the unofficial-community notice.
+
+Read only the relevant bridge rules:
+- Roots, permissions, worker Git restrictions and secrets: [bridge safety](bridge-safety.md).
+- Navigator/typed tools, calls, receipts and errors: [bridge contracts](bridge-contracts.md).
+- Tests, routines, verifier evidence, finalization and releases: [bridge verification](bridge-verification.md).
+
+Operator language preferences live in ignored workspace notes; they are not a public project requirement.

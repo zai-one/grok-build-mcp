@@ -1,3 +1,4 @@
+- Follow the applicable workspace task and verification protocol when present.
 - Preserve tool names, schemas, defaults and existing local work; document intentional compatibility changes.
 - Enforce principal/account/target scopes and budgets on every path, including new tools, aliases, batches and metadata reads.
 - Keep approval consumption, cost reservation and idempotency atomic; reconcile unknown outcomes before retrying writes or paid calls.

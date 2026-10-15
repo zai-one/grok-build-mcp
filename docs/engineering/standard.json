@@ -1,11 +1,11 @@
 {
   "files": {
     "docs/engineering/contracts.md": "a441a80ee62f74bb460035198ab6a6fef1a462470750f1dc0177ac9f5716b5a8",
-    "docs/engineering/core.md": "1608a4437ee3c5a0fed8a916c2c4fab3fe2e208a22ddf17953cbbe5f4e904ea7",
+    "docs/engineering/core.md": "6b82b27a398ff879c3b406af62daf4d87def673721da4f0fe4c5c3e4c80bef56",
     "docs/engineering/releases.md": "9a1b953d018768fa88290c001381112467f73a79e174eabb893f706e4ba23a1e",
     "docs/engineering/safety.md": "e42be278c4452bbf02d6f61c73d6031b970a6ae4d6c35bd0fd4a60c0bee55d95",
     "scripts/check_engineering.py": "c9690f2ac52be8adc00c357b065214b5484627d9a5fe2a3f9a0318460df33043"
   },
   "schema_version": 1,
-  "version": "1.0.7"
+  "version": "1.0.8"
 }
