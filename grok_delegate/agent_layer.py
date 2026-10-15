@@ -15,18 +15,40 @@ SKILL_DIR = Path(__file__).resolve().parent.parent / "skills" / "grok-mcp"
 PACKAGE_GUIDE = Path(__file__).resolve().parent / "guide"
 GUIDE_URL = "https://github.com/zai-one/grok-build-mcp/blob/main/skills/grok-mcp/references/{topic}.md"
 
-ROUTER_INSTRUCTIONS = (
-    "grok-mcp (unofficial): hands a coding goal to the local Grok CLI in an isolated git worktree "
-    "and returns a verified receipt (branch, diffstat, checks). "
-    "Start: grok_agent_session_begin(goal) once, then loop grok_agent_session_next and do only the "
-    "returned card; finish with grok_agent_session_end. "
-    "Fallback when a card fails: grok_agent_consult -> grok_agent_execute -> grok_agent_poll -> "
-    "grok_agent_review. One job at a time; poll, do not re-plan. "
-    "Health: grok_agent_status; project opt-in: grok_agent_project. "
-    "Never: push or merge from the bridge, OAuth or tokens in config (auth is `grok login`). "
-    "Playbook: skill grok-mcp, prompts delegate_task and review_diff, guides grok://guide/index. "
-    "Errors: follow the returned reason/next step; retry only what it says is retryable."
-)
+# Intent router: (id, intent words, first tool, skill, guide topic). tests/test_routing_eval.py replays
+# casual RU/EN requests against these lines and fails if any tool, skill or guide is unreachable.
+ROUTES: tuple[tuple[str, str, str, str, str], ...] = (
+    ("delegate", "сделай задачу, реализуй, напиши код, implement, build", "grok_agent_session_begin",
+     "grok-mcp", "operate"),
+    ("review", "ревью, проверь дифф, review, diff", "grok_agent_review", "grok-mcp", "verify"),
+    ("consult", "обсудить, идеи, план, brainstorm, plan", "grok_agent_consult", "grok-mcp",
+     "brainstorm"),
+    ("fix", "починить, падает, тесты, fix, failing, tests", "grok_agent_fix", "grok-mcp", "execute"),
+    ("jobs", "фоновая, статус задачи, отменить, job, poll, cancel", "grok_agent_poll", "", "tools"),
+    ("health", "здоровье, не работает, логин, doctor, health, models", "grok_agent_status", "",
+     "install"),
+    ("update", "обновить мост, update, version", "grok_agent_check_update", "", "update"),
+    ("project", "настройки проекта, пресет, project, preset", "grok_agent_project", "", "hosts"),
+    ("economy", "токены, сэкономь, tokens", "grok_agent_economy", "", "operate"),
+)  # fmt: skip
+
+
+def _router() -> str:
+    head = (
+        "grok-mcp (unofficial): local Grok CLI codes in an isolated git worktree; verified receipt. "
+        "Loop: grok_agent_session_begin -> grok_agent_session_next (do only the card) -> grok_agent_session_end; "
+        "card fails: consult -> execute -> poll -> review. One job at a time. Prompt: delegate_task."
+    )
+    lines = [f"- {intent}: " + "; ".join(p for p in (tool, skill, topic) if p) for _, intent, tool, skill, topic in ROUTES]
+    tail = (
+        "Never push/merge from the bridge; auth is `grok login`, no tokens in config. "
+        "Retry only if retryable. "
+        "Unsure? skill grok-mcp, grok://guide/index or grok://guide/tools."
+    )
+    return "\n".join([head, "Intent -> first tool; skill; grok://guide/<topic>:", *lines, tail])
+
+
+ROUTER_INSTRUCTIONS = _router()
 
 TITLES: dict[str, str] = {
     "grok_agent_economy": "Token-economy playbook",

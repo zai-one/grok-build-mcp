@@ -79,3 +79,71 @@ def test_plugin_manifests() -> None:
     for manifest in (claude, cursor):
         assert manifest["mcpServers"]["grok-mcp"]["command"] == "uvx"
         assert (ROOT / manifest["skills"] / "grok-mcp" / "SKILL.md").is_file()
+
+
+def test_router_keeps_failure_fallback_and_economy_route():
+    router = agent_layer.ROUTER_INSTRUCTIONS
+    assert "consult -> execute -> poll -> review" in router and "One job at a time" in router
+    assert "grok_agent_session_end" in router
+    assert any(r[0] == "economy" and r[2] == "grok_agent_economy" for r in agent_layer.ROUTES)
+
+
+def test_cli_argv_follows_grok_docs():
+    """docs.x.ai/build/cli: --no-auto-update for automation; --yolo aliases always-approve;
+    -s with -r/-c needs --fork-session."""
+    import pytest
+
+    from grok_delegate import guard
+
+    for alias in ("--yolo", "--dangerously-skip-permissions", "--always-approve"):
+        with pytest.raises(guard.GuardError):
+            guard._assert_no_always_approve(["grok", alias])
+    assert guard.NO_AUTO_UPDATE_FLAG == "--no-auto-update"
+
+
+def test_headless_argv_disables_auto_update_and_guards_session_fork():
+    import pytest
+
+    from grok_delegate import guard
+
+    profile = guard.build_permission_profile()
+    argv = guard.build_grok_argv("goal", "C:/lanes/wt", profile, 5)
+    assert "--no-auto-update" in argv
+    sid = "123e4567-e89b-12d3-a456-426614174000"
+    with pytest.raises(guard.GuardError):
+        guard.build_grok_argv("goal", "C:/lanes/wt", profile, 5, continue_session=True, session_id=sid)
+    forked = guard.build_grok_argv(
+        "goal", "C:/lanes/wt", profile, 5, continue_session=True, fork_session=True, session_id=sid
+    )
+    assert "--fork-session" in forked and sid in forked
+
+
+def test_acp_argv_disables_auto_update_and_refuses_approve_aliases():
+    """The ACP worker argv (the path every job takes) gets --no-auto-update, and the ACP guard refuses
+    every documented always-approve alias, not only --always-approve."""
+    import pytest
+
+    from grok_delegate import acp, guard
+
+    transport = acp.StdioACPTransport(grok_bin="grok")
+    argv = transport.build_argv({"max_turns": 4, "reasoning_effort": "low"})
+    assert guard.NO_AUTO_UPDATE_FLAG in argv
+    assert argv.index(guard.NO_AUTO_UPDATE_FLAG) < argv.index("agent")  # a global flag, before the subcommand
+    for alias in guard.ALWAYS_APPROVE_ALIASES:
+        with pytest.raises(guard.GuardError):
+            acp.assert_safe_acp_argv([*argv, alias])
+
+
+def test_bad_tool_loading_value_stops_server_at_start(monkeypatch, capsys):
+    """A typo must not leave a server that answers every request with 'internal error: ValueError'."""
+    from grok_delegate import server
+
+    called = []
+    monkeypatch.setattr(server, "serve_stdio", lambda: called.append("stdio"))
+    monkeypatch.setenv("GROK_DELEGATE_TOOL_LOADING", "1")
+    assert server.main([]) == 2
+    assert not called
+    assert "GROK_DELEGATE_TOOL_LOADING" in capsys.readouterr().err
+    monkeypatch.setenv("GROK_DELEGATE_TOOL_LOADING", "Lazy ")
+    monkeypatch.setattr(server, "shutdown_runtime", lambda: None)
+    assert server.main([]) == 0 and called == ["stdio"]

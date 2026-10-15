@@ -22,6 +22,7 @@ PROJECT_ROOT=""
 LANES_PARENT=""
 SKIP_CLONE=0
 NONINTERACTIVE=0
+TOOL_LOADING=""
 ASSUME_YES=0
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YLW=$'\033[33m'; BLU=$'\033[34m'; BLD=$'\033[1m'; RST=$'\033[0m'
@@ -46,6 +47,7 @@ grok-mcp installer (unofficial — not xAI/Grok)
 Options:
   --project PATH     Project folder the MCP may touch (required for auto-config)
   --lanes PATH       Worktree lanes parent (optional; default is <project>/.grok/lanes)
+  --tool-loading M   eager (default: every tool at start) or lazy (core + grok_agent_enable_toolsets)
   --home PATH        Install location (default: ~/.local/share/grok-mcp)
   --repo URL         Git clone URL
   --yes              Non-interactive defaults where safe
@@ -61,6 +63,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --project) PROJECT_ROOT="${2:-}"; shift 2 ;;
     --lanes) LANES_PARENT="${2:-}"; shift 2 ;;
+    --tool-loading) TOOL_LOADING="${2:-}"; shift 2 ;;
     --home) INSTALL_DIR="${2:-}"; shift 2 ;;
     --repo) REPO_URL="${2:-}"; shift 2 ;;
     --yes|-y) ASSUME_YES=1; NONINTERACTIVE=1; shift ;;
@@ -196,6 +199,21 @@ if [ -z "$PROJECT_ROOT" ]; then
   fi
 fi
 
+# Tool loading: eager (default, every tool at start) or lazy (core + grok_agent_enable_toolsets).
+if [ -z "$TOOL_LOADING" ]; then
+  if [ "$NONINTERACTIVE" -eq 0 ] && [ -t 0 ]; then
+    printf 'Tool loading: eager = every tool at start, lazy = small core, enable toolsets on demand (needs tools/list_changed) [eager]: '
+    read -r ans || true
+    TOOL_LOADING="${ans:-eager}"
+  else
+    TOOL_LOADING="eager"
+  fi
+fi
+case "$TOOL_LOADING" in
+  lazy|l) TOOL_LOADING="lazy" ;;
+  *) TOOL_LOADING="eager" ;;
+esac
+
 # resolve absolute
 PROJECT_ROOT="$(cd "$PROJECT_ROOT" 2>/dev/null && pwd -P)" || die "Project path does not exist: set --project to a real folder"
 # Omit GROK_DELEGATE_LANES_PARENT unless --lanes was given: the bridge default
@@ -218,6 +236,7 @@ export GROK_DELEGATE_ALLOWED_ROOTS="$PROJECT_ROOT"
 ${LANES_EXPORT}
 export GROK_DELEGATE_ECONOMY=1
 export GROK_DELEGATE_ECONOMY_COMPACT_POLL=1
+export GROK_DELEGATE_TOOL_LOADING=$TOOL_LOADING
 ENV
 ok "Wrote $ENV_FILE"
 

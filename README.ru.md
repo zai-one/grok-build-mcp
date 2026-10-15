@@ -20,14 +20,29 @@ MCP-мост запускает Grok CLI на вашей машине. Для и
 
 ## Почему этот MCP
 
+- Ленивая загрузка инструментов (опционально): `GROK_DELEGATE_TOOL_LOADING=lazy` (или выбор в мастере настройки) — старт с небольшим ядром, наборы включаются по запросу; см. [Ленивая загрузка инструментов](#ленивая-загрузка-инструментов).
 - Тесты запускает мост, а не агент; пустые изменения, лишние файлы или красные тесты возвращаются как `blocked` с причиной.
 - Хост читает ограниченную квитанцию вместо репозитория, контекст остаётся маленьким.
 - 24 инструмента, 2 промпта, ресурс, skills и плагин Claude Code; `uvx` и установщики одной командой для Linux, macOS и Windows.
 - Другие Grok MCP на GitHub оборачивают xAI API ([djtelicloud/grok-mcp-server](https://github.com/djtelicloud/grok-mcp-server)) или передают промпт в CLI ([BasisSetVentures/grok-cli-mcp](https://github.com/BasisSetVentures/grok-cli-mcp), 3 инструмента); ни один не изолирует работу в worktree и не проверяет тесты.
 
+## Ленивая загрузка инструментов
+
+Ленивая загрузка инструментов (опционально): `GROK_DELEGATE_TOOL_LOADING=lazy` стартует с небольшим ядром и `grok_agent_enable_toolsets`, остальные наборы включаются по запросу (`tools/list_changed`). Стоимость старта (tools/list + instructions, ≈символы/4): eager ≈7466 токенов, lazy ≈1672 токенов (−78%). По умолчанию `eager` — без изменений; если клиент не поддерживает `tools/list_changed`, используйте `eager`. Переподключение не поможет: включённые наборы живут в процессе сервера, а переподключённый stdio-сервер снова стартует только с ядром. Область: включение действует на весь процесс (this JSON-RPC server не умеет видимость инструментов по сессиям). В stdio это один клиент; в общем HTTP включённые одним клиентом наборы видны всем клиентам процесса (каждый вызов по-прежнему проходит свои проверки), поэтому для общего HTTP используйте `eager`.
+
+Клиенты и `notifications/tools/list_changed` (проверено по официальной документации, changelog или заявлениям мейнтейнеров, 2026-10):
+
+| Клиент | `tools/list_changed` | Источник |
+|---|---|---|
+| Claude Code | Да (интерактивно: tools, prompts, resources; `-p`/Agent SDK: только tools) | [docs: Dynamic tool updates](https://code.claude.com/docs/en/mcp) |
+| VS Code (GitHub Copilot) | Да (dynamic tool discovery); новые инструменты могут стать доступны агенту только со следующего хода | [docs](https://code.visualstudio.com/api/extension-guides/ai/mcp), [#303012](https://github.com/microsoft/vscode/issues/303012) |
+| Gemini CLI | Да (обновляет реестр инструментов) | [PR #14375](https://github.com/google-gemini/gemini-cli/pull/14375), [PR #21050](https://github.com/google-gemini/gemini-cli/pull/21050) |
+| Cursor | Ненадёжно: регрессия в 3.12.x подтверждена командой Cursor; используйте `eager` (перезапуск Cursor перезапускает сервер и сбрасывает включённые наборы) | [forum](https://forum.cursor.com/t/mcp-server-regression-does-not-reload-tools-disconnect-does-nothing-ignores-mcp-json-changes-etc/166216) |
+| Claude Desktop, Windsurf, Codex CLI, Cline, Zed, Continue | Не проверено: официальных данных нет; используйте `eager` или переподключитесь после включения | — |
+
 ## Поддержка и обновления
 
-- Проект активно поддерживает ZAI.ONE: текущая версия 0.35.0; изменения в [CHANGELOG.md](CHANGELOG.md) и [Releases](https://github.com/zai-one/grok-build-mcp/releases).
+- Проект активно поддерживает ZAI.ONE: текущая версия 0.36.0; изменения в [CHANGELOG.md](CHANGELOG.md) и [Releases](https://github.com/zai-one/grok-build-mcp/releases).
 - Встроенная проверка обновлений: попросите ассистента вызвать `grok_agent_check_update` (публичный GitHub API, без учётных данных, с кэшем; ничего не устанавливается автоматически; отключение: `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1`).
 - Следует актуальным практикам MCP: аннотации инструментов (read-only / destructive), `instructions` сервера, промпты и ресурсы, структурированные ошибки с подсказками, секреты не попадают в ответы, бюджет токенов описаний проверяется в тестах.
 - CI прогоняет тесты на Linux и Windows для каждого pull request.
@@ -55,16 +70,16 @@ curl -fsSL https://raw.githubusercontent.com/zai-one/grok-build-mcp/main/scripts
 
 ```bash
 # Claude Code: MCP only
-claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp@v0.35.0 grok-delegate
+claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp@v0.36.0 grok-delegate
 # Claude Code: plugin = MCP + grok-mcp skill
 /plugin marketplace add zai-one/grok-build-mcp
 /plugin install grok-mcp@grok-build-mcp
 ```
 
-Cursor: [установка в один клик](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3BAdjAuMzUuMCIsImdyb2stZGVsZWdhdGUiXX0=) или `.cursor/mcp.json`:
+Cursor: [установка в один клик](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3BAdjAuMzYuMCIsImdyb2stZGVsZWdhdGUiXX0=) или `.cursor/mcp.json`:
 
 ```json
-{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.35.0", "grok-delegate"]}}}
+{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.36.0", "grok-delegate"]}}}
 ```
 
 Codex `~/.codex/config.toml`:
@@ -72,7 +87,7 @@ Codex `~/.codex/config.toml`:
 ```toml
 [mcp_servers.grok-mcp]
 command = "uvx"
-args = ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.35.0", "grok-delegate"]
+args = ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.36.0", "grok-delegate"]
 ```
 
 Claude Desktop: тот же блок `mcpServers` в `claude_desktop_config.json`. Skill лежит в `skills/grok-mcp/` (копии для Claude Code, Cursor, Codex в `.claude/`, `.cursor/`, `.codex/`, `.agents/`). Проекты разрешаются через roots хоста или `GROK_DELEGATE_ALLOWED_ROOTS`. Сначала `grok login`. Prompts: `delegate_task`, `review_diff`; справка: `grok://guide/index`.

@@ -10,7 +10,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: source-available](https://img.shields.io/badge/license-source--available-lightgrey.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/version-0.35.0-informational.svg)](pyproject.toml)
+[![Version](https://img.shields.io/badge/version-0.36.0-informational.svg)](pyproject.toml)
 [![Built by ZAI.ONE](https://img.shields.io/badge/built%20by-ZAI.ONE-111111.svg)](https://zai.one)
 
 > By [ZAI.ONE](https://zai.one), a digital agency for websites, SEO, advertising and analytics.
@@ -55,14 +55,29 @@ own work: this one commits to a `grok/*` branch and stops there, on purpose.
 
 ## Why this MCP
 
+- Optional lazy tool loading: set `GROK_DELEGATE_TOOL_LOADING=lazy` (or choose it in the setup wizard) to start with a small core and enable toolsets on demand; see [Lazy tool loading](#lazy-tool-loading).
 - Tests are run by the bridge, not by the agent; empty changes, unrequested files or red tests come back as `blocked` with a reason.
 - The host reads a bounded receipt instead of the repository, which keeps its context small.
 - 24 tools, 2 prompts, a resource, skills and a Claude Code plugin; `uvx` and one-command installers for Linux, macOS and Windows.
 - Other Grok MCP servers on GitHub wrap the xAI API ([djtelicloud/grok-mcp-server](https://github.com/djtelicloud/grok-mcp-server)) or pass prompts to the CLI ([BasisSetVentures/grok-cli-mcp](https://github.com/BasisSetVentures/grok-cli-mcp), 3 tools); neither isolates work in a worktree or verifies tests.
 
+## Lazy tool loading
+
+Optional lazy tool loading: `GROK_DELEGATE_TOOL_LOADING=lazy` starts with a small core plus `grok_agent_enable_toolsets` and adds toolsets on demand (`tools/list_changed`). Startup cost (tools/list + instructions, ≈chars/4): eager ≈7466 tokens, lazy ≈1672 tokens (−78%). Default `eager` is unchanged; if your client ignores `tools/list_changed`, use `eager`. Reconnecting does not help: enabled toolsets live in the server process, and a reconnected stdio server starts again with only the core. Scope: enablement is process-wide (this JSON-RPC server has no per-session tool visibility). Over stdio that is one client; in shared HTTP mode one client's enabled toolsets are listed for every client of that process (each call still passes its own gates), so use `eager` for shared HTTP.
+
+Clients and `notifications/tools/list_changed` (verified against official docs, changelogs or maintainer statements, 2026-10):
+
+| Client | `tools/list_changed` | Source |
+|---|---|---|
+| Claude Code | Supported (interactive: tools, prompts, resources; `-p`/Agent SDK: tools) | [docs: Dynamic tool updates](https://code.claude.com/docs/en/mcp) |
+| VS Code (GitHub Copilot) | Supported (dynamic tool discovery); new tools may reach the agent only on the next turn | [docs](https://code.visualstudio.com/api/extension-guides/ai/mcp), [#303012](https://github.com/microsoft/vscode/issues/303012) |
+| Gemini CLI | Supported (refreshes the tool registry) | [PR #14375](https://github.com/google-gemini/gemini-cli/pull/14375), [PR #21050](https://github.com/google-gemini/gemini-cli/pull/21050) |
+| Cursor | Unreliable: staff confirm a regression in 3.12.x; use `eager` (restarting Cursor restarts the server and drops enabled toolsets) | [forum](https://forum.cursor.com/t/mcp-server-regression-does-not-reload-tools-disconnect-does-nothing-ignores-mcp-json-changes-etc/166216) |
+| Claude Desktop, Windsurf, Codex CLI, Cline, Zed, Continue | Unverified: no official statement found; use `eager` or reconnect after enabling | — |
+
 ## Maintained and up to date
 
-- Actively maintained by ZAI.ONE: current version 0.35.0; release notes in [CHANGELOG.md](CHANGELOG.md) and [Releases](https://github.com/zai-one/grok-build-mcp/releases).
+- Actively maintained by ZAI.ONE: current version 0.36.0; release notes in [CHANGELOG.md](CHANGELOG.md) and [Releases](https://github.com/zai-one/grok-build-mcp/releases).
 - Built-in update check: ask the assistant to run `grok_agent_check_update` (public GitHub API, no credentials, cached; nothing is installed automatically; `GROK_DELEGATE_DISABLE_UPDATE_CHECK=1` turns it off).
 - Follows current MCP practice: tool annotations (read-only / destructive hints), server `instructions`, prompts and resources, structured errors with recovery hints, secrets kept out of tool output, a token budget for tool descriptions enforced in tests.
 - CI runs the test suite on Linux and Windows for every pull request.
@@ -173,16 +188,16 @@ Merge `~/.config/grok-mcp/mcp/claude_desktop.snippet.json` into Claude/Cursor �
 
 ```bash
 # Claude Code: MCP only
-claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp@v0.35.0 grok-delegate
+claude mcp add grok-mcp -- uvx --from git+https://github.com/zai-one/grok-build-mcp@v0.36.0 grok-delegate
 # Claude Code: plugin = MCP + grok-mcp skill
 /plugin marketplace add zai-one/grok-build-mcp
 /plugin install grok-mcp@grok-build-mcp
 ```
 
-Cursor: [one-click install](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3BAdjAuMzUuMCIsImdyb2stZGVsZWdhdGUiXX0=) or `.cursor/mcp.json`:
+Cursor: [one-click install](cursor://anysphere.cursor-deeplink/mcp/install?name=grok-mcp&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJnaXQraHR0cHM6Ly9naXRodWIuY29tL3phaS1vbmUvZ3Jvay1idWlsZC1tY3BAdjAuMzYuMCIsImdyb2stZGVsZWdhdGUiXX0=) or `.cursor/mcp.json`:
 
 ```json
-{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.35.0", "grok-delegate"]}}}
+{"mcpServers": {"grok-mcp": {"command": "uvx", "args": ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.36.0", "grok-delegate"]}}}
 ```
 
 Codex `~/.codex/config.toml`:
@@ -190,7 +205,7 @@ Codex `~/.codex/config.toml`:
 ```toml
 [mcp_servers.grok-mcp]
 command = "uvx"
-args = ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.35.0", "grok-delegate"]
+args = ["--from", "git+https://github.com/zai-one/grok-build-mcp@v0.36.0", "grok-delegate"]
 ```
 
 Claude Desktop: the same `mcpServers` block in `claude_desktop_config.json`. The skill ships in `skills/grok-mcp/` (mirrored for Claude Code, Cursor, Codex in `.claude/`, `.cursor/`, `.codex/`, `.agents/`). Projects are allowed through the roots your host declares or `GROK_DELEGATE_ALLOWED_ROOTS`. Run `grok login` first. Prompts: `delegate_task`, `review_diff`; guides: `grok://guide/index`.
